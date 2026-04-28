@@ -34,17 +34,22 @@ def tv_health_check():
 
 @app.post("/webhook")
 def webhook():
-    # Authenticate via secret token in X-TV-Secret header
-    secret = request.headers.get("X-TV-Secret", "")
+    # Parse payload first — TradingView cannot send custom HTTP headers,
+    # so the secret may live in the JSON body or the query string instead.
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        return jsonify({"error": "invalid JSON"}), 400
+
+    secret = (
+        request.headers.get("X-TV-Secret")
+        or request.args.get("secret")
+        or payload.pop("secret", None)
+        or ""
+    )
     if secret != config.WEBHOOK_SECRET:
         log.warning("Unauthorized webhook attempt from %s", request.remote_addr)
         return jsonify({"error": "unauthorized"}), 401
-
-    # Parse payload
-    try:
-        payload = request.get_json(force=True)
-    except Exception:
-        return jsonify({"error": "invalid JSON"}), 400
 
     if not payload:
         return jsonify({"error": "empty payload"}), 400
