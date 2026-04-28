@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Command *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\" --version)",
+      "PowerShell($git = \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\"; Set-Location \"C:\\\\Users\\\\Admin\\\\TradingViewProject\"; & $git init; & $git status)",
+      "PowerShell($git = \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\"; & $git --version)",
+      "PowerShell($result = Start-Process -FilePath \"C:\\\\Program Files\\\\Git\\\\bin\\\\git.exe\" -ArgumentList \"--version\" -Wait -PassThru -NoNewWindow; $result.ExitCode)",
+      "PowerShell(git *)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/Git/bin\")",
+      "Bash(git --version)",
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) -split \";\")",
+      "PowerShell(git init *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe\" --version)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(if \\(-not $?\\) { \"Git not found in PATH\" })",
+      "Read(//c/Program Files/Git/bin/**)",
+      "PowerShell([System.Environment]::SetEnvironmentVariable\\(\"CLAUDE_CODE_GIT_BASH_PATH\", \"C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe\", \"User\"\\))",
+      "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"CLAUDE_CODE_GIT_BASH_PATH\", \"User\"\\))",
+      "WebFetch(domain:claude.ai)",
+      "Bash(git clone *)",
+      "Bash(npm install *)"
+    ]
+  }
+}
