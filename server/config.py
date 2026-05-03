@@ -1,4 +1,4 @@
-import os
+﻿import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,13 +8,16 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 5000))
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
-# Security — set this in .env and configure the same value in TradingView alert headers
+# Security
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "change_me_in_dotenv")
 
 # Logging
 LOG_FILE = os.getenv("LOG_FILE", "trades.log")
 
-# Binance (optional — leave blank to skip order placement)
+# Database (Sprint 4)
+DB_PATH = os.getenv("DB_PATH", "trades.db")
+
+# Binance (optional)
 BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
@@ -31,5 +34,4 @@ TV_WHITELIST_IPS = {
     "54.218.53.128",
     "52.32.178.7"
 }
-# Bật kiểm tra IP trong môi trường Production
 ENABLE_IP_WHITELIST = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true"

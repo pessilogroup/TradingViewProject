@@ -1,1 +1,5 @@
-server/.env
+﻿server/.env
+server/trades.db
+server/__pycache__/
+__pycache__/
+*.pyc
