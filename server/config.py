@@ -58,3 +58,26 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", 3))
 
 # Bật/tắt tính năng RAG (để không bắt buộc phải có API key)
 RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() == "true"
+
+# ── P6: MCP / Morning Brief ───────────────────────────────────────────────────────────────
+# Kích hoạt TradingView MCP (CDP) integration
+MCP_ENABLED = os.getenv("MCP_ENABLED", "false").lower() == "true"
+
+# Chrome DevTools Protocol port (TradingView Desktop phải chạy với --remote-debugging-port=9222)
+MCP_CDP_PORT = int(os.getenv("MCP_CDP_PORT", 9222))
+
+# Path tới Node.js executable (để trống = tự detect từ PATH)
+MCP_NODE_PATH = os.getenv("MCP_NODE_PATH", "node")
+
+# Bật/tắt Morning Brief scheduler
+BRIEF_ENABLED = os.getenv("BRIEF_ENABLED", "false").lower() == "true"
+
+# Giờ chạy Morning Brief (HH:MM, timezone ICT = UTC+7)
+BRIEF_CRON_TIME = os.getenv("BRIEF_CRON_TIME", "07:00")
+
+# Watchlist symbols mặc định (comma-separated, override bởi server/watchlist.json)
+WATCHLIST_DEFAULT = [
+    s.strip().upper()
+    for s in os.getenv("WATCHLIST_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+    if s.strip()
+]
