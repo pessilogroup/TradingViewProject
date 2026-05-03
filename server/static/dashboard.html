@@ -1,0 +1,72 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minervini SEPA — Performance Dashboard</title>
+    <meta name="description" content="Real-time trading performance dashboard for Minervini SEPA strategy">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <h1>📈 <span>Minervini SEPA</span> — Performance Dashboard</h1>
+        <div class="header-actions">
+            <select id="symbolFilter" class="filter-select">
+                <option value="">All Symbols</option>
+                <option value="BTCUSDT">BTCUSDT</option>
+                <option value="ETHUSDT">ETHUSDT</option>
+                <option value="BNBUSDT">BNBUSDT</option>
+                <option value="SOLUSDT">SOLUSDT</option>
+            </select>
+            <div class="status-dot" title="Server Online"></div>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- KPI CARDS -->
+        <div id="kpiGrid" class="kpi-grid">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+
+        <!-- EQUITY CURVE -->
+        <section class="chart-section">
+            <div class="section-title">📈 Equity Curve</div>
+            <div class="chart-container">
+                <canvas id="equityChart"></canvas>
+            </div>
+        </section>
+
+        <!-- TRADE HISTORY -->
+        <section class="table-section">
+            <div class="table-header">
+                <div class="section-title">📋 Trade History</div>
+                <span id="tradeCount" style="color:var(--text-muted);font-size:0.8rem"></span>
+            </div>
+            <div style="overflow-x:auto">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Qty</th>
+                            <th>Price</th>
+                            <th>P&L</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradesBody">
+                        <tr><td colspan="8"><div class="loading"><div class="spinner"></div></div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="pagination" class="pagination"></div>
+        </section>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
