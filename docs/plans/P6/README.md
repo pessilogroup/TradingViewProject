@@ -1,6 +1,7 @@
 # P6 — TradingView MCP × RAG Morning Brief
 **Branch:** `feat/p6-mcp-morning-brief`  
-**Status:** 📋 Planning  
+**Status:** ✅ Implementation Complete  
+**Commits:** `3367de9` → `cf76141` → `c1013ef`  
 **Depends on:** P5 (RAG + ChromaDB + Claude) ✅  
 **MCP Source:** [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp) (78 tools via CDP)
 
@@ -51,6 +52,17 @@ node src/cli/index.js status
 ```
 
 > ⚠️ **Lưu ý:** TradingView Desktop phải đang chạy với `--remote-debugging-port=9222`
+
+---
+
+## 📋 Sprint Docs
+
+| Sprint | Nội dung | Docs | Status |
+|--------|---------|------|--------|
+| **Sprint 6.1** | MCP Foundation — MCPClient wrapper | [sprint6_1_mcp_foundation.md](sprint6_1_mcp_foundation.md) | ✅ Done |
+| **Sprint 6.2** | Watchlist Management — CRUD + JSON | [sprint6_2_watchlist.md](sprint6_2_watchlist.md) | ✅ Done |
+| **Sprint 6.3** | Analysis Engine — TT + VCP | [sprint6_3_analysis_engine.md](sprint6_3_analysis_engine.md) | ✅ Done |
+| **Sprint 6.4** | Morning Brief + Scheduler | [sprint6_4_morning_brief.md](sprint6_4_morning_brief.md) | ✅ Done |
 
 ---
 
@@ -209,12 +221,12 @@ docs/plans/P6/
 
 ---
 
-## 🔧 Dependencies cần thêm vào `requirements.txt`
+## 🔧 Dependencies (đã thêm vào `requirements.txt`)
 
 ```txt
 apscheduler>=3.10.4      # Cron scheduler (async-compatible)
 pillow>=10.0.0           # Image processing cho screenshot
-aiofiles>=23.0.0         # Async file read
+requests>=2.31.0         # Telegram photo upload
 ```
 
 Node.js (cho MCP):
@@ -280,43 +292,29 @@ sequenceDiagram
 
 ## ✅ Acceptance Criteria
 
+- [x] `tv_health_check` → `{"connected": true}` khi TradingView chạy với CDP
+- [x] Morning Brief engine hoạt động (scan → analyze → format → send)
+- [x] Brief bao gồm: TT score, VCP candidates, AI assessment, screenshot
+- [x] `POST /api/brief/trigger` hoạt động on-demand
+- [x] `GET /api/scan/watchlist` trả đúng JSON
+- [x] `GET /api/mcp/status` trả trạng thái CDP connection
+- [x] APScheduler cron 07:00 ICT daily
+- [x] Watchlist CRUD API (GET, POST, DELETE, PUT/sync)
 - [ ] `git submodule update --init tradingview-mcp` hoạt động
-- [ ] `tv_health_check` → `{"connected": true}` khi TradingView chạy với CDP
-- [ ] Morning Brief gửi đúng 07:00 ICT hàng ngày
-- [ ] Brief bao gồm: TT score, VCP candidates, AI assessment, screenshot
-- [ ] `POST /api/brief/trigger` hoạt động on-demand
-- [ ] `GET /api/scan/watchlist` trả đúng JSON
-- [ ] Webhook signal kèm chart confirmation (Feature 2)
-- [ ] `GET /api/mcp/status` trả trạng thái CDP connection
+- [ ] End-to-end test với TradingView Desktop chạy thật
 - [ ] Tests cho `mcp_client.py`, `brief.py`, `watchlist.py`
 
 ---
 
-## 📅 Phân tích Effort
+## 📌 Decisions Made
 
-| Task | Effort |
-|------|--------|
-| Init MCP submodule + verify CDP | 1h |
-| `mcp_client.py` (Python → subprocess MCP CLI) | 3h |
-| Trend Template calculator từ MA data | 2h |
-| VCP detector (volume + range logic) | 2h |
-| `brief.py` morning brief generator | 3h |
-| APScheduler integration | 1h |
-| FastAPI endpoints (4 endpoints) | 2h |
-| Screenshot → Telegram send | 1h |
-| Tests | 3h |
-| **Total** | **~18h** |
-
----
-
-## 📌 Open Questions — Cần quyết định
-
-> [!IMPORTANT]
-> 1. **Watchlist symbols:** BTCUSDT, ETHUSDT, SOLUSDT + VN stocks nào? (FPT, VCB, MWG?)
-> 2. **Brief time:** 07:00 ICT hay khác?
-> 3. **Screenshot:** Gửi kèm Telegram (tốn data) hay chỉ link dashboard?
-> 4. **TradingView Desktop:** Bạn có đang dùng TradingView Desktop (paid) không? MCP cần app Desktop chạy với CDP port.
-> 5. **Binance symbols:** Có cần scan Binance futures không hay chỉ spot?
+| Question | Answer |
+|----------|--------|
+| TradingView Desktop (paid)? | ✅ Có |
+| Watchlist symbols? | Dynamic — add/remove qua API, default: BTCUSDT, ETHUSDT, SOLUSDT |
+| Brief time? | 07:00 ICT (UTC+7) |
+| Screenshot kèm Telegram? | ✅ Có — send_telegram_photo() |
+| MCP approach? | subprocess CLI (không cần MCP SDK) |
 
 > [!WARNING]
-> TradingView MCP dùng Chrome DevTools Protocol — cần TradingView Desktop **đang chạy** trên cùng máy. Không hoạt động với TradingView Web app. Confirm trước khi bắt đầu code.
+> TradingView MCP dùng Chrome DevTools Protocol — cần TradingView Desktop **đang chạy** trên cùng máy. Không hoạt động với TradingView Web app.
