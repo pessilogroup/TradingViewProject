@@ -12,3 +12,4 @@ anthropic>=0.25.0
 # ── MCP / Morning Brief (P6) ──────────────────────────────────
 apscheduler>=3.10.4
 pillow>=10.0.0
+requests>=2.31.0

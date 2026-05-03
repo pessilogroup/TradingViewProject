@@ -1,4 +1,4 @@
-﻿# Environment & secrets
+# Environment & secrets
 server/.env
 *.env
 
@@ -12,3 +12,11 @@ __pycache__/
 
 # Node (tradingview-mcp handled as submodule — node_modules inside it)
 node_modules/
+
+# P5: ChromaDB vector database
+server/chroma_db/
+
+# P6: Runtime data (watchlist, screenshots, logs)
+server/watchlist.json
+server/screenshots/
+server/trades.log
