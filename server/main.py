@@ -25,6 +25,9 @@ import analysis as analysis_module
 import brief as brief_module
 import scheduler as scheduler_module
 
+# ── P7 imports ───────────────────────────────────────────────────────────────
+import telegram_bot as tg_bot_module
+
 
 # Setup logging
 logging.basicConfig(
@@ -75,10 +78,17 @@ async def lifespan(app: FastAPI):
         log.info(f"Scheduler: ✅ Morning Brief scheduled at {config.BRIEF_CRON_TIME} ICT daily.")
     else:
         log.info("Scheduler: Morning Brief TẮT (BRIEF_ENABLED=false).")
+    # ── Telegram Bot (P7) ────────────────────────────────────
+    if config.TELEGRAM_BOT_ENABLED:
+        tg_bot_module.start_bot()
+        log.info("Telegram Bot: ✅ Interactive bot started (polling mode).")
+    else:
+        log.info("Telegram Bot: TẮT (TELEGRAM_BOT_ENABLED=false).")
 
     yield
 
     # ── Shutdown ──────────────────────────────────────────────
+    tg_bot_module.stop_bot()
     scheduler_module.stop_scheduler()
     log.info("Server shutting down.")
 
