@@ -5,9 +5,9 @@ import hmac
 import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -17,6 +17,13 @@ import config
 import notifier
 import database
 import rag
+
+# ── P6 imports ───────────────────────────────────────────────────────────────
+import mcp_client as _mcp_module
+import watchlist as wl_module
+import analysis as analysis_module
+import brief as brief_module
+import scheduler as scheduler_module
 
 
 # Setup logging
@@ -36,11 +43,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Khoi tao database va RAG Vector DB khi server start."""
+    """Khoi tao database, RAG Vector DB, MCP client va Scheduler khi server start."""
     await database.init_db()
     log.info("Database ready.")
 
-    # ── Khởi tạo RAG nếu được bật ────────────────────────────
+    # ── RAG ───────────────────────────────────────────────────
     if config.RAG_ENABLED:
         log.info("RAG: Khởi tạo Vector DB từ Minervini Knowledge Base...")
         success = await rag.init_vector_db()
@@ -51,13 +58,34 @@ async def lifespan(app: FastAPI):
     else:
         log.info("RAG: Tính năng RAG đang TẮT (RAG_ENABLED=false).")
 
+    # ── MCP (P6) ──────────────────────────────────────────────
+    if config.MCP_ENABLED:
+        mcp = _mcp_module.get_mcp_client()
+        health = await mcp.health_check()
+        if health.get("connected"):
+            log.info("MCP: ✅ TradingView Desktop connected (CDP:9222).")
+        else:
+            log.warning(f"MCP: ⚠️ TradingView not connected — {health.get('error', 'unknown')}. Brief will retry at runtime.")
+    else:
+        log.info("MCP: Tính năng MCP đang TẮT (MCP_ENABLED=false).")
+
+    # ── Scheduler (P6) ────────────────────────────────────────
+    if config.BRIEF_ENABLED:
+        scheduler_module.start_scheduler()
+        log.info(f"Scheduler: ✅ Morning Brief scheduled at {config.BRIEF_CRON_TIME} ICT daily.")
+    else:
+        log.info("Scheduler: Morning Brief TẮT (BRIEF_ENABLED=false).")
+
     yield
+
+    # ── Shutdown ──────────────────────────────────────────────
+    scheduler_module.stop_scheduler()
     log.info("Server shutting down.")
 
 
 app = FastAPI(
     title="TradingView Webhook Server",
-    version="5.0",
+    version="6.0",
     lifespan=lifespan,
 )
 
@@ -102,10 +130,115 @@ async def tv_health_check():
     return {
         "status": "ok",
         "service": "TradingView Webhook Server (FastAPI)",
-        "version": "5.0",
+        "version": "6.0",
         "rag_enabled": config.RAG_ENABLED,
+        "mcp_enabled": config.MCP_ENABLED,
+        "brief_enabled": config.BRIEF_ENABLED,
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ═══ P6: MCP STATUS ═══════════════════════════════════════════
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """Kiểm tra kết nối TradingView Desktop qua CDP."""
+    if not config.MCP_ENABLED:
+        return {"enabled": False, "status": "disabled"}
+    mcp = _mcp_module.get_mcp_client()
+    health = await mcp.health_check()
+    return {"enabled": True, **health}
+
+
+# ═══ P6: WATCHLIST CRUD ═══════════════════════════════════════
+@app.get("/api/watchlist")
+async def get_watchlist_endpoint():
+    """Lấy danh sách watchlist hiện tại."""
+    symbols = wl_module.get_watchlist()
+    return {"symbols": symbols, "count": len(symbols)}
+
+
+@app.post("/api/watchlist")
+async def add_watchlist_endpoint(body: dict = Body(...)):
+    """Thêm symbol vào watchlist. Body: {\"symbol\": \"BTCUSDT\"}"""
+    symbol = body.get("symbol", "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="'symbol' field required")
+    return wl_module.add_symbol(symbol)
+
+
+@app.delete("/api/watchlist/{symbol}")
+async def remove_watchlist_endpoint(symbol: str):
+    """Xóa symbol khỏi watchlist."""
+    result = wl_module.remove_symbol(symbol)
+    if not result["removed"]:
+        raise HTTPException(status_code=404, detail=f"{symbol} not in watchlist")
+    return result
+
+
+@app.put("/api/watchlist/sync")
+async def sync_watchlist_endpoint():
+    """Sync watchlist từ TradingView Desktop (qua MCP)."""
+    if not config.MCP_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP_ENABLED=false")
+    mcp = _mcp_module.get_mcp_client()
+    return await wl_module.sync_from_tradingview(mcp)
+
+
+# ═══ P6: WATCHLIST SCAN ═══════════════════════════════════════
+@app.get("/api/scan/watchlist")
+async def scan_watchlist_endpoint(
+    symbols: Optional[str] = Query(None, description="Comma-separated, e.g. BTCUSDT,ETHUSDT. Mặc định dùng watchlist."),
+    timeframe: str = Query("D", description="Timeframe: D, W, 60..."),
+):
+    """Scan symbols theo Trend Template + VCP. Trả về kết quả đã sort."""
+    if not config.MCP_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP_ENABLED=false")
+
+    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else wl_module.get_watchlist()
+    if not symbol_list:
+        raise HTTPException(status_code=400, detail="Watchlist empty")
+
+    mcp = _mcp_module.get_mcp_client()
+    results = await analysis_module.scan_symbols(symbol_list, mcp)
+
+    return {
+        "scanned": len(results),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "results": [
+            {
+                "symbol": r.symbol,
+                "price": r.price,
+                "change_pct": r.change_pct,
+                "trend_template_score": r.trend_template.score,
+                "trend_template_stage": r.trend_template.stage,
+                "trend_template_criteria": r.trend_template.criteria,
+                "vcp_detected": r.vcp.detected,
+                "volume_ratio": round(r.vcp.volume_ratio, 2),
+                "range_ratio": round(r.vcp.range_ratio, 2),
+                "pivot_level": r.vcp.pivot_level,
+                "vcp_note": r.vcp.note,
+                "error": r.error,
+            }
+            for r in results
+        ],
+    }
+
+
+# ═══ P6: MORNING BRIEF ════════════════════════════════════════
+@app.post("/api/brief/trigger")
+async def trigger_brief_endpoint(background_tasks: BackgroundTasks):
+    """Chạy Morning Brief ngay lập tức (non-blocking)."""
+    background_tasks.add_task(brief_module.generate_morning_brief)
+    return {"triggered": True, "message": "Morning Brief đang chạy... Kiểm tra Telegram trong 30-60 giây."}
+
+
+@app.get("/api/brief/latest")
+async def get_latest_brief_endpoint():
+    """Lấy Morning Brief mới nhất đã generate."""
+    brief = brief_module.get_latest_brief()
+    if brief is None:
+        return {"available": False, "message": "Chưa có brief nào. Dùng POST /api/brief/trigger để tạo."}
+    return {"available": True, **brief}
 
 
 # ═══ RAG TEST ENDPOINT ════════════════════════════════════════
@@ -407,5 +540,5 @@ async def _place_binance_order_async(action: str, symbol: str, quote_qty: float)
 
 if __name__ == "__main__":
     import uvicorn
-    log.info(f"Starting FastAPI Webhook Server v5.0 on {config.HOST}:{config.PORT}")
+    log.info(f"Starting FastAPI Webhook Server v6.0 on {config.HOST}:{config.PORT}")
     uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=config.DEBUG)
