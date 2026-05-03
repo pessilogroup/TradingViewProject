@@ -27,6 +27,7 @@ import scheduler as scheduler_module
 
 # ── P7 imports ───────────────────────────────────────────────────────────────
 import telegram_bot as tg_bot_module
+import vision as vision_module
 
 
 # Setup logging
@@ -95,7 +96,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TradingView Webhook Server",
-    version="6.0",
+    version="7.0",
     lifespan=lifespan,
 )
 
@@ -548,7 +549,24 @@ async def _place_binance_order_async(action: str, symbol: str, quote_qty: float)
             return data
 
 
+# ═══ VISION ENDPOINTS (P7) ═══════════════════════════════════════════
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze(symbol: str = Query(...), image_path: str = Query(...)):
+    """Analyze a chart screenshot using Claude Vision API."""
+    from pathlib import Path
+    path = Path(image_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
+
+    result = await vision_module.analyze_chart_vision(
+        image_path=path,
+        symbol=symbol.upper(),
+    )
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
-    log.info(f"Starting FastAPI Webhook Server v6.0 on {config.HOST}:{config.PORT}")
+    log.info(f"Starting FastAPI Webhook Server v7.0 on {config.HOST}:{config.PORT}")
     uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=config.DEBUG)

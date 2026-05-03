@@ -8,6 +8,7 @@ Commands:
     /status     - Server + MCP + Scheduler status
     /brief      - Chạy Morning Brief ngay
     /scan       - Scan watchlist (Trend Template + VCP)
+    /vision SYM - AI Vision phân tích chart screenshot
     /watchlist  - Xem watchlist hiện tại
     /add SYM    - Thêm symbol vào watchlist
     /remove SYM - Xóa symbol khỏi watchlist
@@ -61,12 +62,13 @@ async def cmd_start(update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🤖 *Minervini AI Trading Bot v6.0*\n\n"
+        "🤖 *Minervini AI Trading Bot v7.0*\n\n"
         "Tôi là bot giao dịch dựa trên chiến lược *SEPA* của Mark Minervini.\n\n"
         "🧠 *Khả năng:*\n"
         "• Scan watchlist — Trend Template (8 criteria) + VCP\n"
         "• Morning Brief tự động 07:00 ICT\n"
         "• RAG AI phân tích dựa trên sách Minervini\n"
+        "• 👁️ AI Vision — Claude nhìn chart nhận diện pattern\n"
         "• Screenshot chart qua TradingView MCP\n\n"
         "Dùng /help để xem commands hoặc chọn bên dưới:",
         parse_mode="Markdown",
@@ -81,6 +83,7 @@ async def cmd_help(update, context):
         "/status — Server + MCP + Scheduler status\n"
         "/brief — Chạy Morning Brief ngay\n"
         "/scan — Scan watchlist (TT + VCP)\n"
+        "/vision `SYMBOL` — 👁️ AI Vision phân tích chart\n"
         "/watchlist — Xem danh sách symbols\n"
         "/add `SYMBOL` — Thêm symbol (VD: /add FPT)\n"
         "/remove `SYMBOL` — Xóa symbol (VD: /remove SOLUSDT)\n"
@@ -97,7 +100,7 @@ async def cmd_status(update, context):
     lines = [
         "🔧 *System Status*\n",
         f"⏰ Server time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
-        f"🌐 Server: FastAPI v6.0 on :{config.PORT}",
+        f"🌐 Server: FastAPI v7.0 on :{config.PORT}",
     ]
 
     # RAG status
@@ -315,6 +318,82 @@ async def cmd_brief(update, context):
         await update.message.reply_text(f"❌ Brief failed: {e}")
 
 
+async def cmd_vision(update, context):
+    """AI Vision — phân tích chart screenshot bằng Claude Vision."""
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Cần chỉ định symbol.\nVD: /vision `BTCUSDT`",
+            parse_mode="Markdown",
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+    await update.message.reply_text(f"👁️ Đang phân tích chart `{symbol}`... Vui lòng chờ.", parse_mode="Markdown")
+
+    try:
+        import config
+        from pathlib import Path
+
+        # Check for existing screenshot
+        screenshots_dir = Path(__file__).parent / "screenshots"
+        screenshot_path = None
+
+        # Try to capture new screenshot via MCP
+        if config.MCP_ENABLED:
+            try:
+                from mcp_client import get_mcp_client
+                mcp = get_mcp_client()
+                health = await mcp.health_check()
+                if health.get("connected"):
+                    from datetime import datetime as dt
+                    screenshot_path = await mcp.capture_screenshot(
+                        symbol=symbol,
+                        timeframe="D",
+                        region="chart",
+                        save_path=screenshots_dir / f"vision_{symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    )
+            except Exception as e:
+                log.warning(f"Vision screenshot capture failed: {e}")
+
+        # Fallback: look for latest screenshot of this symbol
+        if not screenshot_path or not Path(screenshot_path).exists():
+            if screenshots_dir.exists():
+                candidates = sorted(
+                    screenshots_dir.glob(f"*{symbol}*.png"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if candidates:
+                    screenshot_path = candidates[0]
+
+        if not screenshot_path or not Path(screenshot_path).exists():
+            await update.message.reply_text(
+                f"⚠️ Không tìm thấy screenshot cho `{symbol}`.\n"
+                "Cần TradingView MCP connected hoặc screenshot sẵn có.",
+                parse_mode="Markdown",
+            )
+            return
+
+        # Run Vision analysis
+        from vision import analyze_chart_vision, format_vision_telegram
+
+        result = await analyze_chart_vision(
+            image_path=Path(screenshot_path),
+            symbol=symbol,
+        )
+
+        if result.get("error"):
+            await update.message.reply_text(f"❌ Vision error: {result['error']}")
+            return
+
+        vision_text = format_vision_telegram(result)
+        await update.message.reply_text(vision_text, parse_mode="Markdown")
+
+    except Exception as e:
+        log.error(f"Vision command error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Vision failed: {e}")
+
+
 # ── Inline Keyboard Callback ──────────────────────────────────────────────
 
 async def button_callback(update, context):
@@ -345,7 +424,7 @@ async def cmd_status_inline(message):
     lines = [
         "🔧 *System Status*\n",
         f"⏰ Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
-        f"🌐 Server: FastAPI v6.0 on :{config.PORT}",
+        f"🌐 Server: FastAPI v7.0 on :{config.PORT}",
     ]
     rag_status = "✅" if config.RAG_ENABLED and config.ANTHROPIC_API_KEY else "❌"
     mcp_status = "✅" if config.MCP_ENABLED else "❌"
@@ -464,6 +543,7 @@ def start_bot():
         app.add_handler(CommandHandler("remove", cmd_remove))
         app.add_handler(CommandHandler("scan", cmd_scan))
         app.add_handler(CommandHandler("brief", cmd_brief))
+        app.add_handler(CommandHandler("vision", cmd_vision))
         app.add_handler(CallbackQueryHandler(button_callback))
 
         log.info("🤖 Telegram Bot started (polling mode)")
