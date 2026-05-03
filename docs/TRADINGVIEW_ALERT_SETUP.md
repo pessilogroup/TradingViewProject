@@ -1,80 +1,107 @@
-# TradingView Alert → Flask Webhook Setup
+# TradingView Alert → FastAPI Webhook Setup (V2)
+
+Hệ thống đã được nâng cấp lên kiến trúc **FastAPI Async**, hỗ trợ xử lý không độ trễ, đặt lệnh Binance động và tự động gửi thông báo qua Telegram/Discord.
 
 End-to-end flow:
 
 ```
-TradingView Alert  →  Cloudflare Tunnel  →  localhost:5000/webhook  →  trades.log (+ optional Binance)
+TradingView Alert  →  Cloudflare Tunnel  →  localhost:5000/webhook  →  Binance API
+                                                                    ↘ Telegram / Discord
 ```
 
-## 1. Cloudflared tunnel (Quick Tunnel)
+## 1. Cài đặt và Cấu hình Môi trường (.env)
 
-A Quick Tunnel is ephemeral — the public URL changes every time you restart it. Good enough to develop with. Pin a permanent URL by registering a domain through Cloudflare and using `cloudflared tunnel create`.
-
-Run from any terminal:
+Mở thư mục `server/` và cài đặt các thư viện mới nhất:
+```bash
+cd server
+pip install -r requirements.txt
 ```
+
+Cấu hình file `server/.env` với các thông số bắt buộc:
+```env
+# Server
+PORT=5000
+DEBUG=true
+
+# Security (Khớp với cấu hình trong TradingView)
+WEBHOOK_SECRET=your_super_secret_key
+ENABLE_IP_WHITELIST=false  # Đổi thành true khi chạy thực tế (Production)
+
+# Binance API (Để trống nếu chỉ muốn nhận tín hiệu mà không Trade)
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_API_SECRET=your_binance_secret
+BINANCE_TESTNET=true
+
+# Notifications (Nhận cảnh báo về điện thoại)
+TELEGRAM_BOT_TOKEN=7xxx:AAH_xxx
+TELEGRAM_CHAT_ID=123456789
+DISCORD_WEBHOOK_URL=
+```
+
+## 2. Khởi chạy Server và Cloudflared tunnel
+
+Khởi chạy Webhook Server (FastAPI):
+```bash
+python main.py
+```
+*(Server sẽ lắng nghe ở cổng `5000`)*
+
+Mở một Terminal khác để chạy Cloudflare Quick Tunnel:
+```bash
 cloudflared tunnel --url http://localhost:5000
 ```
-
-Look for a line like:
-```
-https://<random-words>.trycloudflare.com
-```
+Bạn sẽ nhận được một public URL dạng `https://<random-words>.trycloudflare.com`.
 
 Sanity check:
-```
+```bash
 curl https://<random-words>.trycloudflare.com/tv_health_check
 ```
 
-## 2. Webhook secret
+## 3. Cấu hình Pine Script (TradingView)
 
-The current server reads `WEBHOOK_SECRET` from `server/.env`. TradingView **cannot** send custom HTTP headers, so the server accepts the secret in three places (any one is enough):
+Trong Pine Script V2 (`pine/v2/minervini_strategy.pine` hoặc file báo động của bạn), JSON Payload gửi đi **bắt buộc** phải chứa `secret` và có thể tùy biến khối lượng lệnh (`quoteQty` hoặc `size`).
 
-| Location | Example |
-|----------|---------|
-| Header | `X-TV-Secret: <secret>` (only useful when calling manually with curl) |
-| Query string | `https://<tunnel>/webhook?secret=<secret>` |
-| JSON body | `{ "secret": "<secret>", "action": "buy", ... }` (recommended for TradingView) |
-
-## 3. Pine Script
-
-Use [`pine/alert_webhook_v5.pine`](../pine/alert_webhook_v5.pine). Replace `REPLACE_WITH_WEBHOOK_SECRET` in both `alertcondition` messages with the actual secret from `server/.env` before saving the indicator on TradingView.
-
-Workflow:
-1. Open Pine Editor in TradingView
-2. Paste the script, save, add to chart
-3. Right-click chart → Add alert
-4. **Condition**: the indicator name → choose "Long Cross" or "Short Cross"
-5. **Webhook URL**: `https://<random>.trycloudflare.com/webhook`
-6. **Message**: leave default — Pine `alertcondition` already provides the JSON template
-7. Trigger: "Once Per Bar Close"
-8. Create
-
-## 4. Manual end-to-end test
-
-Replace the URL and secret with yours:
+Ví dụ Payload chuẩn:
+```json
+{
+  "secret": "your_super_secret_key",
+  "action": "buy",
+  "symbol": "BTCUSDT",
+  "price": "{{close}}",
+  "quoteQty": 50,
+  "time": "{{timenow}}"
+}
 ```
+*Lưu ý: Nếu không gửi `quoteQty`, bot sẽ mặc định đánh khối lượng 10 USDT.*
+
+Workflow trên TradingView:
+1. Thêm Indicator/Strategy vào biểu đồ.
+2. Click chuột phải → Add alert.
+3. **Webhook URL**: Điền đường dẫn `https://<random>.trycloudflare.com/webhook`
+4. **Message**: Dán đoạn mã JSON như trên (Hoặc Pine Script của bạn đã tự động sinh ra JSON này trong hàm `alert()`).
+5. Create.
+
+## 4. Manual end-to-end test (Kiểm thử thủ công)
+
+Thay thế URL và Secret của bạn để giả lập TradingView bắn tín hiệu:
+```bash
 curl -X POST "https://<random>.trycloudflare.com/webhook" \
   -H "Content-Type: application/json" \
-  -d '{"secret":"<WEBHOOK_SECRET>","action":"buy","symbol":"BINANCE:BTCUSDT","price":"68000","time":"2026-04-28T11:00:00Z"}'
+  -d '{"secret":"your_super_secret_key","action":"buy","symbol":"BTCUSDT","price":"68000","quoteQty":15}'
 ```
 
 Expected response:
+```json
+{"received": true, "status": "processing_async"}
 ```
-{"received": true, "order": null}
-```
+Ngay lập tức, bạn sẽ nhận được tin nhắn trên Telegram báo cáo trạng thái khớp lệnh trên Binance, đồng thời server ghi log vào `server/trades.log`.
 
-Then check `server/trades.log`:
-```
-ALERT  action=buy  symbol=BINANCE:BTCUSDT  price=68000  time=2026-04-28T11:00:00Z
-```
-
-## 5. Troubleshooting
+## 5. Troubleshooting (Xử lý sự cố)
 
 | Symptom | Cause / Fix |
 |---------|-------------|
-| `401 unauthorized` | Secret mismatch — recheck `WEBHOOK_SECRET` in `.env` vs the value baked into the Pine Script `alertcondition` |
-| TradingView "Webhook URL must be HTTPS" | Use the trycloudflare.com URL, not localhost |
-| TradingView "Webhook URL is invalid" | URL must be publicly reachable — start cloudflared first |
-| `trycloudflare.com` URL stops working | Quick Tunnels expire on restart. Run `cloudflared tunnel --url http://localhost:5000` again and update the alert |
-| TradingView allowlist | TradingView posts from a small set of IPs. If you switch to a self-hosted reverse proxy later, allowlist `52.89.214.238`, `34.212.75.30`, `54.218.53.128`, `52.32.178.7` |
-| Empty `payload` | Make sure the alert Message is actual JSON, not the default "Alert {{exchange}}:{{ticker}}" text |
+| `401 Unauthorized` | Sai `WEBHOOK_SECRET` — Kiểm tra lại file `.env` và JSON trên TradingView. |
+| `403 Forbidden` | Bị chặn IP do bật `ENABLE_IP_WHITELIST=true`. Chỉ bật khi TradingView bắn tín hiệu thật. Nếu dùng Postman/Curl để test, hãy để `false` hoặc chạy local qua `127.0.0.1`. |
+| TradingView "Webhook URL must be HTTPS" | Dùng URL của `trycloudflare.com`, không dùng `localhost`. |
+| `trycloudflare.com` URL stops working | Tunnels miễn phí thay đổi URL mỗi lần tắt mở lại. Khởi chạy lại `cloudflared` và cập nhật URL trong TradingView. |
+| Không nhận được tin Telegram | Kiểm tra `TELEGRAM_BOT_TOKEN` và `TELEGRAM_CHAT_ID`. Đảm bảo bạn đã nhắn tin cho bot trước để nó có quyền gửi tin lại. |

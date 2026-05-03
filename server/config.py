@@ -18,3 +18,18 @@ LOG_FILE = os.getenv("LOG_FILE", "trades.log")
 BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+
+# Notifications
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+DISCORD_WEBHOOK_URL= os.getenv("DISCORD_WEBHOOK_URL", "")
+
+# TradingView Whitelist IPs
+TV_WHITELIST_IPS = {
+    "52.89.214.238",
+    "34.212.75.30",
+    "54.218.53.128",
+    "52.32.178.7"
+}
+# Bật kiểm tra IP trong môi trường Production
+ENABLE_IP_WHITELIST = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true"
