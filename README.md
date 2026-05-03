@@ -64,10 +64,12 @@ TradingViewProject/
 │   │       ├── mindmaps/    # Strategy mind maps
 │   │       └── index.md
 │   ├── RAG_ARCHITECTURE_FLOW.md
-│   └── TRADINGVIEW_ALERT_SETUP.md
+│   ├── TRADINGVIEW_ALERT_SETUP.md
+│   └── plans/
+│       └── P5/
+│           ├── architecture_mermaid.md  # [P5] 5 sơ đồ Mermaid
+│           └── implementation_log.md    # [P5] Log triển khai + checklist
 │
-├── architecture_mermaid.md  # [P5] Sơ đồ kiến trúc RAG (Mermaid)
-├── implementation_log.md    # [P5] Log triển khai + checklist
 └── README.md                # ← Bạn đang đọc file này
 ```
 
@@ -126,7 +128,7 @@ RAG_TOP_K=3
 | `sentence-transformers` ≥3.0.0 | Embedding multilingual (tiếng Việt) |
 | `anthropic` ≥0.25.0 | Claude API client |
 
-> 📖 Chi tiết: xem [`architecture_mermaid.md`](architecture_mermaid.md) và [`implementation_log.md`](implementation_log.md)
+> 📖 Chi tiết: xem [`architecture_mermaid.md`](docs/plans/P5/architecture_mermaid.md) và [`implementation_log.md`](docs/plans/P5/implementation_log.md)
 
 ---
 
@@ -149,13 +151,25 @@ Xem chi tiết: [`docs/TRADINGVIEW_ALERT_SETUP.md`](docs/TRADINGVIEW_ALERT_SETUP
 
 ## 🗺️ Roadmap
 
+### ✅ Completed
 - [x] Sprint 1: FastAPI Async + IP Whitelist middleware
-- [x] Sprint 2: Dynamic order sizing + Async Binance
+- [x] Sprint 2: Dynamic order sizing + Async Binance (aiohttp)
 - [x] Sprint 3: Real-time Telegram/Discord notifications
 - [x] Sprint 4: Trade Logging SQLite ✅
 - [x] Sprint 5: TradingView MCP Integration ✅
 - [x] Sprint 6: Performance Dashboard (Web UI) ✅
 - [x] **P5: RAG & Vector Database — ChromaDB + Claude AI ✅**
+
+### 🚧 In Progress Branch
+- [ ] **feat/minervini-strategy** — Minervini SEPA Strategy V2 (Pine Script Backtest + VCP)
+
+### 🗓️ Planned Branch — Binance SDK Upgrade (python-binance)
+- [ ] **feat/binance-oco-orders** — OCO Orders: Stop-Loss + Take-Profit tự động
+- [ ] **feat/binance-websocket-stream** — WebSocket real-time price stream
+- [ ] **feat/binance-futures-margin** — Futures / Margin trading support
+- [ ] **feat/binance-advanced-orders** — Advanced order types (LIMIT, STOP_LIMIT, TRAILING)
+
+### 🔭 Backlog
 - [ ] P6: Multi-strategy Support (RSI, MACD, Custom)
 - [ ] P7: Portfolio Risk Management Module
 - [ ] P8: Production Deployment (VPS + CI/CD)
