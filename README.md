@@ -129,9 +129,9 @@ Xem chi tiết: [`docs/TRADINGVIEW_ALERT_SETUP.md`](docs/TRADINGVIEW_ALERT_SETUP
 - [x] Sprint 1: FastAPI Async + IP Whitelist middleware
 - [x] Sprint 2: Dynamic order sizing + Async Binance
 - [x] Sprint 3: Real-time Telegram/Discord notifications
-- [ ] Sprint 4: Trade logging (SQLite)
-- [ ] Sprint 5: TradingView MCP — Claude đọc chart thực
-- [ ] Sprint 6: Performance dashboard (Win Rate, Drawdown)
+- [x] Sprint 4: Trade Logging SQLite ✅
+- [x] Sprint 5: TradingView MCP Integration ✅
+- [x] Sprint 6: Performance Dashboard (Web UI) ✅
 
 ---
 
