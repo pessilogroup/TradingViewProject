@@ -1,5 +1,14 @@
-﻿server/.env
+﻿# Environment & secrets
+server/.env
+*.env
+
+# Database
 server/trades.db
+
+# Python
 server/__pycache__/
 __pycache__/
 *.pyc
+
+# Node (tradingview-mcp handled as submodule — node_modules inside it)
+node_modules/
