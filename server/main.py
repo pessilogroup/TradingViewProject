@@ -3,11 +3,13 @@ import logging
 import time
 import hmac
 import hashlib
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import aiohttp
 
@@ -27,6 +29,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+STATIC_DIR = Path(__file__).parent / "static"
+
 
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
@@ -40,9 +44,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TradingView Webhook Server",
-    version="3.0",
+    version="4.0",
     lifespan=lifespan,
 )
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ═══ MIDDLEWARE: IP WHITELISTING ══════════════════════════════
@@ -63,13 +70,26 @@ async def ip_whitelist_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ═══ DASHBOARD ════════════════════════════════════════════════
+@app.get("/dashboard")
+async def dashboard():
+    """Serve Performance Dashboard UI."""
+    return FileResponse(str(STATIC_DIR / "dashboard.html"))
+
+
+@app.get("/")
+async def root():
+    """Redirect to dashboard."""
+    return FileResponse(str(STATIC_DIR / "dashboard.html"))
+
+
 # ═══ HEALTH CHECK ═════════════════════════════════════════════
 @app.get("/tv_health_check")
 async def tv_health_check():
     return {
         "status": "ok",
         "service": "TradingView Webhook Server (FastAPI)",
-        "version": "3.0",
+        "version": "4.0",
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -139,7 +159,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         return {"received": True, "signal_id": signal_id, "status": "processing_async"}
 
     # Bao cao ngay neu chi nhan tin hieu
-    await database.update_signal_status(signal_id, 1)  # processed = success
+    await database.update_signal_status(signal_id, 1)
     msg = f"\U0001f4e1 **Tin hieu TradingView**\n- Ma: `{symbol}`\n- Hanh dong: `{action.upper()}`\n- Gia: `{price}`\n- Signal ID: `#{signal_id}`"
     background_tasks.add_task(notifier.notify_all, msg)
 
@@ -159,7 +179,6 @@ async def execute_trade_and_notify(
         executed_qty = result.get("executedQty", "0")
         cummulative_quote = result.get("cummulativeQuoteQty", "0")
 
-        # Tinh gia thuc te
         exec_qty_float = float(executed_qty) if executed_qty else 0
         exec_price_float = (
             float(cummulative_quote) / exec_qty_float
@@ -167,7 +186,6 @@ async def execute_trade_and_notify(
             else None
         )
 
-        # Luu vao database
         await database.insert_trade(
             signal_id=signal_id,
             symbol=symbol,
@@ -178,7 +196,7 @@ async def execute_trade_and_notify(
             executed_qty=exec_qty_float,
             executed_price=exec_price_float,
         )
-        await database.update_signal_status(signal_id, 1)  # success
+        await database.update_signal_status(signal_id, 1)
 
         msg = (
             f"\u2705 **Lenh Giao Dich Thanh Cong**\n"
@@ -198,7 +216,6 @@ async def execute_trade_and_notify(
         error_msg = str(e)
         log.error(f"Trade Execution Failed: {error_msg}")
 
-        # Luu loi vao database
         await database.insert_trade(
             signal_id=signal_id,
             symbol=symbol,
@@ -207,7 +224,7 @@ async def execute_trade_and_notify(
             error_message=error_msg,
             status="FAILED",
         )
-        await database.update_signal_status(signal_id, 2)  # failed
+        await database.update_signal_status(signal_id, 2)
 
         msg = (
             f"\u274c **Loi Dat Lenh Binance**\n"
@@ -229,11 +246,10 @@ async def get_trades_endpoint(
     to_date: Optional[str] = Query(None, description="ISO format: 2026-12-31"),
 ):
     """Truy van lich su giao dich."""
-    result = await database.get_trades(
+    return await database.get_trades(
         symbol=symbol, limit=limit, offset=offset,
         from_date=from_date, to_date=to_date,
     )
-    return result
 
 
 # ═══ PERFORMANCE STATS ENDPOINT ═══════════════════════════════
@@ -242,8 +258,16 @@ async def get_stats_endpoint(
     symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),
 ):
     """Tinh metrics hieu suat: Win Rate, Profit Factor, Drawdown."""
-    stats = await database.get_stats(symbol=symbol)
-    return stats
+    return await database.get_stats(symbol=symbol)
+
+
+# ═══ EQUITY CURVE ENDPOINT ════════════════════════════════════
+@app.get("/trades/equity")
+async def get_equity_endpoint(
+    symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),
+):
+    """Tra ve equity curve data cho Chart.js."""
+    return await database.get_equity_curve(symbol=symbol)
 
 
 # ═══ ASYNC BINANCE ORDER ═════════════════════════════════════
@@ -284,5 +308,5 @@ async def _place_binance_order_async(action: str, symbol: str, quote_qty: float)
 
 if __name__ == "__main__":
     import uvicorn
-    log.info(f"Starting FastAPI Webhook Server v3.0 on {config.HOST}:{config.PORT}")
+    log.info(f"Starting FastAPI Webhook Server v4.0 on {config.HOST}:{config.PORT}")
     uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=config.DEBUG)

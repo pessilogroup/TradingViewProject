@@ -257,3 +257,51 @@ async def get_stats(symbol: Optional[str] = None) -> Dict[str, Any]:
             "best_trade": round(max(pnl_list), 2),
             "worst_trade": round(min(pnl_list), 2),
         }
+
+# ═══════════════════════════════════════════════════════════════
+# QUERY — EQUITY CURVE
+# ═══════════════════════════════════════════════════════════════
+
+async def get_equity_curve(symbol: Optional[str] = None) -> Dict[str, Any]:
+    """Tra ve equity curve data cho Chart.js."""
+    conditions = ["t.status = 'FILLED'", "t.pnl IS NOT NULL"]
+    params: list = []
+
+    if symbol:
+        conditions.append("t.symbol = ?")
+        params.append(symbol.upper())
+
+    where = f"WHERE {' AND '.join(conditions)}"
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        rows = await db.execute_fetchall(
+            f"""SELECT t.created_at, t.pnl, t.symbol, t.side
+                FROM trades t {where}
+                ORDER BY t.created_at ASC""",
+            params,
+        )
+
+        labels = []
+        cumulative_pnl = []
+        trades_detail = []
+        running = 0.0
+
+        for r in rows:
+            running += r[1]  # pnl
+            labels.append(r[0])  # created_at
+            cumulative_pnl.append(round(running, 2))
+            trades_detail.append({
+                "date": r[0],
+                "pnl": r[1],
+                "symbol": r[2],
+                "side": r[3],
+                "cumulative": round(running, 2),
+            })
+
+        return {
+            "labels": labels,
+            "cumulative_pnl": cumulative_pnl,
+            "trades": trades_detail,
+        }
