@@ -1,5 +1,6 @@
-﻿import os
+import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
 
@@ -35,3 +36,25 @@ TV_WHITELIST_IPS = {
     "52.32.178.7"
 }
 ENABLE_IP_WHITELIST = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true"
+
+# ── RAG / Knowledge Base ──────────────────────────────────────────────────
+# Đường dẫn tới thư mục chứa các file chunk Markdown của Minervini
+KNOWLEDGE_DIR = os.getenv(
+    "KNOWLEDGE_DIR",
+    str(Path(__file__).parent.parent / "docs" / "knowledge" / "trading_wizard" / "chunks")
+)
+
+# Đường dẫn lưu ChromaDB vector database (persistent trên disk)
+CHROMA_DB_PATH = os.getenv(
+    "CHROMA_DB_PATH",
+    str(Path(__file__).parent / "chroma_db")
+)
+
+# Anthropic (Claude) API Key — dùng cho bước Generation trong RAG
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Số chunks tối đa trả về cho mỗi query (2-3 là tối ưu)
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", 3))
+
+# Bật/tắt tính năng RAG (để không bắt buộc phải có API key)
+RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() == "true"

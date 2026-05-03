@@ -1,113 +1,136 @@
-﻿# 📈 TradingViewProject — Minervini SEPA Automated Trading System
+# 📈 TradingView Webhook Server
 
-> **Hệ thống giao dịch tự động** dựa trên phương pháp **Mark Minervini SEPA** — tích hợp Pine Script v5 Strategy với FastAPI Webhook Server để nhận tín hiệu từ TradingView, thực thi lệnh tự động trên Binance và gửi thông báo real-time qua Telegram/Discord.
+Hệ thống tự động nhận tín hiệu từ **TradingView Alerts**, thực thi lệnh trên **Binance**, ghi log vào **SQLite**, và thông báo real-time qua **Telegram/Discord**.
 
-## 🏗️ Kiến trúc Hệ thống
+> Dựa trên chiến lược **SEPA (Specific Entry Point Analysis)** của **Mark Minervini**.
 
-```
-TradingView Alert → Cloudflare Tunnel → FastAPI Webhook (localhost:5000)
-                                                  ├──► Binance API (Auto Trade)
-                                                  └──► Telegram / Discord
-```
+---
 
-## 📁 Cấu trúc Project
+## 🏗️ Architecture
 
 ```
-TradingViewProject/
-├── pine/
-│   ├── v1/                            # Legacy indicators
-│   │   ├── minervini_trend_template.pine
-│   │   ├── strategy_multi_indicator.pine
-│   │   └── alert_webhook_v5.pine
-│   └── v2/
-│       └── minervini_strategy.pine    # ★ SEPA Strategy v2 (Backtestable)
-├── server/
-│   ├── main.py                        # FastAPI Webhook Server (Async)
-│   ├── notifier.py                    # Telegram & Discord notifications
-│   ├── config.py                      # Config loader (dotenv)
-│   ├── requirements.txt
-│   └── .env.example                   # Template cấu hình → copy sang .env
-├── docs/
-│   ├── TRADINGVIEW_ALERT_SETUP.md     # Hướng dẫn setup Alert
-│   ├── plans/webhook_upgrade_fastapi.md
-│   ├── doithu/fx_tactix_vs_our_project.md
-│   └── knowledge/trading_wizard/      # Minervini RAG knowledge base
-└── tradingview-mcp/                   # TradingView MCP integration (WIP)
+TradingView Alert (Pine Script v5)
+        │
+        ▼
+  Cloudflare Tunnel
+        │
+        ▼
+  FastAPI Webhook Server (:5000)
+        │
+        ├── 🔐 IP Whitelist + Secret Auth
+        ├── 💾 SQLite (signals + trades)
+        ├── 🧠 RAG Agent (ChromaDB + Claude)  ← [P5 NEW]
+        ├── 📊 Binance Order Execution
+        └── 📱 Telegram / Discord Notification
 ```
 
 ---
 
-## 🔥 Chiến lược Pine Script v2 — Minervini SEPA
-
-File: `pine/v2/minervini_strategy.pine`
-
-### 8 Tiêu chí Trend Template
-
-| # | Điều kiện | Ý nghĩa |
-|---|-----------|---------|
-| 1 | Giá > SMA 150 & SMA 200 | Stage 2 uptrend confirmed |
-| 2 | SMA 150 > SMA 200 | Momentum dài hạn tích cực |
-| 3 | SMA 200 dốc lên (20 bars) | Xu hướng dài hạn tăng |
-| 4 | SMA 50 > SMA 150 & SMA 200 | Momentum trung hạn tích cực |
-| 5 | Giá > SMA 50 | Cổ phiếu mạnh hơn xu hướng trung hạn |
-| 6 | Giá ≥ đáy 52 tuần × 1.30 | Không mua đáy, mua khi đã hồi phục |
-| 7 | Giá ≥ đỉnh 52 tuần × 0.75 | Trong vòng 25% của đỉnh cao nhất |
-| 8 | RS > Benchmark (BTC/SPY/VN) | Outperformance so với thị trường |
-
-### VCP Breakout Detector
-
-- **VCP Signal:** Volume < 50% trung bình + Biên độ hẹp (< 0.5× ATR)
-- **Breakout:** Close vượt pivot với Volume > 1.5× trung bình
-- **Entry:** Cả 8 tiêu chí + VCP Breakout + Heavy Volume hội tụ
-
-### Risk Management
-
-| Tham số | Mặc định | Ghi chú |
-|---------|----------|---------|
-| Stop Loss | 8% | Không vượt 10% |
-| Take Profit | 20% | Risk/Reward ≥ 1:2.5 |
-| Trailing Stop | SMA 50 | Cắt khi giá gãy MA50 với volume lớn |
-
----
-
-## ⚙️ Webhook Server Setup
-
-### 1. Cài đặt
+## ⚡ Quick Start
 
 ```bash
 cd server
 pip install -r requirements.txt
-cp .env.example .env
-# Chỉnh sửa .env với thông tin thực
-```
-
-### 2. Chạy Server
-
-```bash
-python main.py
-```
-
-### 3. Cloudflare Tunnel
-
-```bash
-cloudflared tunnel --url http://localhost:5000
-```
-
-### 4. Test
-
-```bash
-# Health check
-curl https://<random>.trycloudflare.com/tv_health_check
-
-# Simulate TradingView alert
-curl -X POST "https://<random>.trycloudflare.com/webhook" \
-  -H "Content-Type: application/json" \
-  -d '{"secret":"your_secret","action":"buy","symbol":"BTCUSDT","price":"68000","quoteQty":15}'
+cp .env.example .env       # Cấu hình API keys
+python main.py             # Start server on :5000
 ```
 
 ---
 
-## 📲 TradingView Alert Payload
+## 📂 Project Structure
+
+```
+TradingViewProject/
+├── server/
+│   ├── main.py              # FastAPI v5.0 (Webhook + RAG endpoints)
+│   ├── rag.py               # [P5] RAG module (ChromaDB + Claude)
+│   ├── config.py            # Environment config
+│   ├── database.py          # SQLite async operations
+│   ├── notifier.py          # Telegram + Discord notifications
+│   ├── requirements.txt     # Python dependencies
+│   ├── .env.example         # Environment template
+│   ├── chroma_db/           # [P5] Vector database (auto-generated)
+│   └── static/
+│       └── dashboard.html   # Performance Dashboard UI
+│
+├── pine/                    # Pine Script v5 strategies
+│   ├── V1/                  # Trend Template Indicator
+│   └── V2/                  # SEPA Strategy (Backtest)
+│
+├── docs/
+│   ├── knowledge/
+│   │   └── trading_wizard/
+│   │       ├── chunks/      # 36 Minervini knowledge chunks (RAG source)
+│   │       ├── mindmaps/    # Strategy mind maps
+│   │       └── index.md
+│   ├── RAG_ARCHITECTURE_FLOW.md
+│   └── TRADINGVIEW_ALERT_SETUP.md
+│
+├── architecture_mermaid.md  # [P5] Sơ đồ kiến trúc RAG (Mermaid)
+├── implementation_log.md    # [P5] Log triển khai + checklist
+└── README.md                # ← Bạn đang đọc file này
+```
+
+---
+
+## 🔌 API Endpoints
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| `GET`  | `/` | Dashboard UI |
+| `GET`  | `/tv_health_check` | Health check + RAG status |
+| `POST` | `/webhook` | Nhận TradingView alerts |
+| `GET`  | `/trades` | Lịch sử giao dịch |
+| `GET`  | `/trades/stats` | Win Rate, Profit Factor, Drawdown |
+| `GET`  | `/trades/equity` | Equity curve data (Chart.js) |
+| `GET`  | `/api/rag/query?q=...` | **[P5]** Test truy vấn Knowledge Base |
+| `GET`  | `/api/rag/status` | **[P5]** Trạng thái Vector DB |
+
+---
+
+## 🧠 P5 — RAG & AI Agent (Knowledge Base Integration)
+
+### Tổng quan
+
+Hệ thống RAG cho phép AI Agent tự động tra cứu bộ quy tắc của Mark Minervini mỗi khi nhận tín hiệu giao dịch từ TradingView. Kết quả phân tích được gửi kèm thông báo qua Telegram.
+
+```mermaid
+flowchart LR
+    TV[TradingView Alert] -->|Webhook| API[FastAPI :5000]
+    API -->|Query| VDB[(ChromaDB\n36 Minervini Chunks)]
+    VDB -->|Top 3 Chunks| LLM[Claude Sonnet]
+    LLM -->|AI Analysis| TG[📱 Telegram]
+```
+
+### Cách hoạt động
+
+1. **TradingView** bắn webhook khi Pine Script phát hiện VCP/Trend Template/Volume Surge
+2. **RAG Query Builder** tự động tạo câu truy vấn ngữ nghĩa từ payload
+3. **ChromaDB** tìm 3 đoạn kiến thức Minervini liên quan nhất (cosine similarity)
+4. **Claude** phân tích tín hiệu + context → đưa ra khuyến nghị Mua/Bán/Chờ
+5. **Telegram** nhận báo cáo đầy đủ kèm phân tích AI
+
+### Config RAG trong `.env`
+
+```env
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
+RAG_ENABLED=true
+RAG_TOP_K=3
+```
+
+### Dependencies P5
+
+| Package | Chức năng |
+|---------|----------|
+| `chromadb` ≥0.5.0 | Vector Database (offline, persistent) |
+| `sentence-transformers` ≥3.0.0 | Embedding multilingual (tiếng Việt) |
+| `anthropic` ≥0.25.0 | Claude API client |
+
+> 📖 Chi tiết: xem [`architecture_mermaid.md`](architecture_mermaid.md) và [`implementation_log.md`](implementation_log.md)
+
+---
+
+## 📋 Webhook Payload (TradingView)
 
 ```json
 {
@@ -132,6 +155,10 @@ Xem chi tiết: [`docs/TRADINGVIEW_ALERT_SETUP.md`](docs/TRADINGVIEW_ALERT_SETUP
 - [x] Sprint 4: Trade Logging SQLite ✅
 - [x] Sprint 5: TradingView MCP Integration ✅
 - [x] Sprint 6: Performance Dashboard (Web UI) ✅
+- [x] **P5: RAG & Vector Database — ChromaDB + Claude AI ✅**
+- [ ] P6: Multi-strategy Support (RSI, MACD, Custom)
+- [ ] P7: Portfolio Risk Management Module
+- [ ] P8: Production Deployment (VPS + CI/CD)
 
 ---
 
@@ -140,3 +167,5 @@ Xem chi tiết: [`docs/TRADINGVIEW_ALERT_SETUP.md`](docs/TRADINGVIEW_ALERT_SETUP
 - Mark Minervini — *Trade Like a Stock Market Wizard*
 - Mark Minervini — *Think & Trade Like a Champion*
 - [Pine Script v5 Manual](https://www.tradingview.com/pine-script-docs/)
+- [Anthropic Claude API Docs](https://docs.anthropic.com/)
+- [ChromaDB Documentation](https://docs.trychroma.com/)

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import time
 import hmac
@@ -16,6 +16,7 @@ import aiohttp
 import config
 import notifier
 import database
+import rag
 
 
 # Setup logging
@@ -35,16 +36,28 @@ STATIC_DIR = Path(__file__).parent / "static"
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Khoi tao database khi server start."""
+    """Khoi tao database va RAG Vector DB khi server start."""
     await database.init_db()
     log.info("Database ready.")
+
+    # ── Khởi tạo RAG nếu được bật ────────────────────────────
+    if config.RAG_ENABLED:
+        log.info("RAG: Khởi tạo Vector DB từ Minervini Knowledge Base...")
+        success = await rag.init_vector_db()
+        if success:
+            log.info("RAG: ✅ Vector DB sẵn sàng.")
+        else:
+            log.warning("RAG: ⚠️ Khởi tạo Vector DB thất bại. Server vẫn hoạt động bình thường.")
+    else:
+        log.info("RAG: Tính năng RAG đang TẮT (RAG_ENABLED=false).")
+
     yield
     log.info("Server shutting down.")
 
 
 app = FastAPI(
     title="TradingView Webhook Server",
-    version="4.0",
+    version="5.0",
     lifespan=lifespan,
 )
 
@@ -89,8 +102,58 @@ async def tv_health_check():
     return {
         "status": "ok",
         "service": "TradingView Webhook Server (FastAPI)",
-        "version": "4.0",
+        "version": "5.0",
+        "rag_enabled": config.RAG_ENABLED,
         "time": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ═══ RAG TEST ENDPOINT ════════════════════════════════════════
+@app.get("/api/rag/query")
+async def rag_query_endpoint(
+    q: str = Query(..., description="Câu truy vấn ngữ nghĩa (vd: 'Quy tắc VCP breakout')"),
+    n: int = Query(3, ge=1, le=5, description="Số chunks trả về"),
+):
+    """
+    Test endpoint để truy vấn Knowledge Base trực tiếp.
+    Hữu ích để debug và verify RAG hoạt động đúng.
+    """
+    if not config.RAG_ENABLED:
+        raise HTTPException(status_code=503, detail="RAG chưa được bật (RAG_ENABLED=false)")
+
+    chunks = rag.query_knowledge(q, n_results=n)
+    return {
+        "query": q,
+        "n_results": len(chunks),
+        "chunks": [
+            {
+                "topic": c["metadata"].get("topic", ""),
+                "chapter": c["metadata"].get("chunk_id", c["metadata"].get("filename", "")),
+                "relevance": c["relevance_score"],
+                "preview": c["content"][:300] + "..." if len(c["content"]) > 300 else c["content"],
+            }
+            for c in chunks
+        ],
+    }
+
+
+@app.get("/api/rag/status")
+async def rag_status_endpoint():
+    """Kiểm tra trạng thái Vector DB."""
+    if not config.RAG_ENABLED:
+        return {"enabled": False, "status": "disabled"}
+
+    collection = rag._collection
+    if collection is None:
+        return {"enabled": True, "status": "not_initialized", "count": 0}
+
+    count = collection.count()
+    return {
+        "enabled": True,
+        "status": "ready" if count > 0 else "empty",
+        "vectors_count": count,
+        "knowledge_dir": config.KNOWLEDGE_DIR,
+        "chroma_db_path": config.CHROMA_DB_PATH,
     }
 
 
@@ -146,6 +209,24 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty}  time={ts}")
 
+    # ── RAG Analysis (chạy song song với trade execution) ─────────────
+    rag_advice = ""
+    if config.RAG_ENABLED and rag._collection is not None:
+        try:
+            query = rag.build_rag_query(symbol, action, payload)
+            chunks = rag.query_knowledge(query, n_results=config.RAG_TOP_K)
+            if chunks:
+                rag_advice = await rag.generate_trading_advice(
+                    symbol=symbol,
+                    action=action,
+                    price=price,
+                    payload=payload,
+                    rag_chunks=chunks,
+                )
+        except Exception as e:
+            log.error(f"RAG analysis error in webhook: {e}")
+            rag_advice = ""
+
     # Dat lenh tren Binance neu Action la buy/sell
     if config.BINANCE_API_KEY and action in ("buy", "sell"):
         background_tasks.add_task(
@@ -155,20 +236,34 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             symbol=symbol,
             price=price,
             quote_qty=quote_qty,
+            rag_advice=rag_advice,
         )
         return {"received": True, "signal_id": signal_id, "status": "processing_async"}
 
     # Bao cao ngay neu chi nhan tin hieu
     await database.update_signal_status(signal_id, 1)
-    msg = f"\U0001f4e1 **Tin hieu TradingView**\n- Ma: `{symbol}`\n- Hanh dong: `{action.upper()}`\n- Gia: `{price}`\n- Signal ID: `#{signal_id}`"
+
+    msg = (
+        f"📡 **Tín hiệu TradingView**\n"
+        f"- Mã: `{symbol}`\n"
+        f"- Hành động: `{action.upper()}`\n"
+        f"- Giá: `{price}`\n"
+        f"- Signal ID: `#{signal_id}`"
+    )
+
+    # Đính kèm phân tích RAG nếu có
+    if rag_advice:
+        msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
+
     background_tasks.add_task(notifier.notify_all, msg)
 
-    return {"received": True, "signal_id": signal_id, "order": None}
+    return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
 
 
 # ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION ═══════════════
 async def execute_trade_and_notify(
-    signal_id: int, action: str, symbol: str, price: str, quote_qty: float
+    signal_id: int, action: str, symbol: str, price: str, quote_qty: float,
+    rag_advice: str = "",
 ):
     """Xu ly lenh bat dong bo va luu vao database."""
     try:
@@ -199,16 +294,20 @@ async def execute_trade_and_notify(
         await database.update_signal_status(signal_id, 1)
 
         msg = (
-            f"\u2705 **Lenh Giao Dich Thanh Cong**\n"
-            f"- Cap giao dich: `{symbol}`\n"
-            f"- Lenh: `{action.upper()}`\n"
-            f"- Gia kich hoat TV: `{price}`\n"
-            f"- Khoi luong yeu cau: `{quote_qty}`\n"
-            f"- Khoi luong khop: `{executed_qty}`\n"
-            f"- Tinh trang: `{order_status}`\n"
+            f"✅ **Lệnh Giao Dịch Thành Công**\n"
+            f"- Cặp giao dịch: `{symbol}`\n"
+            f"- Lệnh: `{action.upper()}`\n"
+            f"- Giá kích hoạt TV: `{price}`\n"
+            f"- Khối lượng yêu cầu: `{quote_qty}`\n"
+            f"- Khối lượng khớp: `{executed_qty}`\n"
+            f"- Tình trạng: `{order_status}`\n"
             f"- Order ID: `{order_id}`\n"
             f"- Signal ID: `#{signal_id}`"
         )
+
+        if rag_advice:
+            msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
+
         log.info(f"Binance Order Success: {result}")
         await notifier.notify_all(msg)
 
@@ -227,10 +326,10 @@ async def execute_trade_and_notify(
         await database.update_signal_status(signal_id, 2)
 
         msg = (
-            f"\u274c **Loi Dat Lenh Binance**\n"
-            f"- Ma: `{symbol}`\n"
-            f"- Lenh: `{action.upper()}`\n"
-            f"- Chi tiet loi: `{error_msg}`\n"
+            f"❌ **Lỗi Đặt Lệnh Binance**\n"
+            f"- Mã: `{symbol}`\n"
+            f"- Lệnh: `{action.upper()}`\n"
+            f"- Chi tiết lỗi: `{error_msg}`\n"
             f"- Signal ID: `#{signal_id}`"
         )
         await notifier.notify_all(msg)
@@ -308,5 +407,5 @@ async def _place_binance_order_async(action: str, symbol: str, quote_qty: float)
 
 if __name__ == "__main__":
     import uvicorn
-    log.info(f"Starting FastAPI Webhook Server v4.0 on {config.HOST}:{config.PORT}")
+    log.info(f"Starting FastAPI Webhook Server v5.0 on {config.HOST}:{config.PORT}")
     uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=config.DEBUG)
