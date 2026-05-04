@@ -15,6 +15,8 @@ from watchlist import get_watchlist
 from analysis import scan_symbols, ScanResult
 from rag import query_knowledge, generate_trading_advice
 from notifier import send_telegram_message, send_telegram_photo
+from vision import analyze_chart_vision, format_vision_telegram
+import database
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,37 @@ async def generate_morning_brief() -> Optional[dict]:
         except Exception as e:
             logger.warning(f"[Brief] Screenshot failed: {e}")
 
+    # 4b. AI Vision analysis on screenshot (P7)
+    vision_result = None
+    if screenshot_path and screenshot_path.exists() and config.ANTHROPIC_API_KEY:
+        logger.info(f"[Brief] Running AI Vision analysis on {screenshot_path.name}")
+        try:
+            # Prepare scan result dict for combined scoring
+            top_scan_dict = None
+            if top_candidates:
+                top = top_candidates[0]
+                top_scan_dict = {
+                    "price": top.price,
+                    "trend_template_score": top.trend_template.score,
+                    "trend_template_stage": top.trend_template.stage,
+                    "vcp_detected": top.vcp.detected,
+                    "volume_ratio": top.vcp.volume_ratio,
+                    "pivot_level": top.vcp.pivot_level,
+                }
+
+            vision_result = await analyze_chart_vision(
+                image_path=screenshot_path,
+                symbol=top_candidates[0].symbol if top_candidates else "UNKNOWN",
+                scan_result=top_scan_dict,
+            )
+            if vision_result and not vision_result.get("error"):
+                logger.info(f"[Brief] Vision: confidence={vision_result['confidence']}/10, "
+                           f"patterns={vision_result['patterns']}")
+            else:
+                logger.warning(f"[Brief] Vision analysis error: {vision_result.get('error')}")
+        except Exception as e:
+            logger.warning(f"[Brief] Vision analysis failed: {e}")
+
     # 5. RAG + Claude analysis
     ai_analysis = ""
     if config.RAG_ENABLED and config.ANTHROPIC_API_KEY:
@@ -171,6 +204,11 @@ async def generate_morning_brief() -> Optional[dict]:
     # 6. Format brief
     brief_text = _format_brief_text(scan_results, ai_analysis, timestamp)
 
+    # 6b. Append Vision analysis if available
+    if vision_result and not vision_result.get("error"):
+        vision_text = format_vision_telegram(vision_result)
+        brief_text += "\n\n" + vision_text
+
     # 7. Send Telegram
     try:
         if screenshot_path and screenshot_path.exists():
@@ -204,10 +242,28 @@ async def generate_morning_brief() -> Optional[dict]:
             for r in scan_results
         ],
         "ai_analysis": ai_analysis,
+        "vision": vision_result if vision_result else None,
         "screenshot": str(screenshot_path) if screenshot_path else None,
         "text": brief_text,
+        "success": True,
     }
     _latest_brief = brief
+
+    # 9. Persist to SQLite
+    try:
+        import json as _json
+        await database.insert_brief(
+            symbols_scanned=len(symbols),
+            scan_data=_json.dumps(brief["scan_results"]),
+            ai_analysis=ai_analysis,
+            vision_data=_json.dumps(vision_result) if vision_result else None,
+            screenshot=str(screenshot_path) if screenshot_path else None,
+            brief_text=brief_text,
+            success=1,
+        )
+    except Exception as e:
+        logger.warning(f"[Brief] Failed to persist brief to DB: {e}")
+
     return brief
 
 

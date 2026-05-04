@@ -51,23 +51,26 @@ main (v6.0) ──────────────────────�
 ## 🧠 Branch B: `feat/p7b-ai-vision-ux`
 > Focus: Intelligence + UX — close FX Tactix gap
 
-### Sprint 7.4 — Telegram Bot Interactive
+### Sprint 7.4 — Telegram Bot Interactive ✅
 - `python-telegram-bot` integration
 - Commands: `/brief`, `/scan`, `/watchlist`, `/add SYMBOL`, `/remove SYMBOL`, `/status`
 - Inline keyboard cho quick actions
 - Chuyển từ push-only → interactive bot
 
-### Sprint 7.5 — AI Vision (Chart Analysis)
+### Sprint 7.5 — AI Vision (Chart Analysis) ✅
 - Claude Vision API: gửi screenshot chart → pattern recognition
 - Tích hợp vào morning brief: algorithmic TT + visual confirmation
 - Pattern types: VCP, cup-with-handle, ascending base, flat base
 - Confidence score: algorithmic + visual combined
 
-### Sprint 7.6 — Web Dashboard v2
-- Morning Brief viewer (historical briefs)
-- Scan results table (sortable by TT score, VCP)
-- Watchlist management UI
-- Real-time status panel (MCP, scheduler, last brief)
+### Sprint 7.6 — Web Dashboard v2 ✅
+- **4-tab SPA:** Overview | Scanner | Watchlist | Status
+- Morning Brief history viewer (SQLite persistence)
+- Scanner: sortable table + on-demand scan trigger + TT score badges
+- Watchlist: CRUD chips + TradingView sync
+- System status: Server, MCP, RAG, Scheduler, Telegram, DB health cards
+- **Auth:** Simple bearer-token middleware (`DASHBOARD_TOKEN`)
+- **Design:** Premium glassmorphism dark theme, micro-animations, responsive
 
 ---
 

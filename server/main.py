@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+import secrets
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -24,6 +25,10 @@ import watchlist as wl_module
 import analysis as analysis_module
 import brief as brief_module
 import scheduler as scheduler_module
+
+# ── P7 imports ───────────────────────────────────────────────────────────────
+import telegram_bot as tg_bot_module
+import vision as vision_module
 
 
 # Setup logging
@@ -75,17 +80,24 @@ async def lifespan(app: FastAPI):
         log.info(f"Scheduler: ✅ Morning Brief scheduled at {config.BRIEF_CRON_TIME} ICT daily.")
     else:
         log.info("Scheduler: Morning Brief TẮT (BRIEF_ENABLED=false).")
+    # ── Telegram Bot (P7) ────────────────────────────────────
+    if config.TELEGRAM_BOT_ENABLED:
+        tg_bot_module.start_bot()
+        log.info("Telegram Bot: ✅ Interactive bot started (polling mode).")
+    else:
+        log.info("Telegram Bot: TẮT (TELEGRAM_BOT_ENABLED=false).")
 
     yield
 
     # ── Shutdown ──────────────────────────────────────────────
+    tg_bot_module.stop_bot()
     scheduler_module.stop_scheduler()
     log.info("Server shutting down.")
 
 
 app = FastAPI(
     title="TradingView Webhook Server",
-    version="6.0",
+    version="7.6",
     lifespan=lifespan,
 )
 
@@ -107,6 +119,33 @@ async def ip_whitelist_middleware(request: Request, call_next):
             return JSONResponse(
                 status_code=status.HTTP_403_FORBIDDEN,
                 content={"error": "IP not whitelisted"}
+            )
+    return await call_next(request)
+
+
+# ═══ DASHBOARD AUTH MIDDLEWARE ════════════════════════════════
+@app.middleware("http")
+async def dashboard_auth_middleware(request: Request, call_next):
+    """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
+    path = request.url.path
+    # Skip auth for: webhook, health check, static files, dashboard HTML, root
+    skip_paths = ("/webhook", "/tv_health_check", "/static", "/dashboard", "/")
+    if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static"):
+        return await call_next(request)
+
+    if path.startswith("/api/") or path.startswith("/trades"):
+        auth_header = request.headers.get("Authorization", "")
+        token_param = request.query_params.get("token", "")
+        token = ""
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        elif token_param:
+            token = token_param
+
+        if not secrets.compare_digest(token, config.DASHBOARD_TOKEN):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid or missing token"},
             )
     return await call_next(request)
 
@@ -538,7 +577,150 @@ async def _place_binance_order_async(action: str, symbol: str, quote_qty: float)
             return data
 
 
+# ═══ VISION ENDPOINTS (P7) ═══════════════════════════════════════════
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze(symbol: str = Query(...), image_path: str = Query(...)):
+    """Analyze a chart screenshot using Claude Vision API."""
+    from pathlib import Path
+    path = Path(image_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
+
+    result = await vision_module.analyze_chart_vision(
+        image_path=path,
+        symbol=symbol.upper(),
+    )
+    return result
+
+
+# ═══ BRIEFS ENDPOINTS (P7.6) ═════════════════════════════════════════
+
+@app.get("/api/briefs")
+async def get_briefs_endpoint(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """List historical morning briefs with pagination."""
+    return await database.get_briefs(limit=limit, offset=offset)
+
+
+@app.get("/api/briefs/{brief_id}")
+async def get_brief_detail_endpoint(brief_id: int):
+    """Get a specific brief by ID."""
+    brief = await database.get_brief_by_id(brief_id)
+    if brief is None:
+        raise HTTPException(status_code=404, detail=f"Brief #{brief_id} not found")
+    return brief
+
+
+# ═══ SYSTEM STATUS (P7.6) ════════════════════════════════════════════
+
+@app.get("/api/system/status")
+async def system_status_endpoint():
+    """Aggregated system status for dashboard."""
+    import time as _time
+
+    # MCP status
+    mcp_status = {"enabled": False, "connected": False}
+    if config.MCP_ENABLED:
+        try:
+            mcp = _mcp_module.get_mcp_client()
+            health = await mcp.health_check()
+            mcp_status = {"enabled": True, "connected": health.get("connected", False)}
+        except Exception:
+            mcp_status = {"enabled": True, "connected": False}
+
+    # RAG status
+    rag_status = {"enabled": False, "vectors_count": 0}
+    if config.RAG_ENABLED:
+        try:
+            collection = rag._collection
+            count = collection.count() if collection else 0
+            rag_status = {"enabled": True, "vectors_count": count}
+        except Exception:
+            rag_status = {"enabled": True, "vectors_count": 0}
+
+    # DB counts
+    try:
+        db_counts = await database.get_db_counts()
+    except Exception:
+        db_counts = {"signals_count": 0, "trades_count": 0, "briefs_count": 0}
+
+    # Latest brief
+    latest_brief = brief_module.get_latest_brief()
+    last_brief_time = latest_brief.get("timestamp") if latest_brief else None
+
+    # Uptime
+    uptime_seconds = int(_time.time() - config.SERVER_START_TIME)
+    hours, remainder = divmod(uptime_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+
+    return {
+        "server": {
+            "version": "7.6",
+            "uptime": uptime_str,
+            "uptime_seconds": uptime_seconds,
+            "time": datetime.now(timezone.utc).isoformat(),
+        },
+        "mcp": mcp_status,
+        "scheduler": {
+            "enabled": config.BRIEF_ENABLED,
+            "cron_time": config.BRIEF_CRON_TIME,
+            "last_brief": last_brief_time,
+        },
+        "rag": rag_status,
+        "telegram_bot": {
+            "enabled": config.TELEGRAM_BOT_ENABLED,
+        },
+        "database": db_counts,
+        "auth_required": bool(config.DASHBOARD_TOKEN),
+    }
+
+
+# ═══ SCAN TRIGGER (P7.6) ═════════════════════════════════════════════
+
+@app.post("/api/scan/trigger")
+async def trigger_scan_endpoint(
+    background_tasks: BackgroundTasks,
+    timeframe: str = Query("D", description="Timeframe: D, W, 60..."),
+):
+    """Run an on-demand watchlist scan."""
+    if not config.MCP_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP_ENABLED=false")
+
+    symbol_list = wl_module.get_watchlist()
+    if not symbol_list:
+        raise HTTPException(status_code=400, detail="Watchlist empty")
+
+    mcp = _mcp_module.get_mcp_client()
+    results = await analysis_module.scan_symbols(symbol_list, mcp)
+
+    return {
+        "scanned": len(results),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "results": [
+            {
+                "symbol": r.symbol,
+                "price": r.price,
+                "change_pct": r.change_pct,
+                "trend_template_score": r.trend_template.score,
+                "trend_template_stage": r.trend_template.stage,
+                "trend_template_criteria": r.trend_template.criteria,
+                "vcp_detected": r.vcp.detected,
+                "volume_ratio": round(r.vcp.volume_ratio, 2),
+                "range_ratio": round(r.vcp.range_ratio, 2),
+                "pivot_level": r.vcp.pivot_level,
+                "vcp_note": r.vcp.note,
+                "error": r.error,
+            }
+            for r in results
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
-    log.info(f"Starting FastAPI Webhook Server v6.0 on {config.HOST}:{config.PORT}")
+    log.info(f"Starting FastAPI Webhook Server v7.6 on {config.HOST}:{config.PORT}")
     uvicorn.run("main:app", host=config.HOST, port=config.PORT, reload=config.DEBUG)

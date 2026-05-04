@@ -13,3 +13,6 @@ anthropic>=0.25.0
 apscheduler>=3.10.4
 pillow>=10.0.0
 requests>=2.31.0
+
+# ── Telegram Bot Interactive (P7) ─────────────────────────────
+python-telegram-bot>=21.0
