@@ -1,70 +1,148 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minervini SEPA — Performance Dashboard</title>
-    <meta name="description" content="Real-time trading performance dashboard for Minervini SEPA strategy">
+    <title>Minervini SEPA — Trading Dashboard v2</title>
+    <meta name="description" content="Premium trading dashboard for Minervini SEPA strategy — Morning Briefs, Scanner, Watchlist & System Status">
     <link rel="stylesheet" href="/static/css/dashboard.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
+    <!-- LOGIN OVERLAY -->
+    <div id="loginOverlay" class="login-overlay" style="display:none">
+        <div class="login-box">
+            <h2>🔐 Dashboard Access</h2>
+            <p>Enter your access token to continue</p>
+            <input type="password" id="loginToken" placeholder="Access Token" autocomplete="off">
+            <button id="loginBtn" onclick="handleLogin()">Authenticate</button>
+            <div id="loginError" class="login-error">Invalid token. Please try again.</div>
+        </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toastContainer" class="toast-container"></div>
+
     <!-- HEADER -->
     <header class="header">
-        <h1>📈 <span>Minervini SEPA</span> — Performance Dashboard</h1>
-        <div class="header-actions">
-            <select id="symbolFilter" class="filter-select">
-                <option value="">All Symbols</option>
-                <option value="BTCUSDT">BTCUSDT</option>
-                <option value="ETHUSDT">ETHUSDT</option>
-                <option value="BNBUSDT">BNBUSDT</option>
-                <option value="SOLUSDT">SOLUSDT</option>
-            </select>
-            <div class="status-dot" title="Server Online"></div>
+        <div class="header-left">
+            <h1>📈 <span>Minervini SEPA</span> — Dashboard</h1>
+        </div>
+        <div class="header-right">
+            <span id="clockDisplay"></span>
+            <div id="serverDot" class="status-dot" title="Server Online"></div>
         </div>
     </header>
 
+    <!-- TAB NAVIGATION -->
+    <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="overview">🏠 Overview</button>
+        <button class="tab-btn" data-tab="scanner">📊 Scanner</button>
+        <button class="tab-btn" data-tab="watchlist">📋 Watchlist <span id="wlBadge" class="tab-badge">0</span></button>
+        <button class="tab-btn" data-tab="status">⚡ Status</button>
+    </nav>
+
     <main class="container">
-        <!-- KPI CARDS -->
-        <div id="kpiGrid" class="kpi-grid">
-            <div class="loading"><div class="spinner"></div></div>
+        <!-- ═══ TAB 1: OVERVIEW ═══ -->
+        <div id="tab-overview" class="tab-panel active">
+            <div id="kpiGrid" class="kpi-grid">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+
+            <section class="glass-section">
+                <div class="section-title">📈 Equity Curve</div>
+                <div class="chart-container"><canvas id="equityChart"></canvas></div>
+            </section>
+
+            <section class="glass-section">
+                <div class="section-header">
+                    <div class="section-title">🌅 Morning Briefs</div>
+                    <button class="btn" onclick="triggerBrief()">▶ Trigger Brief</button>
+                </div>
+                <div id="briefsList"></div>
+            </section>
+
+            <section class="glass-section">
+                <div class="section-header">
+                    <div class="section-title">📋 Trade History</div>
+                    <span id="tradeCount" style="color:var(--text-muted);font-size:0.78rem"></span>
+                </div>
+                <div style="overflow-x:auto">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
+                                <th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tradesBody">
+                            <tr><td colspan="8"><div class="loading"><div class="spinner"></div></div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="pagination" class="pagination"></div>
+            </section>
         </div>
 
-        <!-- EQUITY CURVE -->
-        <section class="chart-section">
-            <div class="section-title">📈 Equity Curve</div>
-            <div class="chart-container">
-                <canvas id="equityChart"></canvas>
-            </div>
-        </section>
+        <!-- ═══ TAB 2: SCANNER ═══ -->
+        <div id="tab-scanner" class="tab-panel">
+            <section class="glass-section">
+                <div class="section-header">
+                    <div class="section-title">📊 Watchlist Scan Results</div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="scanFilter" class="wl-input" style="flex:none;width:140px;padding:8px 12px">
+                            <option value="">All Symbols</option>
+                        </select>
+                        <button id="scanBtn" class="btn btn-primary" onclick="triggerScan()">🔍 Run Scan</button>
+                    </div>
+                </div>
+                <div id="scanStatus" style="color:var(--text-muted);font-size:0.78rem;margin-bottom:12px"></div>
+                <div style="overflow-x:auto">
+                    <table id="scanTable">
+                        <thead>
+                            <tr>
+                                <th data-sort="symbol">Symbol</th>
+                                <th data-sort="price">Price</th>
+                                <th data-sort="change_pct">Change%</th>
+                                <th data-sort="trend_template_score">TT Score</th>
+                                <th>Stage</th>
+                                <th data-sort="vcp_detected">VCP</th>
+                                <th data-sort="volume_ratio">Vol Ratio</th>
+                                <th>Note</th>
+                            </tr>
+                        </thead>
+                        <tbody id="scanBody">
+                            <tr><td colspan="8" class="empty-state"><div class="icon">📊</div><h3>No Scan Data</h3><p>Click "Run Scan" to analyze your watchlist.</p></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
 
-        <!-- TRADE HISTORY -->
-        <section class="table-section">
-            <div class="table-header">
-                <div class="section-title">📋 Trade History</div>
-                <span id="tradeCount" style="color:var(--text-muted);font-size:0.8rem"></span>
-            </div>
-            <div style="overflow-x:auto">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Time</th>
-                            <th>Symbol</th>
-                            <th>Side</th>
-                            <th>Qty</th>
-                            <th>Price</th>
-                            <th>P&L</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tradesBody">
-                        <tr><td colspan="8"><div class="loading"><div class="spinner"></div></div></td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <div id="pagination" class="pagination"></div>
-        </section>
+        <!-- ═══ TAB 3: WATCHLIST ═══ -->
+        <div id="tab-watchlist" class="tab-panel">
+            <section class="glass-section">
+                <div class="section-title">📋 Manage Watchlist</div>
+                <div class="wl-controls">
+                    <input type="text" id="wlInput" class="wl-input" placeholder="Enter symbol (e.g. BTCUSDT)" maxlength="20">
+                    <button class="btn btn-primary" onclick="addSymbol()">+ Add Symbol</button>
+                    <button class="btn" onclick="syncWatchlist()">🔄 Sync from TradingView</button>
+                </div>
+                <div id="wlGrid" class="wl-grid">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ═══ TAB 4: STATUS ═══ -->
+        <div id="tab-status" class="tab-panel">
+            <section class="glass-section">
+                <div class="section-title">⚡ System Status</div>
+                <div id="statusGrid" class="status-grid">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
+            </section>
+        </div>
     </main>
 
     <script src="/static/js/dashboard.js"></script>

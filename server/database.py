@@ -1,4 +1,4 @@
-﻿"""
+"""
 Sprint 4: Trade Logging Database Module
 SQLite + aiosqlite for async I/O with FastAPI
 """
@@ -49,6 +49,20 @@ CREATE INDEX IF NOT EXISTS idx_signals_symbol  ON signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol   ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_signal   ON trades(signal_id);
+
+CREATE TABLE IF NOT EXISTS briefs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    symbols_scanned INTEGER,
+    scan_data       TEXT,
+    ai_analysis     TEXT,
+    vision_data     TEXT,
+    screenshot      TEXT,
+    brief_text      TEXT,
+    success         INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_briefs_created ON briefs(created_at);
 """
 
 
@@ -305,3 +319,106 @@ async def get_equity_curve(symbol: Optional[str] = None) -> Dict[str, Any]:
             "cumulative_pnl": cumulative_pnl,
             "trades": trades_detail,
         }
+
+
+# ═══════════════════════════════════════════════════════════════
+# BRIEF CRUD
+# ═══════════════════════════════════════════════════════════════
+
+async def insert_brief(
+    symbols_scanned: int,
+    scan_data: Optional[str] = None,
+    ai_analysis: Optional[str] = None,
+    vision_data: Optional[str] = None,
+    screenshot: Optional[str] = None,
+    brief_text: Optional[str] = None,
+    success: int = 1,
+) -> int:
+    """Lưu morning brief vào database."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO briefs
+               (symbols_scanned, scan_data, ai_analysis, vision_data,
+                screenshot, brief_text, success)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (symbols_scanned, scan_data, ai_analysis, vision_data,
+             screenshot, brief_text, success),
+        )
+        await db.commit()
+        brief_id = cursor.lastrowid
+        log.info(f"Brief #{brief_id} saved ({symbols_scanned} symbols scanned)")
+        return brief_id
+
+
+async def get_briefs(
+    limit: int = 20,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Truy vấn lịch sử morning briefs với pagination."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        row = await db.execute_fetchall(
+            "SELECT COUNT(*) as cnt FROM briefs"
+        )
+        total = row[0][0] if row else 0
+
+        limit = min(limit, 100)
+        rows = await db.execute_fetchall(
+            """SELECT * FROM briefs
+               ORDER BY created_at DESC
+               LIMIT ? OFFSET ?""",
+            [limit, offset],
+        )
+
+        briefs = []
+        for r in rows:
+            d = dict(r)
+            # Parse JSON fields
+            if d.get("scan_data"):
+                try:
+                    d["scan_data"] = json.loads(d["scan_data"])
+                except Exception:
+                    pass
+            if d.get("vision_data"):
+                try:
+                    d["vision_data"] = json.loads(d["vision_data"])
+                except Exception:
+                    pass
+            briefs.append(d)
+
+    return {"briefs": briefs, "total": total, "limit": limit, "offset": offset}
+
+
+async def get_brief_by_id(brief_id: int) -> Optional[Dict[str, Any]]:
+    """Lấy chi tiết một brief theo ID."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await db.execute_fetchall(
+            "SELECT * FROM briefs WHERE id = ?", [brief_id]
+        )
+        if not rows:
+            return None
+        d = dict(rows[0])
+        if d.get("scan_data"):
+            try:
+                d["scan_data"] = json.loads(d["scan_data"])
+            except Exception:
+                pass
+        if d.get("vision_data"):
+            try:
+                d["vision_data"] = json.loads(d["vision_data"])
+            except Exception:
+                pass
+        return d
+
+
+async def get_db_counts() -> Dict[str, int]:
+    """Đếm tổng records trong mỗi bảng cho system status."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        counts = {}
+        for table in ("signals", "trades", "briefs"):
+            rows = await db.execute_fetchall(f"SELECT COUNT(*) FROM {table}")
+            counts[f"{table}_count"] = rows[0][0] if rows else 0
+        return counts
+

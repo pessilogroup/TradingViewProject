@@ -16,6 +16,7 @@ from analysis import scan_symbols, ScanResult
 from rag import query_knowledge, generate_trading_advice
 from notifier import send_telegram_message, send_telegram_photo
 from vision import analyze_chart_vision, format_vision_telegram
+import database
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +248,22 @@ async def generate_morning_brief() -> Optional[dict]:
         "success": True,
     }
     _latest_brief = brief
+
+    # 9. Persist to SQLite
+    try:
+        import json as _json
+        await database.insert_brief(
+            symbols_scanned=len(symbols),
+            scan_data=_json.dumps(brief["scan_results"]),
+            ai_analysis=ai_analysis,
+            vision_data=_json.dumps(vision_result) if vision_result else None,
+            screenshot=str(screenshot_path) if screenshot_path else None,
+            brief_text=brief_text,
+            success=1,
+        )
+    except Exception as e:
+        logger.warning(f"[Brief] Failed to persist brief to DB: {e}")
+
     return brief
 
 

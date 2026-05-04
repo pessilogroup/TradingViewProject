@@ -86,3 +86,11 @@ WATCHLIST_DEFAULT = [
 # Bật/tắt interactive Telegram bot (polling mode, chạy song song với FastAPI)
 TELEGRAM_BOT_ENABLED = os.getenv("TELEGRAM_BOT_ENABLED", "false").lower() == "true"
 
+# ── P7.6: Dashboard Auth ──────────────────────────────────────────────────
+# Simple bearer token for dashboard API. Set in .env to protect endpoints.
+DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
+
+# Server start time (for uptime calculation)
+import time as _time
+SERVER_START_TIME = _time.time()
+
