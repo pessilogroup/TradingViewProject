@@ -1,8 +1,6 @@
 import json
 import logging
 import time
-import hmac
-import hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -12,7 +10,6 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, sta
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-import aiohttp
 
 import config
 import notifier
@@ -29,6 +26,7 @@ import scheduler as scheduler_module
 # ── P7 imports ───────────────────────────────────────────────────────────────
 import telegram_bot as tg_bot_module
 import vision as vision_module
+import binance_client as binance_module
 
 
 # Setup logging
@@ -129,7 +127,7 @@ async def dashboard_auth_middleware(request: Request, call_next):
     """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
     path = request.url.path
     # Skip auth for: webhook, health check, static files, dashboard HTML, root
-    skip_paths = ("/webhook", "/tv_health_check", "/static", "/dashboard", "/")
+    skip_paths = ("/webhook", "/tv_health_check", "/health", "/static", "/dashboard", "/")
     if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static"):
         return await call_next(request)
 
@@ -148,6 +146,49 @@ async def dashboard_auth_middleware(request: Request, call_next):
                 content={"error": "Invalid or missing token"},
             )
     return await call_next(request)
+
+
+# ═══ HEALTH CHECK (Sprint 7.3) ════════════════════════════════
+@app.get("/health")
+async def health_check():
+    """Docker/K8s health probe — unauthenticated, lightweight."""
+    import time as _t
+    uptime_s = int(_t.time() - config.SERVER_START_TIME)
+    hours, remainder = divmod(uptime_s, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    status_data = {
+        "status": "healthy",
+        "version": "7.3",
+        "uptime": f"{hours}h {minutes}m {seconds}s",
+        "uptime_seconds": uptime_s,
+    }
+
+    # DB check
+    try:
+        import aiosqlite
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            await db.execute("SELECT 1")
+        status_data["database"] = "ok"
+    except Exception as e:
+        status_data["database"] = f"error: {e}"
+        status_data["status"] = "degraded"
+
+    # Binance client mode
+    status_data["binance"] = {
+        "dry_run": config.BINANCE_DRY_RUN,
+        "testnet": config.BINANCE_TESTNET,
+    }
+
+    # Feature flags
+    status_data["features"] = {
+        "rag": config.RAG_ENABLED,
+        "mcp": config.MCP_ENABLED,
+        "brief": config.BRIEF_ENABLED,
+        "telegram_bot": config.TELEGRAM_BOT_ENABLED,
+    }
+
+    return status_data
 
 
 # ═══ DASHBOARD ════════════════════════════════════════════════
@@ -400,7 +441,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             rag_advice = ""
 
     # Dat lenh tren Binance neu Action la buy/sell
-    if config.BINANCE_API_KEY and action in ("buy", "sell"):
+    if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
         background_tasks.add_task(
             execute_trade_and_notify,
             signal_id=signal_id,
@@ -432,56 +473,72 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
 
 
-# ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION ═══════════════
+# ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION (Sprint 7.2) ══
 async def execute_trade_and_notify(
     signal_id: int, action: str, symbol: str, price: str, quote_qty: float,
     rag_advice: str = "",
 ):
-    """Xu ly lenh bat dong bo va luu vao database."""
+    """Smart order execution: MARKET entry + OCO exit with risk management."""
+    client = binance_module.get_client()
+    entry_price = float(price) if price else 0
+
     try:
-        result = await _place_binance_order_async(action, symbol, quote_qty)
-
-        order_id = str(result.get("orderId", "N/A"))
-        order_status = result.get("status", "FILLED")
-        executed_qty = result.get("executedQty", "0")
-        cummulative_quote = result.get("cummulativeQuoteQty", "0")
-
-        exec_qty_float = float(executed_qty) if executed_qty else 0
-        exec_price_float = (
-            float(cummulative_quote) / exec_qty_float
-            if exec_qty_float > 0
-            else None
-        )
-
-        await database.insert_trade(
-            signal_id=signal_id,
+        # Execute smart order (MARKET + OCO)
+        result = client.execute_smart_order(
             symbol=symbol,
             side=action.upper(),
-            order_id=order_id,
-            status=order_status,
-            requested_qty=float(quote_qty),
-            executed_qty=exec_qty_float,
-            executed_price=exec_price_float,
+            entry_price=entry_price,
+            quote_qty=quote_qty if quote_qty else None,
         )
-        await database.update_signal_status(signal_id, 1)
+        # Await the coroutine
+        result = await result
 
-        msg = (
-            f"✅ **Lệnh Giao Dịch Thành Công**\n"
-            f"- Cặp giao dịch: `{symbol}`\n"
-            f"- Lệnh: `{action.upper()}`\n"
-            f"- Giá kích hoạt TV: `{price}`\n"
-            f"- Khối lượng yêu cầu: `{quote_qty}`\n"
-            f"- Khối lượng khớp: `{executed_qty}`\n"
-            f"- Tình trạng: `{order_status}`\n"
-            f"- Order ID: `{order_id}`\n"
-            f"- Signal ID: `#{signal_id}`"
-        )
+        if result.success:
+            entry = result.entry_order
+            order_id = str(entry.get("orderId", "N/A"))
+            order_status = entry.get("status", "FILLED")
+            exec_qty = float(entry.get("executedQty", 0))
+            cum_quote = float(entry.get("cummulativeQuoteQty", 0))
+            exec_price = cum_quote / exec_qty if exec_qty > 0 else None
 
-        if rag_advice:
-            msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
+            order_type = "DRY_RUN" if result.dry_run else "OCO"
+            oco_id = None
+            if result.oco_order:
+                oco_id = str(result.oco_order.get("orderListId", ""))
 
-        log.info(f"Binance Order Success: {result}")
-        await notifier.notify_all(msg)
+            trade_id = await database.insert_trade(
+                signal_id=signal_id,
+                symbol=symbol,
+                side=action.upper(),
+                order_id=order_id,
+                status=order_status,
+                requested_qty=quote_qty,
+                executed_qty=exec_qty,
+                executed_price=exec_price,
+            )
+
+            # Update with OCO details
+            if result.risk:
+                await database.update_trade_oco(
+                    trade_id=trade_id,
+                    stop_loss_price=result.risk.stop_loss_price,
+                    take_profit_price=result.risk.take_profit_price,
+                    oco_order_id=oco_id,
+                    order_type=order_type,
+                )
+
+            await database.update_signal_status(signal_id, 1)
+
+            # Telegram notification
+            msg = binance_module.format_order_telegram(result)
+            if rag_advice:
+                msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
+
+            log.info(f"Smart Order Success: {order_id} (type={order_type})")
+            await notifier.notify_all(msg)
+
+        else:
+            raise Exception(result.error or "Smart order failed")
 
     except Exception as e:
         error_msg = str(e)
@@ -491,7 +548,7 @@ async def execute_trade_and_notify(
             signal_id=signal_id,
             symbol=symbol,
             side=action.upper(),
-            requested_qty=float(quote_qty),
+            requested_qty=float(quote_qty) if quote_qty else 0,
             error_message=error_msg,
             status="FAILED",
         )
@@ -541,40 +598,21 @@ async def get_equity_endpoint(
     return await database.get_equity_curve(symbol=symbol)
 
 
-# ═══ ASYNC BINANCE ORDER ═════════════════════════════════════
-async def _place_binance_order_async(action: str, symbol: str, quote_qty: float) -> dict:
-    """Async Binance market-order placement via aiohttp."""
-    base = (
-        "https://testnet.binance.vision"
-        if config.BINANCE_TESTNET
-        else "https://api.binance.com"
-    )
-    side = "BUY" if action == "buy" else "SELL"
+# ═══ BINANCE ACCOUNT ENDPOINT (Sprint 7.2) ═══════════════════
 
-    params = {
-        "symbol": symbol.replace("/", "").upper(),
-        "side": side,
-        "type": "MARKET",
-        "quoteOrderQty": quote_qty,
-        "timestamp": int(time.time() * 1000),
+@app.get("/api/binance/account")
+async def binance_account_endpoint(
+    asset: str = Query("USDT", description="Asset to check balance"),
+):
+    """Get Binance account balance."""
+    client = binance_module.get_client()
+    balance = await client.get_account_balance(asset)
+    return {
+        "asset": asset.upper(),
+        "balance": balance,
+        "dry_run": client.dry_run,
+        "testnet": client.testnet,
     }
-
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    sig = hmac.new(
-        config.BINANCE_API_SECRET.encode(), query.encode(), hashlib.sha256
-    ).hexdigest()
-    params["signature"] = sig
-
-    headers = {"X-MBX-APIKEY": config.BINANCE_API_KEY}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{base}/api/v3/order", params=params, headers=headers
-        ) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                raise Exception(f"Binance Error: {data}")
-            return data
 
 
 # ═══ VISION ENDPOINTS (P7) ═══════════════════════════════════════════

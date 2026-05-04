@@ -1,6 +1,9 @@
 # Environment & secrets
 server/.env
 *.env
+!.env.production
+!.env.example
+!server/.env.example
 
 # Database
 server/trades.db
@@ -19,4 +22,8 @@ server/chroma_db/
 # P6: Runtime data (watchlist, screenshots, logs)
 server/watchlist.json
 server/screenshots/
-server/trades.log
+server/trades.log
+
+# Docker runtime
+.env
+

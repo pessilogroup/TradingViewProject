@@ -1,0 +1,57 @@
+# ── Git ───────────────────────────────────────────────
+.git
+.gitignore
+.gitmodules
+
+# ── IDE / Editor ──────────────────────────────────────
+.vscode
+.claude
+.gemini
+.mcp.json
+*.code-workspace
+
+# ── Python ────────────────────────────────────────────
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+server/.pytest_cache
+server/__pycache__
+server/tests/__pycache__
+
+# ── Runtime data (will be volume-mounted) ─────────────
+server/trades.db
+server/trades.log
+server/chroma_db
+server/watchlist.json
+server/screenshots
+server/test_trades.log
+test_trades.log
+
+# ── Environment files ─────────────────────────────────
+.env
+.env.production
+server/.env
+*.env
+
+# ── Docs / Plans (not needed in image) ────────────────
+docs/plans
+docs/mindmaps
+ONBOARDING.md
+README.md
+cloudflared.log
+
+# ── Node / MCP submodule ─────────────────────────────
+tradingview-mcp
+node_modules
+
+# ── Scripts (dev tools) ──────────────────────────────
+scripts
+extract_pdf.py
+
+# ── Pine Script (TradingView indicators) ─────────────
+pine
+
+# ── Docker ────────────────────────────────────────────
+Dockerfile
+docker-compose.yml

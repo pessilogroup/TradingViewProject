@@ -22,6 +22,12 @@ DB_PATH = os.getenv("DB_PATH", "trades.db")
 BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+BINANCE_DRY_RUN    = os.getenv("BINANCE_DRY_RUN", "true").lower() == "true"
+
+# Risk Management (Minervini SEPA rules)
+RISK_PER_TRADE     = float(os.getenv("RISK_PER_TRADE", "0.02"))     # 2% per trade
+STOP_LOSS_PCT      = float(os.getenv("STOP_LOSS_PCT", "0.08"))      # 8% SL
+TAKE_PROFIT_PCT    = float(os.getenv("TAKE_PROFIT_PCT", "0.20"))    # 20% TP → R:R ≥ 2.5
 
 # Notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
