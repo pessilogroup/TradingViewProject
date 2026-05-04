@@ -75,6 +75,20 @@ async def init_db():
     async with aiosqlite.connect(config.DB_PATH) as db:
         await db.executescript(_SCHEMA)
         await db.commit()
+
+        # Sprint 7.2: Extend trades table (backward-compatible)
+        for col_def in [
+            "ALTER TABLE trades ADD COLUMN stop_loss_price REAL",
+            "ALTER TABLE trades ADD COLUMN take_profit_price REAL",
+            "ALTER TABLE trades ADD COLUMN oco_order_id TEXT",
+            "ALTER TABLE trades ADD COLUMN order_type TEXT DEFAULT 'MARKET'",
+        ]:
+            try:
+                await db.execute(col_def)
+                await db.commit()
+            except Exception:
+                pass  # Column already exists
+
     log.info(f"Database initialized: {config.DB_PATH}")
 
 
@@ -146,6 +160,26 @@ async def insert_trade(
         trade_id = cursor.lastrowid
         log.info(f"Trade #{trade_id} saved: {side} {symbol} (signal #{signal_id})")
         return trade_id
+
+
+async def update_trade_oco(
+    trade_id: int,
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
+    oco_order_id: Optional[str] = None,
+    order_type: str = "OCO",
+) -> None:
+    """Cập nhật OCO details cho một trade."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            """UPDATE trades SET
+               stop_loss_price = ?, take_profit_price = ?,
+               oco_order_id = ?, order_type = ?
+               WHERE id = ?""",
+            (stop_loss_price, take_profit_price, oco_order_id, order_type, trade_id),
+        )
+        await db.commit()
+        log.info(f"Trade #{trade_id} updated: OCO SL=${stop_loss_price} TP=${take_profit_price}")
 
 
 # ═══════════════════════════════════════════════════════════════

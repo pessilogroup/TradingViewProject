@@ -1,5 +1,5 @@
 """
-P7 Sprint 7.4 — Telegram Bot Interactive
+P7 Sprint 7.4+7.2 — Telegram Bot Interactive
 Chuyển từ push-only notification → interactive bot với commands.
 
 Commands:
@@ -12,6 +12,7 @@ Commands:
     /watchlist  - Xem watchlist hiện tại
     /add SYM    - Thêm symbol vào watchlist
     /remove SYM - Xóa symbol khỏi watchlist
+    /balance    - Xem Binance account balance
 
 Kiến trúc:
     Bot chạy trong background thread (polling) song song với FastAPI.
@@ -87,6 +88,7 @@ async def cmd_help(update, context):
         "/watchlist — Xem danh sách symbols\n"
         "/add `SYMBOL` — Thêm symbol (VD: /add FPT)\n"
         "/remove `SYMBOL` — Xóa symbol (VD: /remove SOLUSDT)\n"
+        "/balance — 💰 Xem Binance account balance\n"
         "/help — Hiện menu này",
         parse_mode="Markdown",
     )
@@ -394,6 +396,32 @@ async def cmd_vision(update, context):
         await update.message.reply_text(f"❌ Vision failed: {e}")
 
 
+async def cmd_balance(update, context):
+    """Xem Binance account balance."""
+    try:
+        import binance_client as binance_module
+
+        client = binance_module.get_client()
+        asset = context.args[0].upper() if context.args else "USDT"
+        balance = await client.get_account_balance(asset)
+
+        mode = []
+        if client.dry_run:
+            mode.append("DRY-RUN")
+        mode.append("TESTNET" if client.testnet else "MAINNET")
+        mode_str = ", ".join(mode)
+
+        await update.message.reply_text(
+            f"💰 *Binance Balance*\n\n"
+            f"- Asset: `{asset}`\n"
+            f"- Balance: `${balance:,.2f}`\n"
+            f"- Mode: `{mode_str}`",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 # ── Inline Keyboard Callback ──────────────────────────────────────────────
 
 async def button_callback(update, context):
@@ -544,6 +572,7 @@ def start_bot():
         app.add_handler(CommandHandler("scan", cmd_scan))
         app.add_handler(CommandHandler("brief", cmd_brief))
         app.add_handler(CommandHandler("vision", cmd_vision))
+        app.add_handler(CommandHandler("balance", cmd_balance))
         app.add_handler(CallbackQueryHandler(button_callback))
 
         log.info("🤖 Telegram Bot started (polling mode)")
