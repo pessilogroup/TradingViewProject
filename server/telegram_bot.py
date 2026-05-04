@@ -1,6 +1,7 @@
 """
-P7 Sprint 7.4+7.2 — Telegram Bot Interactive
+P7+P8 — Telegram Bot Interactive + Cloudflare Worker Signal Handler
 Chuyển từ push-only notification → interactive bot với commands.
+P8: Thêm /signal handler nhận webhook từ Cloudflare Worker.
 
 Commands:
     /start      - Giới thiệu bot
@@ -13,22 +14,30 @@ Commands:
     /add SYM    - Thêm symbol vào watchlist
     /remove SYM - Xóa symbol khỏi watchlist
     /balance    - Xem Binance account balance
+    /signal     - [P8] Nhận TradingView signal (từ CF Worker)
 
 Kiến trúc:
     Bot chạy trong background thread (polling) song song với FastAPI.
     Bot gọi trực tiếp vào các module: watchlist, analysis, brief, mcp_client.
+    [P8] CF Worker gửi /signal command → bot hiện confirm → execute trade.
 """
 
+import json
 import logging
 import asyncio
 import threading
 from datetime import datetime
+from typing import Dict, Any, Optional
 
 log = logging.getLogger(__name__)
 
 # Lazy imports — only load if bot is enabled
 _bot_app = None
 _bot_thread = None
+
+# P8: Pending signals waiting for user confirmation
+# Key: signal_id (int), Value: signal_data dict
+_pending_signals: Dict[int, Dict[str, Any]] = {}
 
 
 def _get_imports():
@@ -89,6 +98,7 @@ async def cmd_help(update, context):
         "/add `SYMBOL` — Thêm symbol (VD: /add FPT)\n"
         "/remove `SYMBOL` — Xóa symbol (VD: /remove SOLUSDT)\n"
         "/balance — 💰 Xem Binance account balance\n"
+        "/signal — 📡 Xử lý TradingView signal (từ CF Worker)\n"
         "/help — Hiện menu này",
         parse_mode="Markdown",
     )
@@ -422,10 +432,246 @@ async def cmd_balance(update, context):
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+# ── P8: Signal Handler (Cloudflare Worker → Telegram) ─────────────────────
+
+async def cmd_signal(update, context):
+    """
+    P8: Nhận TradingView signal từ Cloudflare Worker.
+
+    Format: /signal {"action":"buy","symbol":"BTCUSDT","price":"67500",...}
+
+    Flow:
+    1. Parse JSON payload
+    2. Verify secret + chat_id
+    3. Save signal to DB (pending)
+    4. Hiện confirm buttons: [✅ Execute] [❌ Cancel]
+    5. Chỉ đặt lệnh khi user tap ✅
+    """
+    import config
+    import secrets as secrets_mod
+
+    # Security: chỉ nhận từ đúng chat_id
+    chat_id = str(update.effective_chat.id)
+    if config.TELEGRAM_CHAT_ID and chat_id != config.TELEGRAM_CHAT_ID:
+        log.warning(f"Signal from unauthorized chat: {chat_id}")
+        return
+
+    # Parse JSON payload từ message text
+    raw_text = " ".join(context.args) if context.args else ""
+    if not raw_text:
+        await update.message.reply_text(
+            "⚠️ Thiếu payload.\n"
+            "Format: `/signal {\"action\":\"buy\",\"symbol\":\"BTCUSDT\",\"price\":\"67500\"}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        await update.message.reply_text(f"❌ Invalid JSON: {e}")
+        return
+
+    # Verify webhook secret
+    payload_secret = payload.get("secret", "")
+    if not secrets_mod.compare_digest(str(payload_secret), str(config.WEBHOOK_SECRET)):
+        log.warning("Signal with invalid secret rejected")
+        await update.message.reply_text("❌ Unauthorized: Invalid webhook secret")
+        return
+
+    # Extract fields
+    action = payload.get("action", "").lower()
+    symbol = payload.get("symbol", "")
+    price = str(payload.get("price", ""))
+    quote_qty = payload.get("quoteQty", payload.get("size", 10))
+    source = payload.get("_source", "telegram")
+
+    if not action or not symbol:
+        await update.message.reply_text("❌ Missing required fields: action, symbol")
+        return
+
+    # Step 1: Save signal + RAG analysis (always run immediately)
+    try:
+        import webhook_processor
+
+        signal_data = await webhook_processor.save_signal(
+            symbol=symbol,
+            action=action,
+            price=price,
+            quote_qty=quote_qty,
+            source=source,
+            source_ip="cloudflare_worker",
+            payload=payload,
+        )
+
+        signal_id = signal_data["signal_id"]
+        rag_advice = signal_data.get("rag_advice", "")
+
+    except Exception as e:
+        log.error(f"Signal save error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Failed to save signal: {e}")
+        return
+
+    # Step 2: Show confirmation with inline keyboard
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    # Determine if this needs trade execution or is notification-only
+    needs_trade = action in ("buy", "sell") and (
+        config.BINANCE_API_KEY or config.BINANCE_DRY_RUN
+    )
+
+    if needs_trade:
+        # Store pending signal for confirmation
+        _pending_signals[signal_id] = {
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "action": action,
+            "price": price,
+            "quote_qty": quote_qty,
+            "rag_advice": rag_advice,
+        }
+
+        # Build confirmation message
+        dry_tag = " [DRY-RUN]" if config.BINANCE_DRY_RUN else " ⚠️ LIVE"
+        msg = (
+            f"📡 *Signal #{signal_id}*{dry_tag}\n\n"
+            f"- Symbol: `{symbol}`\n"
+            f"- Action: `{action.upper()}`\n"
+            f"- Price: `${price}`\n"
+            f"- Size: `${quote_qty} USDT`\n"
+            f"- Source: `{source}`\n"
+            f"- SL: `{config.STOP_LOSS_PCT*100:.0f}%` | TP: `{config.TAKE_PROFIT_PCT*100:.0f}%`"
+        )
+        if rag_advice:
+            # Truncate RAG advice for confirmation message
+            short_advice = rag_advice[:300] + "..." if len(rag_advice) > 300 else rag_advice
+            msg += f"\n\n🧠 *AI:* {short_advice}"
+
+        msg += "\n\n⬇️ *Confirm trade execution?*"
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Execute", callback_data=f"signal_exec_{signal_id}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"signal_cancel_{signal_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
+        log.info(f"Signal #{signal_id} pending confirmation: {action.upper()} {symbol}")
+
+    else:
+        # Notification-only signal — execute immediately
+        try:
+            import webhook_processor
+            await webhook_processor.execute_signal(
+                signal_id=signal_id,
+                symbol=symbol,
+                action=action,
+                price=price,
+                quote_qty=quote_qty,
+                rag_advice=rag_advice,
+            )
+            await update.message.reply_text(
+                f"📡 Signal #{signal_id} processed: `{action.upper()} {symbol}` (notification sent)",
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error processing signal: {e}")
+
+
+async def signal_confirm_callback(update, context):
+    """
+    P8: Handle signal confirmation buttons (✅ Execute / ❌ Cancel).
+    Called when user taps inline keyboard button.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # e.g. "signal_exec_42" or "signal_cancel_42"
+    parts = data.split("_")
+    if len(parts) < 3:
+        await query.message.reply_text("❌ Invalid callback data")
+        return
+
+    action_type = parts[1]  # "exec" or "cancel"
+    try:
+        signal_id = int(parts[2])
+    except ValueError:
+        await query.message.reply_text("❌ Invalid signal ID")
+        return
+
+    # Get pending signal
+    signal_data = _pending_signals.pop(signal_id, None)
+
+    if signal_data is None:
+        await query.message.edit_text(
+            f"⚠️ Signal #{signal_id} đã hết hạn hoặc đã được xử lý."
+        )
+        return
+
+    if action_type == "cancel":
+        # Cancel — update DB status
+        import database
+        await database.update_signal_status(signal_id, 2)  # 2 = failed/cancelled
+
+        await query.message.edit_text(
+            f"❌ Signal #{signal_id} đã HỦY.\n"
+            f"- `{signal_data['action'].upper()} {signal_data['symbol']}` @ `${signal_data['price']}`",
+            parse_mode="Markdown",
+        )
+        log.info(f"Signal #{signal_id} CANCELLED by user")
+        return
+
+    if action_type == "exec":
+        # Execute trade
+        await query.message.edit_text(
+            f"⏳ Đang thực thi Signal #{signal_id}...\n"
+            f"`{signal_data['action'].upper()} {signal_data['symbol']}` @ `${signal_data['price']}`",
+            parse_mode="Markdown",
+        )
+
+        try:
+            import webhook_processor
+
+            result = await webhook_processor.execute_signal(
+                signal_id=signal_data["signal_id"],
+                symbol=signal_data["symbol"],
+                action=signal_data["action"],
+                price=signal_data["price"],
+                quote_qty=signal_data["quote_qty"],
+                rag_advice=signal_data.get("rag_advice", ""),
+            )
+
+            if result.get("success"):
+                await query.message.edit_text(
+                    f"✅ Signal #{signal_id} EXECUTED!\n"
+                    f"- `{signal_data['action'].upper()} {signal_data['symbol']}`\n"
+                    f"- Order: `{result.get('order_id', 'N/A')}`\n"
+                    f"- Type: `{result.get('order_type', 'N/A')}`\n\n"
+                    "Check Telegram for full order details.",
+                    parse_mode="Markdown",
+                )
+            else:
+                await query.message.edit_text(
+                    f"❌ Signal #{signal_id} FAILED\n"
+                    f"- Error: `{result.get('error', 'Unknown')}`",
+                    parse_mode="Markdown",
+                )
+
+            log.info(f"Signal #{signal_id} executed: {result}")
+
+        except Exception as e:
+            log.error(f"Signal execution error: {e}", exc_info=True)
+            await query.message.edit_text(
+                f"❌ Signal #{signal_id} execution failed: {e}"
+            )
+
+
 # ── Inline Keyboard Callback ──────────────────────────────────────────────
 
 async def button_callback(update, context):
-    """Handle inline keyboard button presses."""
+    """Handle inline keyboard button presses (non-signal)."""
     query = update.callback_query
     await query.answer()
 
@@ -573,6 +819,10 @@ def start_bot():
         app.add_handler(CommandHandler("brief", cmd_brief))
         app.add_handler(CommandHandler("vision", cmd_vision))
         app.add_handler(CommandHandler("balance", cmd_balance))
+        app.add_handler(CommandHandler("signal", cmd_signal))  # P8
+
+        # P8: Signal confirm/cancel buttons (match pattern before generic)
+        app.add_handler(CallbackQueryHandler(signal_confirm_callback, pattern=r"^signal_"))
         app.add_handler(CallbackQueryHandler(button_callback))
 
         log.info("🤖 Telegram Bot started (polling mode)")

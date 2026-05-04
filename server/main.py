@@ -370,7 +370,7 @@ async def rag_status_endpoint():
     }
 
 
-# ═══ WEBHOOK ENDPOINT ═════════════════════════════════════════
+# ═══ WEBHOOK ENDPOINT (P8: refactored to use webhook_processor) ═══
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     try:
@@ -396,7 +396,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     action = payload.get("action", "").lower()
     symbol = payload.get("symbol", "")
     price = payload.get("price", "")
-    ts = payload.get("time", "")
     quote_qty = payload.get("quoteQty", payload.get("size", 10))
 
     # Source IP
@@ -405,72 +404,23 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     if forwarded:
         source_ip = forwarded.split(",")[0].strip()
 
-    # Luu signal vao database
-    try:
-        price_float = float(price) if price else None
-    except (ValueError, TypeError):
-        price_float = None
+    # ── P8: Delegate to shared webhook_processor ─────────────
+    import webhook_processor
 
-    signal_id = await database.insert_signal(
-        symbol=symbol,
-        action=action,
-        price=price_float,
-        quote_qty=float(quote_qty) if quote_qty else None,
-        source_ip=source_ip,
-        payload=payload,
-    )
-
-    log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty}  time={ts}")
-
-    # ── RAG Analysis (chạy song song với trade execution) ─────────────
-    rag_advice = ""
-    if config.RAG_ENABLED and rag._collection is not None:
-        try:
-            query = rag.build_rag_query(symbol, action, payload)
-            chunks = rag.query_knowledge(query, n_results=config.RAG_TOP_K)
-            if chunks:
-                rag_advice = await rag.generate_trading_advice(
-                    symbol=symbol,
-                    action=action,
-                    price=price,
-                    payload=payload,
-                    rag_chunks=chunks,
-                )
-        except Exception as e:
-            log.error(f"RAG analysis error in webhook: {e}")
-            rag_advice = ""
-
-    # Dat lenh tren Binance neu Action la buy/sell
-    if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
-        background_tasks.add_task(
-            execute_trade_and_notify,
-            signal_id=signal_id,
-            action=action,
+    async def _process():
+        await webhook_processor.process_webhook_signal(
             symbol=symbol,
+            action=action,
             price=price,
             quote_qty=quote_qty,
-            rag_advice=rag_advice,
+            source="webhook",
+            source_ip=source_ip,
+            payload=payload,
         )
-        return {"received": True, "signal_id": signal_id, "status": "processing_async"}
 
-    # Bao cao ngay neu chi nhan tin hieu
-    await database.update_signal_status(signal_id, 1)
+    background_tasks.add_task(_process)
 
-    msg = (
-        f"📡 **Tín hiệu TradingView**\n"
-        f"- Mã: `{symbol}`\n"
-        f"- Hành động: `{action.upper()}`\n"
-        f"- Giá: `{price}`\n"
-        f"- Signal ID: `#{signal_id}`"
-    )
-
-    # Đính kèm phân tích RAG nếu có
-    if rag_advice:
-        msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
-
-    background_tasks.add_task(notifier.notify_all, msg)
-
-    return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
+    return {"received": True, "status": "processing_async"}
 
 
 # ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION (Sprint 7.2) ══

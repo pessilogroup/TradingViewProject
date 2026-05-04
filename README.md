@@ -11,22 +11,27 @@ Hệ thống tự động nhận tín hiệu từ **TradingView Alerts**, thực
 ```
 TradingView Alert (Pine Script v5)
         │
-        ▼
-  Cloudflare Tunnel
+        ├── [P8 NEW] Cloudflare Worker (edge, serverless)
+        │     └── Forward to Telegram Bot API
+        │           └── PC polls → confirm → execute
+        │
+        ├── [VPS] Direct webhook (FastAPI :5000)
         │
         ▼
-  FastAPI Webhook Server v6.0 (:5000)
+  FastAPI Webhook Server v8.0 (:5000)
         │
         ├── 🔐 IP Whitelist + Secret Auth
         ├── 💾 SQLite (signals + trades)
         ├── 🧠 RAG Agent (ChromaDB + Claude)          ← [P5]
-        ├── 🖥️ TradingView MCP (CDP:9222)              ← [P6 NEW]
+        ├── 🖥️ TradingView MCP (CDP:9222)              ← [P6]
         │     ├── Trend Template Scanner (8 criteria)
         │     ├── VCP Detector (volume + range)
         │     └── Chart Screenshot capture
-        ├── ⏰ Morning Brief Scheduler (07:00 ICT)     ← [P6 NEW]
-        ├── 📊 Binance Order Execution
-        └── 📱 Telegram / Discord (text + screenshot)
+        ├── ⏰ Morning Brief Scheduler (07:00 ICT)     ← [P6]
+        ├── 📊 Binance Order Execution (OCO)           ← [P7]
+        ├── 📱 Telegram Bot Interactive                 ← [P7]
+        │     └── /signal confirm flow (✅/❌)           ← [P8 NEW]
+        └── 🌐 Cloudflare Worker Proxy (zero tunnel)   ← [P8 NEW]
 ```
 
 ---
@@ -47,13 +52,17 @@ python main.py             # Start server on :5000
 ```
 TradingViewProject/
 ├── server/
-│   ├── main.py              # FastAPI v6.0 (17 endpoints)
+│   ├── main.py              # FastAPI v8.0 (17 endpoints)
+│   ├── webhook_processor.py # [P8] Shared webhook signal processor
 │   ├── rag.py               # [P5] RAG module (ChromaDB + Claude)
 │   ├── mcp_client.py        # [P6] TradingView MCP wrapper (CDP)
 │   ├── watchlist.py         # [P6] Watchlist CRUD + JSON persistence
 │   ├── analysis.py          # [P6] Trend Template + VCP detector
 │   ├── brief.py             # [P6] Morning Brief orchestrator
 │   ├── scheduler.py         # [P6] APScheduler cron (07:00 ICT)
+│   ├── telegram_bot.py      # [P7+P8] Interactive bot + /signal handler
+│   ├── binance_client.py    # [P7] Binance OCO orders + risk mgmt
+│   ├── vision.py            # [P7] Claude Vision chart analysis
 │   ├── config.py            # Environment config
 │   ├── database.py          # SQLite async operations
 │   ├── notifier.py          # Telegram (text + photo) + Discord
@@ -61,6 +70,12 @@ TradingViewProject/
 │   ├── .env.example         # Environment template
 │   └── static/
 │       └── dashboard.html   # Performance Dashboard UI
+│
+├── worker/                  # [P8] Cloudflare Worker webhook proxy
+│   ├── src/index.js         # Worker code (~110 lines)
+│   ├── wrangler.toml        # Cloudflare config
+│   ├── package.json         # Dependencies
+│   └── README.md            # Deploy guide
 │
 ├── tradingview-mcp/         # [P6] Git submodule — CDP bridge
 │
@@ -78,8 +93,10 @@ TradingViewProject/
 │   ├── TRADINGVIEW_ALERT_SETUP.md
 │   └── plans/
 │       ├── P4/README.md     # [P4] FastAPI Production Server
-│       ├── P5/              # [P5] RAG architecture + implementation log
-│       └── P6/              # [P6] 4 sprint docs + README
+│       ├── P5/              # [P5] RAG architecture
+│       ├── P6/              # [P6] MCP + Morning Brief
+│       ├── P7/              # [P7] Telegram Bot + Vision + Binance
+│       └── P8/              # [P8] Cloudflare Worker (zero tunnel)
 │
 └── README.md                # ← Bạn đang đọc file này
 ```
@@ -228,14 +245,14 @@ Xem chi tiết: [`docs/TRADINGVIEW_ALERT_SETUP.md`](docs/TRADINGVIEW_ALERT_SETUP
 - [x] P4 Sprint 6: Performance Dashboard (Web UI)
 - [x] P4 Sprint 7: Server Testing (pytest)
 - [x] **P5: RAG & Vector Database — ChromaDB + Claude AI**
-- [x] **P6: TradingView MCP × RAG Morning Brief** ← NEW
-  - [x] Sprint 6.1: MCP Foundation (MCPClient wrapper)
-  - [x] Sprint 6.2: Watchlist Management (CRUD + JSON)
-  - [x] Sprint 6.3: Analysis Engine (Trend Template + VCP)
-  - [x] Sprint 6.4: Morning Brief + Scheduler (07:00 ICT)
+- [x] **P6: TradingView MCP × RAG Morning Brief**
+- [x] **P7: Telegram Bot Interactive + AI Vision + Binance OCO**
+- [x] **P8: Cloudflare Worker → Telegram (Zero Tunnel)** ← NEW
+  - [x] Sprint 8.1: Webhook Processor module (shared signal processing)
+  - [x] Sprint 8.2: Telegram /signal handler with confirm flow
+  - [x] Sprint 8.3: Cloudflare Worker proxy deploy
 
 ### 🚧 In Progress
-- [ ] **feat/p6-mcp-morning-brief** — End-to-end test with TradingView Desktop
 - [ ] **feat/minervini-strategy** — Pine Script V2 Backtest + VCP
 
 ### 🗓️ Planned — Binance SDK Upgrade
