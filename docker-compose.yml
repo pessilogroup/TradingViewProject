@@ -1,0 +1,63 @@
+# ════════════════════════════════════════════════════════════════
+# Minervini AI Trading Bot — Docker Compose
+# Sprint 7.3: Production Deployment
+# ════════════════════════════════════════════════════════════════
+# Usage:
+#   cp .env.production .env   # Configure secrets
+#   docker compose up -d      # Start
+#   docker compose logs -f    # Follow logs
+#   docker compose down       # Stop
+# ════════════════════════════════════════════════════════════════
+
+services:
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-bot
+    restart: unless-stopped
+
+    ports:
+      - "${PORT:-5000}:5000"
+
+    env_file:
+      - .env
+
+    volumes:
+      # Persistent data (survive container restarts)
+      - trading-data:/app/data          # SQLite DB + ChromaDB
+      - trading-logs:/app/logs          # Application logs
+      - trading-screenshots:/app/screenshots  # Chart screenshots
+
+    # Docker native health check
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      start-period: 15s
+      retries: 3
+
+    # Resource limits (adjust for your VPS)
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+          cpus: "0.25"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  trading-data:
+    name: trading-bot-data
+  trading-logs:
+    name: trading-bot-logs
+  trading-screenshots:
+    name: trading-bot-screenshots

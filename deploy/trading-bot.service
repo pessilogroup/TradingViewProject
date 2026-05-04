@@ -1,0 +1,47 @@
+[Unit]
+Description=Minervini AI Trading Bot
+Documentation=https://github.com/pessilogroup/TradingViewProject
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=trader
+Group=docker
+WorkingDirectory=/opt/trading-bot
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=120
+
+# Docker Compose commands
+ExecStartPre=/usr/bin/docker compose pull
+ExecStart=/usr/bin/docker compose up --remove-orphans
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose restart
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-bot
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trading-bot
+
+[Install]
+WantedBy=multi-user.target
+
+# ════════════════════════════════════════════════════════════════
+# Installation:
+#   sudo cp trading-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable trading-bot
+#   sudo systemctl start trading-bot
+#
+# Management:
+#   sudo systemctl status trading-bot
+#   sudo journalctl -u trading-bot -f
+#   sudo systemctl restart trading-bot
+# ════════════════════════════════════════════════════════════════

@@ -127,7 +127,7 @@ async def dashboard_auth_middleware(request: Request, call_next):
     """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
     path = request.url.path
     # Skip auth for: webhook, health check, static files, dashboard HTML, root
-    skip_paths = ("/webhook", "/tv_health_check", "/static", "/dashboard", "/")
+    skip_paths = ("/webhook", "/tv_health_check", "/health", "/static", "/dashboard", "/")
     if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static"):
         return await call_next(request)
 
@@ -146,6 +146,49 @@ async def dashboard_auth_middleware(request: Request, call_next):
                 content={"error": "Invalid or missing token"},
             )
     return await call_next(request)
+
+
+# ═══ HEALTH CHECK (Sprint 7.3) ════════════════════════════════
+@app.get("/health")
+async def health_check():
+    """Docker/K8s health probe — unauthenticated, lightweight."""
+    import time as _t
+    uptime_s = int(_t.time() - config.SERVER_START_TIME)
+    hours, remainder = divmod(uptime_s, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    status_data = {
+        "status": "healthy",
+        "version": "7.3",
+        "uptime": f"{hours}h {minutes}m {seconds}s",
+        "uptime_seconds": uptime_s,
+    }
+
+    # DB check
+    try:
+        import aiosqlite
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            await db.execute("SELECT 1")
+        status_data["database"] = "ok"
+    except Exception as e:
+        status_data["database"] = f"error: {e}"
+        status_data["status"] = "degraded"
+
+    # Binance client mode
+    status_data["binance"] = {
+        "dry_run": config.BINANCE_DRY_RUN,
+        "testnet": config.BINANCE_TESTNET,
+    }
+
+    # Feature flags
+    status_data["features"] = {
+        "rag": config.RAG_ENABLED,
+        "mcp": config.MCP_ENABLED,
+        "brief": config.BRIEF_ENABLED,
+        "telegram_bot": config.TELEGRAM_BOT_ENABLED,
+    }
+
+    return status_data
 
 
 # ═══ DASHBOARD ════════════════════════════════════════════════
