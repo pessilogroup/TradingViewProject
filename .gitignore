@@ -23,7 +23,9 @@ server/chroma_db/
 server/watchlist.json
 server/screenshots/
 server/trades.log
+server/.venv
 
 # Docker runtime
 .env
-
+
+

@@ -19,7 +19,10 @@
       "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"CLAUDE_CODE_GIT_BASH_PATH\", \"User\"\\))",
       "WebFetch(domain:claude.ai)",
       "Bash(git clone *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "PowerShell(Get-Process | Select-Object Name, Id | Sort-Object Name | Where-Object { $_.Name -notmatch \"^\\(svchost|System|Idle|Registry|csrss|lsass|winlogon|wininit|services|smss\\)\" } | Format-Table -AutoSize)"
     ]
   }
 }
