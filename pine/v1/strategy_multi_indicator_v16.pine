@@ -1,0 +1,257 @@
+//@version=5
+// =============================================================================
+//  Multi-Indicator Strategy V1.6 — SEPA Crypto-Tuned
+//  Changes vs V1.5:
+//    + Entry = VCP breakout (close > pivot) instead of MACD crossover
+//    + Stage 2 freshness gate (TT transitioned FAIL→PASS in last N bars)
+//    + RSI ceiling removed (Minervini buys momentum, not pullbacks)
+//    + ATR trailing exit (MA50 trail off by default)
+//    + Crypto-friendly defaults (BINANCE:BTCUSDT benchmark)
+// =============================================================================
+
+strategy(
+     title              = "Multi-Indicator Strategy V1.6 (SEPA Crypto)",
+     shorttitle         = "MIS v1.6",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 5,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.1,
+     slippage           = 2,
+     pyramiding         = 0,
+     process_orders_on_close = true,
+     calc_on_every_tick = false
+ )
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+grp_dir   = "Direction"
+allow_long  = input.bool(true,  "Allow Long entries",  group=grp_dir)
+allow_short = input.bool(false, "Allow Short entries", group=grp_dir)
+
+grp_tt    = "Trend Template Gate"
+use_tt    = input.bool(true, "Require Trend Template (8 criteria)", group=grp_tt)
+disable_rs = input.bool(false, "Disable RS criterion (use when chart = benchmark)", group=grp_tt,
+     tooltip="Set true when chart symbol equals benchmark (e.g. BTCUSDT vs BTCUSDT)")
+rs_bench  = input.symbol("BINANCE:BTCUSDT", "RS Benchmark Symbol", group=grp_tt)
+
+grp_stage = "Stage 2 Freshness"
+use_fresh = input.bool(true, "Only enter in early Stage 2 (TT just turned PASS)", group=grp_stage,
+     tooltip="Captures the explosive first leg of Stage 2 instead of late-stage entries.")
+fresh_bars = input.int(60, "Max bars since TT first turned PASS", minval=10, maxval=250, group=grp_stage)
+
+grp_tech  = "Technical Indicators"
+ema_fast  = input.int(20,  "EMA Fast",  minval=1, group=grp_tech)
+ema_mid   = input.int(50,  "EMA Mid",   minval=1, group=grp_tech)
+ema_slow  = input.int(200, "EMA Slow",  minval=1, group=grp_tech)
+rsi_len   = input.int(14,  "RSI Length",minval=1, group=grp_tech)
+rsi_floor = input.int(50,  "RSI Floor (entry only when RSI > this)", group=grp_tech,
+     tooltip="No upper cap — Minervini buys strength, not weakness.")
+atr_len   = input.int(14,  "ATR Length",           group=grp_tech)
+
+grp_vcp   = "VCP Pivot Breakout"
+vcp_lookback = input.int(20, "VCP lookback (bars)", minval=5, maxval=50, group=grp_vcp,
+     tooltip="Bars to scan for volume dry-up + tight range pivot.")
+vcp_dry_pct  = input.float(0.6, "Volume dry-up threshold (× MA)", step=0.05, group=grp_vcp,
+     tooltip="Pivot bar volume must be < this × volume MA. 0.6 = 60% of average.")
+vcp_tight_atr = input.float(0.7, "Range tightness (× ATR)", step=0.1, group=grp_vcp,
+     tooltip="Pivot bar (high-low) must be < this × ATR. 0.7 = 70% of ATR.")
+breakout_window = input.int(15, "Breakout must occur within N bars of pivot", minval=3, maxval=50, group=grp_vcp)
+
+grp_vol   = "Volume Confirmation"
+vol_ma_len = input.int(50, "Volume MA Length", group=grp_vol)
+vol_mult   = input.float(1.5, "Breakout Volume Multiplier", step=0.1, group=grp_vol)
+
+grp_risk  = "Risk Management (SEPA)"
+risk_pct      = input.float(1.0,  "Risk per trade (% equity)",   minval=0.1, maxval=5.0, step=0.1, group=grp_risk)
+atr_sl_mul    = input.float(2.0,  "ATR Stop Loss Multiplier",    step=0.1, group=grp_risk)
+atr_tp_mul    = input.float(8.0,  "ATR Take Profit Multiplier",  step=0.5, group=grp_risk,
+     tooltip="High R:R bias because crypto trends are explosive. With atr_sl=2, atr_tp=8 → R:R = 4:1.")
+hard_sl_pct   = input.float(8.0,  "Hard Stop-Loss Cap (%)",      minval=2.0, maxval=15.0, step=0.5, group=grp_risk)
+max_pos_pct   = input.float(95.0, "Max position notional (% equity)", minval=10.0, maxval=100.0, step=5.0, group=grp_risk)
+use_atr_trail = input.bool(true,  "ATR trailing stop (Chandelier-style)", group=grp_risk)
+trail_atr_mul = input.float(3.0,  "Trail ATR Multiplier",        step=0.5, group=grp_risk)
+use_ma_trail  = input.bool(false, "Exit on close < SMA50",       group=grp_risk)
+cooldown_bars = input.int(3,      "Cooldown bars after exit",    minval=0, maxval=50, group=grp_risk)
+
+grp_date  = "Backtest Window"
+start_dt  = input.time(timestamp("2018-01-01"), "Start date", group=grp_date)
+
+grp_ui    = "UI"
+show_table = input.bool(true,  "Show status table", group=grp_ui)
+show_mas   = input.bool(true,  "Show MAs",          group=grp_ui)
+
+// ─── INDICATORS ───────────────────────────────────────────────────────────────
+ema20  = ta.ema(close, ema_fast)
+ema50  = ta.ema(close, ema_mid)
+ema200 = ta.ema(close, ema_slow)
+
+sma50  = ta.sma(close, 50)
+sma150 = ta.sma(close, 150)
+sma200 = ta.sma(close, 200)
+
+rsi    = ta.rsi(close, rsi_len)
+atr    = ta.atr(atr_len)
+vol_ma = ta.sma(volume, vol_ma_len)
+heavy_vol = volume > vol_ma * vol_mult
+
+high52 = ta.highest(high, 250)
+low52  = ta.lowest(low,   250)
+
+bench   = request.security(rs_bench, timeframe.period, close, ignore_invalid_symbol=true)
+stk_perf  = (close - close[125]) / close[125]
+bench_perf = (bench - bench[125]) / bench[125]
+
+// ─── TREND TEMPLATE (8 CRITERIA) ──────────────────────────────────────────────
+tt1 = close > sma150 and close > sma200
+tt2 = sma150 > sma200
+tt3 = sma200 > sma200[20]
+tt4 = sma50 > sma150 and sma50 > sma200
+tt5 = close > sma50
+tt6 = close >= low52 * 1.30
+tt7 = close >= high52 * 0.75
+tt8 = disable_rs ? true : (stk_perf > bench_perf)
+
+trend_template_ok = tt1 and tt2 and tt3 and tt4 and tt5 and tt6 and tt7 and tt8
+
+// ─── STAGE 2 FRESHNESS — track when TT first turned PASS ──────────────────────
+var int tt_turn_bar = na
+tt_just_passed = trend_template_ok and not trend_template_ok[1]
+if tt_just_passed
+    tt_turn_bar := bar_index
+if not trend_template_ok
+    tt_turn_bar := na  // reset when TT fails
+
+bars_since_tt_pass = na(tt_turn_bar) ? 9999 : (bar_index - tt_turn_bar)
+fresh_stage2 = not use_fresh or bars_since_tt_pass <= fresh_bars
+
+// ─── VCP PIVOT DETECTION ──────────────────────────────────────────────────────
+vol_dry  = volume < vol_ma * vcp_dry_pct
+tight    = (high - low) < atr * vcp_tight_atr
+vcp_bar  = vol_dry and tight
+
+var float pivot_price = na
+var int   pivot_bar   = na
+if vcp_bar
+    pivot_price := high
+    pivot_bar   := bar_index
+
+bars_since_pivot = na(pivot_bar) ? 9999 : (bar_index - pivot_bar)
+vcp_recent_active = bars_since_pivot > 0 and bars_since_pivot <= breakout_window
+
+is_breakout = vcp_recent_active and not na(pivot_price) and ta.crossover(close, pivot_price)
+
+// ─── ENTRY LOGIC ──────────────────────────────────────────────────────────────
+trend_up   = ema20 > ema50 and ema50 > ema200
+trend_down = ema20 < ema50 and ema50 < ema200
+rsi_ok     = rsi > rsi_floor
+
+long_filter  = trend_up and rsi_ok and is_breakout and heavy_vol
+long_filter := long_filter and (not use_tt or trend_template_ok)
+long_filter := long_filter and fresh_stage2
+
+short_filter = trend_down and rsi < (100 - rsi_floor) and ta.crossunder(close, pivot_price) and heavy_vol
+
+var int last_exit_bar = na
+in_cooldown = not na(last_exit_bar) and (bar_index - last_exit_bar) < cooldown_bars
+in_window   = time >= start_dt
+
+long_entry_raw  = allow_long  and long_filter  and strategy.position_size == 0 and not in_cooldown and in_window
+short_entry_raw = allow_short and short_filter and strategy.position_size == 0 and not in_cooldown and in_window
+
+// ─── POSITION SIZING ──────────────────────────────────────────────────────────
+sl_dist_atr  = na(atr) ? 0.0 : atr * atr_sl_mul
+sl_dist_pct  = close * hard_sl_pct / 100
+sl_distance  = math.max(math.min(sl_dist_atr > 0 ? sl_dist_atr : sl_dist_pct, sl_dist_pct), close * 0.005)
+equity_safe  = math.max(strategy.equity, 100)
+risk_capital = equity_safe * risk_pct / 100
+qty_by_risk  = risk_capital / sl_distance
+qty_by_cap   = (equity_safe * max_pos_pct / 100) / close
+qty_raw      = math.min(qty_by_risk, qty_by_cap)
+qty_long     = math.max(qty_raw, 0.0001)
+qty_short    = math.max(qty_raw, 0.0001)
+qty_valid    = not na(qty_raw) and qty_raw > 0 and qty_raw < 1e10
+
+long_entry  = long_entry_raw  and qty_valid
+short_entry = short_entry_raw and qty_valid
+
+// ─── ENTRIES ──────────────────────────────────────────────────────────────────
+if long_entry
+    strategy.entry("Long",  strategy.long,  qty=qty_long)
+if short_entry
+    strategy.entry("Short", strategy.short, qty=qty_short)
+
+// ─── EXITS (ATR trail + hard SL + TP + optional MA50) ─────────────────────────
+var float entry_atr = na
+var float trail_high = na
+if long_entry
+    entry_atr := atr
+    trail_high := high
+if short_entry
+    entry_atr := atr
+    trail_high := low
+
+if strategy.position_size > 0
+    avg = strategy.position_avg_price
+    trail_high := math.max(trail_high, high)
+    sl_hard  = math.max(avg - entry_atr * atr_sl_mul, avg * (1 - hard_sl_pct / 100))
+    sl_trail = trail_high - atr * trail_atr_mul
+    sl  = use_atr_trail ? math.max(sl_hard, sl_trail) : sl_hard
+    tp  = avg + entry_atr * atr_tp_mul
+    if use_ma_trail and close < sma50
+        strategy.close("Long", comment="MA50 trail")
+    else
+        strategy.exit("Long Exit", "Long", stop=sl, limit=tp)
+
+if strategy.position_size < 0
+    avg = strategy.position_avg_price
+    trail_high := math.min(trail_high, low)
+    sl_hard  = math.min(avg + entry_atr * atr_sl_mul, avg * (1 + hard_sl_pct / 100))
+    sl_trail = trail_high + atr * trail_atr_mul
+    sl  = use_atr_trail ? math.min(sl_hard, sl_trail) : sl_hard
+    tp  = avg - entry_atr * atr_tp_mul
+    strategy.exit("Short Exit", "Short", stop=sl, limit=tp)
+
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    last_exit_bar := bar_index
+    trail_high := na
+
+// ─── VISUALS ──────────────────────────────────────────────────────────────────
+plot(show_mas ? sma50  : na, "SMA 50",  color.blue,   linewidth=1)
+plot(show_mas ? sma150 : na, "SMA 150", color.orange, linewidth=1)
+plot(show_mas ? sma200 : na, "SMA 200", color.red,    linewidth=2)
+plot(vcp_recent_active ? pivot_price : na, "VCP Pivot", color.new(color.fuchsia, 30), style=plot.style_linebr, linewidth=2)
+
+plotshape(vcp_bar,     "VCP Setup",    shape.triangleup,   location.belowbar, color.new(color.gray,  0), size=size.tiny)
+plotshape(long_entry,  "Long Entry",   shape.labelup,      location.belowbar, color.new(color.green, 0), size=size.normal, text="BUY", textcolor=color.white)
+plotshape(short_entry, "Short Entry",  shape.labeldown,    location.abovebar, color.new(color.red,   0), size=size.normal, text="SELL", textcolor=color.white)
+
+barcolor(use_tt and trend_template_ok and fresh_stage2 ? color.new(color.green, 70) : na, title="TT Pass + Fresh")
+
+bg_ok(b) => b ? color.new(color.green, 70) : color.new(color.red, 70)
+mark(b)  => b ? "PASS" : "FAIL"
+
+var table tt_table = table.new(position.bottom_right, 2, 11, border_width=1)
+if show_table and barstate.islast
+    table.cell(tt_table, 0, 0, "Trend Template", bgcolor=color.new(color.gray, 30), text_color=color.white)
+    table.cell(tt_table, 1, 0, trend_template_ok ? "PASS" : "FAIL", bgcolor=bg_ok(trend_template_ok), text_color=color.white)
+    table.cell(tt_table, 0, 1, "1. Price > SMA150 & 200")
+    table.cell(tt_table, 1, 1, mark(tt1), bgcolor=bg_ok(tt1))
+    table.cell(tt_table, 0, 2, "2. SMA150 > SMA200")
+    table.cell(tt_table, 1, 2, mark(tt2), bgcolor=bg_ok(tt2))
+    table.cell(tt_table, 0, 3, "3. SMA200 sloping up")
+    table.cell(tt_table, 1, 3, mark(tt3), bgcolor=bg_ok(tt3))
+    table.cell(tt_table, 0, 4, "4. SMA50 > 150 & 200")
+    table.cell(tt_table, 1, 4, mark(tt4), bgcolor=bg_ok(tt4))
+    table.cell(tt_table, 0, 5, "5. Price > SMA50")
+    table.cell(tt_table, 1, 5, mark(tt5), bgcolor=bg_ok(tt5))
+    table.cell(tt_table, 0, 6, "6. >=30% above 52w low")
+    table.cell(tt_table, 1, 6, mark(tt6), bgcolor=bg_ok(tt6))
+    table.cell(tt_table, 0, 7, "7. Within 25% of 52w high")
+    table.cell(tt_table, 1, 7, mark(tt7), bgcolor=bg_ok(tt7))
+    table.cell(tt_table, 0, 8, "8. RS > Benchmark")
+    table.cell(tt_table, 1, 8, mark(tt8), bgcolor=bg_ok(tt8))
+    table.cell(tt_table, 0, 9, "Bars since TT pass")
+    table.cell(tt_table, 1, 9, str.tostring(bars_since_tt_pass), bgcolor=fresh_stage2 ? color.new(color.green, 70) : color.new(color.gray, 70))
+    table.cell(tt_table, 0, 10, "Cooldown")
+    table.cell(tt_table, 1, 10, in_cooldown ? "YES" : "no", bgcolor=in_cooldown ? color.new(color.orange, 50) : color.new(color.gray, 70))
