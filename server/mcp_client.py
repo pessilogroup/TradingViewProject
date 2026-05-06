@@ -78,14 +78,20 @@ class MCPClient:
                 raise RuntimeError(f"MCP CLI error: {err}")
 
             raw = stdout.decode("utf-8", errors="replace").strip()
-            # Find JSON in output (may have prefix text)
+            # CLI emits pretty-printed JSON; try the full payload first,
+            # then fall back to scanning for a single-line JSON value.
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
             for line in raw.split("\n"):
                 line = line.strip()
                 if line.startswith("{") or line.startswith("["):
-                    return json.loads(line)
-
-            # Try full output
-            return json.loads(raw)
+                    try:
+                        return json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+            raise RuntimeError(f"MCP CLI returned non-JSON output: {raw[:200]}")
 
         except asyncio.TimeoutError:
             raise RuntimeError(f"MCP CLI timeout after {timeout}s")
@@ -96,7 +102,7 @@ class MCPClient:
         """Check if TradingView Desktop is connected via CDP."""
         try:
             result = await self._run("status", timeout=5)
-            self._connected = result.get("connected", False)
+            self._connected = bool(result.get("cdp_connected") or result.get("connected"))
             return {
                 "connected": self._connected,
                 "cdp_port": self.cdp_port,

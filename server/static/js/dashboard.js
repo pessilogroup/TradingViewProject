@@ -101,9 +101,14 @@ function initTabs() {
     });
 }
 
+let statusTimer = null;
 function onTabChange(tab) {
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
     if (tab === 'watchlist') loadWatchlist();
-    if (tab === 'status') loadStatus();
+    if (tab === 'status') {
+        loadStatus();
+        statusTimer = setInterval(loadStatus, 5000);
+    }
 }
 
 // ═══ CLOCK ═════════════════════════════════════════════
