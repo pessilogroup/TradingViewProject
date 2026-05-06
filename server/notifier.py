@@ -5,24 +5,23 @@ import config
 log = logging.getLogger(__name__)
 
 async def send_telegram_alert(message: str):
-    """Gửi tin nhắn báo cáo qua Telegram (Bất đồng bộ)"""
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+    """Broadcast tin nhắn tới tất cả chat_id trong TELEGRAM_CHAT_IDS (CSV)."""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_IDS:
         return
-        
+
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": config.TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-    
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload) as response:
-                if response.status != 200:
-                    log.error(f"Telegram API Error: {await response.text()}")
+            for chat_id in config.TELEGRAM_CHAT_IDS:
+                payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+                try:
+                    async with session.post(url, json=payload) as response:
+                        if response.status != 200:
+                            log.error(f"Telegram API Error (chat={chat_id}): {await response.text()}")
+                except Exception as e:
+                    log.error(f"Failed to send Telegram alert to {chat_id}: {e}")
     except Exception as e:
-        log.error(f"Failed to send Telegram alert: {e}")
+        log.error(f"Telegram session error: {e}")
 
 async def send_discord_alert(message: str):
     """Gửi tin nhắn báo cáo qua Discord Webhook (Bất đồng bộ)"""
@@ -70,7 +69,7 @@ def send_telegram_photo(photo_path, caption: str = ""):
     Gửi ảnh (screenshot chart) qua Telegram Bot API.
     Dùng bởi brief.py qua asyncio.to_thread().
     """
-    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_IDS:
         return
 
     import requests
@@ -83,22 +82,23 @@ def send_telegram_photo(photo_path, caption: str = ""):
         log.warning(f"Photo not found: {photo_path}")
         return
 
-    try:
-        with open(photo_path, "rb") as photo_file:
-            data = {
-                "chat_id": config.TELEGRAM_CHAT_ID,
-                "caption": caption[:1024],  # Telegram caption limit
-                "parse_mode": "Markdown",
-            }
-            files = {"photo": (photo_path.name, photo_file, "image/png")}
-            response = requests.post(url, data=data, files=files, timeout=30)
+    for chat_id in config.TELEGRAM_CHAT_IDS:
+        try:
+            with open(photo_path, "rb") as photo_file:
+                data = {
+                    "chat_id": chat_id,
+                    "caption": caption[:1024],  # Telegram caption limit
+                    "parse_mode": "Markdown",
+                }
+                files = {"photo": (photo_path.name, photo_file, "image/png")}
+                response = requests.post(url, data=data, files=files, timeout=30)
 
-            if response.status_code != 200:
-                log.error(f"Telegram Photo API Error: {response.text}")
-            else:
-                log.info(f"Telegram photo sent: {photo_path.name}")
-    except Exception as e:
-        log.error(f"Failed to send Telegram photo: {e}")
+                if response.status_code != 200:
+                    log.error(f"Telegram Photo API Error (chat={chat_id}): {response.text}")
+                else:
+                    log.info(f"Telegram photo sent to {chat_id}: {photo_path.name}")
+        except Exception as e:
+            log.error(f"Failed to send Telegram photo to {chat_id}: {e}")
 
 
 async def notify_all(message: str):

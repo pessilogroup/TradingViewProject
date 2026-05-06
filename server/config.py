@@ -32,6 +32,8 @@ TAKE_PROFIT_PCT    = float(os.getenv("TAKE_PROFIT_PCT", "0.20"))    # 20% TP →
 # Notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+# Multi-user broadcast: TELEGRAM_CHAT_ID can be a single id or CSV ("111,222,333")
+TELEGRAM_CHAT_IDS  = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 DISCORD_WEBHOOK_URL= os.getenv("DISCORD_WEBHOOK_URL", "")
 
 # TradingView Whitelist IPs
