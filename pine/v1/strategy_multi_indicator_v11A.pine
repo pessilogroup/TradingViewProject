@@ -1,0 +1,156 @@
+//@version=5
+// =============================================================================
+//  Multi-Indicator Strategy V1.1A — Group A tuning of v10 (NOT a fork of v1.5/v1.6)
+//
+//  Goal: improve v10 expectancy WITHOUT changing the entry philosophy
+//        (still MACD-cross + EMA-stack + volume). All structural Minervini gates
+//        (TT, VCP, freshness, risk-based sizing) belong to nhóm B and are NOT
+//        applied here.
+//
+//  Changes vs v10:
+//    A1  atr_tp_mul     3.0   → 5.0       (R:R 1.5 → 3.3)
+//    A2  atr_sl_mul     2.0   → 1.5       (tighter loss)
+//    A3  cooldown_bars  0     → 8 (new)   (kill whipsaw chains in chop)
+//    A4  use_trail      false → true (default ON) + Chandelier ATR×3 trailing
+//    A5  allow_short    true  → false (default OFF; toggle to re-enable)
+//    A6  RSI long ceiling removed (rsi > rsi_floor only); short keeps mirror floor
+//
+//  Everything else (commission 0.05%, slippage 2, qty 2% equity, EMA 20/50/200,
+//  MACD 12/26/9, ATR 14, vol MA 20, vol mult 1.5, no pyramiding) is preserved
+//  so the A/B vs v10 isolates the Group-A changes.
+// =============================================================================
+
+strategy(
+     title       = "Multi-Indicator Strategy V1.1A (Group A tuned)",
+     shorttitle  = "MIS v1.1A",
+     overlay     = true,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 2,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.05,
+     slippage          = 2,
+     pyramiding        = 0,
+     process_orders_on_close = true,
+     calc_on_every_tick      = false
+ )
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+grp_dir   = "Direction"
+allow_long  = input.bool(true,  "Allow Long entries",  group=grp_dir)
+allow_short = input.bool(false, "Allow Short entries (A5: off by default)", group=grp_dir)
+
+grp_tech  = "Technical Indicators"
+ema_fast  = input.int(20,  "EMA Fast",   minval=1, group=grp_tech)
+ema_mid   = input.int(50,  "EMA Mid",    minval=1, group=grp_tech)
+ema_slow  = input.int(200, "EMA Slow",   minval=1, group=grp_tech)
+rsi_len   = input.int(14,  "RSI Length", minval=1, group=grp_tech)
+rsi_floor = input.int(50,  "RSI Floor (long entry needs RSI > this; A6: no upper cap)", group=grp_tech)
+rsi_os    = input.int(30,  "RSI Oversold (short entry needs RSI > this and < 100-floor)", group=grp_tech)
+macd_fast = input.int(12,  "MACD Fast",   group=grp_tech)
+macd_slow = input.int(26,  "MACD Slow",   group=grp_tech)
+macd_sig  = input.int(9,   "MACD Signal", group=grp_tech)
+atr_len   = input.int(14,  "ATR Length",  group=grp_tech)
+
+grp_vol   = "Volume"
+vol_ma_len = input.int(20,  "Volume MA Length",   group=grp_vol)
+vol_mult   = input.float(1.5, "Volume Multiplier", step=0.1, group=grp_vol)
+
+grp_risk  = "Risk Management (Group A tuned)"
+atr_sl_mul    = input.float(1.5, "A2: ATR Stop Loss Multiplier", step=0.1, group=grp_risk)
+atr_tp_mul    = input.float(5.0, "A1: ATR Take Profit Multiplier", step=0.1, group=grp_risk)
+use_trail     = input.bool(true, "A4: Chandelier ATR trailing stop", group=grp_risk)
+trail_atr_mul = input.float(3.0, "A4: Trail ATR Multiplier", step=0.1, group=grp_risk)
+cooldown_bars = input.int(8,     "A3: Cooldown bars after exit", minval=0, maxval=50, group=grp_risk)
+
+// ─── INDICATORS ──────────────────────────────────────────────────────────────
+ema20  = ta.ema(close, ema_fast)
+ema50  = ta.ema(close, ema_mid)
+ema200 = ta.ema(close, ema_slow)
+
+rsi    = ta.rsi(close, rsi_len)
+
+[macd_line, signal_line, _] = ta.macd(close, macd_fast, macd_slow, macd_sig)
+macd_cross_up   = ta.crossover(macd_line, signal_line)
+macd_cross_down = ta.crossunder(macd_line, signal_line)
+
+atr    = ta.atr(atr_len)
+vol_ma = ta.sma(volume, vol_ma_len)
+high_vol = volume > vol_ma * vol_mult
+
+// ─── CONDITIONS ──────────────────────────────────────────────────────────────
+trend_up   = ema20 > ema50 and ema50 > ema200
+trend_down = ema20 < ema50 and ema50 < ema200
+
+// A6: long needs RSI > floor only (no upper cap). Short keeps mirror band.
+rsi_long  = rsi > rsi_floor
+rsi_short = rsi < (100 - rsi_floor) and rsi > rsi_os
+
+long_signal  = trend_up   and rsi_long  and macd_cross_up   and high_vol
+short_signal = trend_down and rsi_short and macd_cross_down and high_vol
+
+// A3: cooldown gate
+var int last_exit_bar = na
+in_cooldown = not na(last_exit_bar) and (bar_index - last_exit_bar) < cooldown_bars
+
+long_entry  = allow_long  and long_signal  and strategy.position_size == 0 and not in_cooldown
+short_entry = allow_short and short_signal and strategy.position_size == 0 and not in_cooldown
+
+// ─── STOP LOSS & TAKE PROFIT (A1 + A2 + A4) ──────────────────────────────────
+var float entry_atr = na
+var float trail_extreme = na  // running high (long) or low (short) since entry
+var float entry_price = na
+
+if long_entry
+    entry_atr     := atr
+    trail_extreme := high
+    entry_price   := close
+
+if short_entry
+    entry_atr     := atr
+    trail_extreme := low
+    entry_price   := close
+
+// ─── ORDERS ───────────────────────────────────────────────────────────────────
+if long_entry
+    strategy.entry("Long", strategy.long,
+         alert_message = '{"action":"buy","symbol":"' + syminfo.ticker + '","price":"' + str.tostring(close) + '","time":"' + str.tostring(timenow) + '"}')
+
+if short_entry
+    strategy.entry("Short", strategy.short,
+         alert_message = '{"action":"sell","symbol":"' + syminfo.ticker + '","price":"' + str.tostring(close) + '","time":"' + str.tostring(timenow) + '"}')
+
+if strategy.position_size > 0
+    avg = strategy.position_avg_price
+    trail_extreme := math.max(trail_extreme, high)
+    sl_hard  = avg - entry_atr * atr_sl_mul
+    sl_trail = trail_extreme - atr * trail_atr_mul
+    sl_final = use_trail ? math.max(sl_hard, sl_trail) : sl_hard
+    tp_final = avg + entry_atr * atr_tp_mul
+    strategy.exit("Long Exit", "Long", stop=sl_final, limit=tp_final)
+
+if strategy.position_size < 0
+    avg = strategy.position_avg_price
+    trail_extreme := math.min(trail_extreme, low)
+    sl_hard  = avg + entry_atr * atr_sl_mul
+    sl_trail = trail_extreme + atr * trail_atr_mul
+    sl_final = use_trail ? math.min(sl_hard, sl_trail) : sl_hard
+    tp_final = avg - entry_atr * atr_tp_mul
+    strategy.exit("Short Exit", "Short", stop=sl_final, limit=tp_final)
+
+// Track exit bar for cooldown (transition from in-position to flat)
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    last_exit_bar := bar_index
+    trail_extreme := na
+    entry_atr := na
+    entry_price := na
+
+// ─── VISUALS ─────────────────────────────────────────────────────────────────
+plot(ema20,  "EMA 20",  color=color.new(color.blue,   0), linewidth=1)
+plot(ema50,  "EMA 50",  color=color.new(color.orange, 0), linewidth=1)
+plot(ema200, "EMA 200", color=color.new(color.red,    0), linewidth=2)
+
+plotshape(long_entry,  title="Long Signal",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small)
+plotshape(short_entry, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,   0), size=size.small)
+
+bgcolor(trend_up   ? color.new(color.green, 95) : na)
+bgcolor(trend_down ? color.new(color.red,   95) : na)

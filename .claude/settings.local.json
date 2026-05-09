@@ -22,7 +22,20 @@
       "Bash(npm install *)",
       "Bash(.venv/Scripts/pip install *)",
       "Bash(.venv/Scripts/python.exe -c ' *)",
-      "PowerShell(Get-Process | Select-Object Name, Id | Sort-Object Name | Where-Object { $_.Name -notmatch \"^\\(svchost|System|Idle|Registry|csrss|lsass|winlogon|wininit|services|smss\\)\" } | Format-Table -AutoSize)"
+      "PowerShell(Get-Process | Select-Object Name, Id | Sort-Object Name | Where-Object { $_.Name -notmatch \"^\\(svchost|System|Idle|Registry|csrss|lsass|winlogon|wininit|services|smss\\)\" } | Format-Table -AutoSize)",
+      "mcp__tradingview__chart_get_state",
+      "mcp__tradingview__data_get_strategy_results",
+      "mcp__tradingview__data_get_trades",
+      "mcp__tradingview__pine_list_scripts",
+      "mcp__tradingview__data_get_equity",
+      "mcp__tradingview__ui_open_panel",
+      "mcp__tradingview__pine_set_source",
+      "mcp__tradingview__pine_smart_compile",
+      "mcp__tradingview__pine_compile",
+      "mcp__tradingview__capture_screenshot",
+      "mcp__tradingview__ui_click",
+      "mcp__tradingview__ui_scroll",
+      "mcp__tradingview__ui_evaluate"
     ]
   }
 }

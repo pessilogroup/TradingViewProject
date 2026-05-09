@@ -27,9 +27,4 @@ server/.venv
 
 # Docker runtime
 .env
-
-
-.claude/worktrees/dazzling-stonebraker-d1a1f7
-.claude/worktrees/priceless-panini-538c69
-.claude/worktrees/interesting-chaplygin-11f315
-.claude/worktrees/frosty-einstein-4c5462
+.claude/worktrees/
