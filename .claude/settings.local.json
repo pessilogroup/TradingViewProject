@@ -35,7 +35,23 @@
       "mcp__tradingview__capture_screenshot",
       "mcp__tradingview__ui_click",
       "mcp__tradingview__ui_scroll",
-      "mcp__tradingview__ui_evaluate"
+      "mcp__tradingview__ui_evaluate",
+      "Bash(git mv *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "mcp__tradingview__pine_new",
+      "mcp__tradingview__chart_set_type",
+      "mcp__tradingview__batch_run",
+      "mcp__tradingview__chart_set_timeframe",
+      "mcp__tradingview__indicator_set_inputs",
+      "mcp__tradingview__ui_keyboard",
+      "mcp__tradingview__ui_find_element",
+      "mcp__tradingview__ui_mouse_click"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "tradingview"
+  ]
 }
