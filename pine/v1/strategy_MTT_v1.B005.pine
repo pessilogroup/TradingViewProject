@@ -1,0 +1,74 @@
+// (c) TradingViewProject
+// Strategy B.005 — Short Only + Break-out Long signal (lưu từ B4v2F observation)
+//
+// Logic:
+//   - Short entry/exit theo bear stack (giữ logic B004)
+//   - Plot thêm "BREAKOUT LONG" markers khi bear stack vừa kết thúc
+//     (KHÔNG vào lệnh long — chỉ ghi nhận để strategy A005 có thể subscribe sau)
+//
+//@version=5
+strategy("strategy_MTT_v1.B005 (Short Only + Breakout signal)",
+     shorttitle="B.005 S",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.075,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+grp_p = "Trading Profile"
+profile  = input.string("Futures", "Profile", options=["Margin","Futures"], group=grp_p)
+override_qty = input.bool(false, "Override profile qty %", group=grp_p)
+manual_qty   = input.float(10.0, "Manual qty %", minval=1.0, maxval=100.0, group=grp_p)
+
+grp_ma = "MA Settings"
+ma_type  = input.string("EMA", "MA Type", options=["SMA","EMA","WMA","HMA","DEMA","TEMA"], group=grp_ma)
+fast_len = input.int(20,  "Fast",   minval=5,  group=grp_ma)
+med_len  = input.int(50,  "Medium", minval=10, group=grp_ma)
+slow_len = input.int(100, "Slow",   minval=20, group=grp_ma)
+
+ma(t, l) =>
+    switch t
+        "SMA"  => ta.sma(close, l)
+        "EMA"  => ta.ema(close, l)
+        "WMA"  => ta.wma(close, l)
+        "HMA"  => ta.hma(close, l)
+        "DEMA" => 2 * ta.ema(close, l) - ta.ema(ta.ema(close, l), l)
+        "TEMA" => 3 * (ta.ema(close, l) - ta.ema(ta.ema(close, l), l)) + ta.ema(ta.ema(ta.ema(close, l), l), l)
+        =>        ta.sma(close, l)
+
+mf = ma(ma_type, fast_len)
+mm = ma(ma_type, med_len)
+ms = ma(ma_type, slow_len)
+
+bear = mf < mm and mm < ms
+bear_start = bear and not bear[1]
+bear_end   = not bear and bear[1]
+// === BREAK-OUT LONG SIGNAL (lưu từ B4v2F) ===
+breakout_long = bear_end
+
+margin_pct  = 20.0
+futures_pct = 10.0
+qty_pct = override_qty ? manual_qty : (profile == "Margin" ? margin_pct : futures_pct)
+qc = (strategy.equity * qty_pct / 100.0) / close
+
+if bear_start
+    strategy.entry("SHORT", strategy.short, qty=qc, comment="Bear Start")
+if bear_end
+    strategy.close("SHORT", comment="Bear End")
+
+// Visual
+p_f = plot(mf, color=color.blue,   title="Fast")
+p_m = plot(mm, color=color.orange, title="Medium")
+p_s = plot(ms, color=color.red,    title="Slow", linewidth=2)
+fill(p_f, p_s, color=bear ? color.new(color.red, 80) : na, title="Bear Zone")
+
+plotshape(bear_start,    title="S",     style=shape.triangledown, location=location.abovebar, color=color.new(color.red,0),    size=size.tiny, text="S")
+plotshape(bear_end,      title="x",     style=shape.xcross,       location=location.belowbar, color=color.new(color.red,30),   size=size.tiny)
+// Break-out long marker (không trade — chỉ visual để A005 subscribe sau này)
+plotshape(breakout_long, title="BO",    style=shape.diamond,      location=location.belowbar, color=color.new(color.aqua,0),   size=size.small, text="BO")
+alertcondition(breakout_long, title="Breakout Long Signal", message="Bear stack ended — potential long break-out")

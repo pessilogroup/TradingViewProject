@@ -1,0 +1,60 @@
+// (c) TradingViewProject
+// Pine Library — Logic chung cho V1.005+
+// Sau khi Publish on TradingView, import bằng:
+//   import TradingViewProject/strategy_mtt_lib/1 as mtt
+//
+//@version=5
+library("strategy_mtt_lib", overlay=true)
+
+// ============================================================================
+// MA helper — chọn loại MA động
+// type: "SMA" | "EMA" | "WMA" | "HMA" | "DEMA" | "TEMA"
+// ============================================================================
+export ma(simple string mtype, simple int len, series float src) =>
+    switch mtype
+        "SMA"  => ta.sma(src, len)
+        "EMA"  => ta.ema(src, len)
+        "WMA"  => ta.wma(src, len)
+        "HMA"  => ta.hma(src, len)
+        "DEMA" => 2 * ta.ema(src, len) - ta.ema(ta.ema(src, len), len)
+        "TEMA" => 3 * (ta.ema(src, len) - ta.ema(ta.ema(src, len), len)) + ta.ema(ta.ema(ta.ema(src, len), len), len)
+        =>        ta.sma(src, len)
+
+// ============================================================================
+// Stack signals — vùng xếp tầng MA
+// returns: [bull_stack, bear_stack, bull_start, bull_end, bear_start, bear_end]
+// ============================================================================
+export stack_signals(series float fast, series float med, series float slow) =>
+    bull_stack = fast > med and med > slow
+    bear_stack = fast < med and med < slow
+    bull_start = bull_stack and not bull_stack[1]
+    bull_end   = not bull_stack and bull_stack[1]
+    bear_start = bear_stack and not bear_stack[1]
+    bear_end   = not bear_stack and bear_stack[1]
+    [bull_stack, bear_stack, bull_start, bull_end, bear_start, bear_end]
+
+// ============================================================================
+// Profile sizing — qty% theo profile
+// profile: "Spot" | "Margin" | "Futures"
+// V1.005 default: Spot 10 / Margin 20 / Futures 10
+// ============================================================================
+export profile_qty_pct(simple string profile, simple float spot_pct, simple float margin_pct, simple float futures_pct) =>
+    profile == "Spot"   ? spot_pct
+     : profile == "Margin" ? margin_pct
+     : futures_pct
+
+export profile_qty_default(simple string profile) =>
+    profile_qty_pct(profile, 10.0, 20.0, 10.0)
+
+// ============================================================================
+// Position sizing helper — số contract theo % equity
+// ============================================================================
+export size_by_pct(series float equity_now, simple float qty_pct, series float price) =>
+    (equity_now * qty_pct / 100.0) / price
+
+// ============================================================================
+// Reusable signal: BREAK-OUT LONG khi bear stack vừa kết thúc
+// (phát hiện trong B4v2F — tín hiệu market flip từ downtrend → neutral/bull)
+// ============================================================================
+export bear_to_neutral_breakout(series bool bear_stack) =>
+    not bear_stack and bear_stack[1]

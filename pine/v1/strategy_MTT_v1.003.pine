@@ -1,0 +1,84 @@
+// © TradingViewProject
+//@version=5
+strategy("strategy_MTT_v1.003 (Profiles)",
+     shorttitle="strategy_MTT v1.003",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.075,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ----- PROFILE -----
+grp_p = "Trading Profile"
+profile = input.string("Futures", title="Profile", options=["Spot","Margin","Futures"], group=grp_p)
+override_qty = input.bool(false, title="Override profile qty %", group=grp_p)
+manual_qty   = input.float(10.0, title="Manual qty % (if override)", minval=1.0, maxval=100.0, step=1.0, group=grp_p)
+
+// Profile presets (NOT all-in)
+//   Spot:    long-only,    25% equity, không đòn bẩy
+//   Margin:  long + short, 20% equity, ~3x đòn bẩy (mô phỏng = qty 60% notional)
+//   Futures: long + short, 10% equity, ~10x đòn bẩy (mô phỏng = qty 30% notional)
+spot_pct    = 25.0
+margin_pct  = 60.0   // 20% equity * 3x lev
+futures_pct = 30.0   // 10% equity * 10x lev (giữ thận trọng)
+
+allow_long  = true
+allow_short = profile != "Spot"
+qty_pct     = override_qty ? manual_qty : (profile == "Spot" ? spot_pct : profile == "Margin" ? margin_pct : futures_pct)
+
+// ----- INDICATORS -----
+sma50  = ta.sma(close, 50)
+sma150 = ta.sma(close, 150)
+sma200 = ta.sma(close, 200)
+
+bull_stack = sma50 > sma150 and sma150 > sma200
+bear_stack = sma50 < sma150 and sma150 < sma200
+
+bull_start = bull_stack and not bull_stack[1]
+bull_end   = not bull_stack and bull_stack[1]
+bear_start = bear_stack and not bear_stack[1]
+bear_end   = not bear_stack and bear_stack[1]
+
+// ----- VISUALS -----
+p_sma50  = plot(sma50,  color=color.blue,   title="SMA 50",  linewidth=1)
+p_sma150 = plot(sma150, color=color.orange, title="SMA 150", linewidth=1)
+p_sma200 = plot(sma200, color=color.red,    title="SMA 200", linewidth=2)
+fill_color = bull_stack ? color.new(color.green, 80) : bear_stack ? color.new(color.red, 80) : na
+fill(p_sma50, p_sma200, color=fill_color, title="MA Stack Zone")
+
+// ----- ORDER SIZING (dynamic qty per profile) -----
+// Sử dụng strategy.percent_of_equity với qty_pct động
+qty_contracts = (strategy.equity * qty_pct / 100.0) / close
+
+// ----- ENTRIES / EXITS -----
+if allow_long and bull_start
+    strategy.entry("LONG",  strategy.long,  qty=qty_contracts, comment="Bull Start")
+if bull_end
+    strategy.close("LONG", comment="Bull End")
+if allow_short and bear_start
+    strategy.entry("SHORT", strategy.short, qty=qty_contracts, comment="Bear Start")
+if bear_end
+    strategy.close("SHORT", comment="Bear End")
+
+// ----- INFO TABLE -----
+var table info = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "Profile",   bgcolor=color.new(color.gray, 30), text_color=color.white)
+    table.cell(info, 1, 0, profile,     bgcolor=color.new(color.gray, 30), text_color=color.white)
+    table.cell(info, 0, 1, "Qty % equity")
+    table.cell(info, 1, 1, str.tostring(qty_pct) + "%")
+    table.cell(info, 0, 2, "Allow Long")
+    table.cell(info, 1, 2, allow_long ? "YES" : "NO")
+    table.cell(info, 0, 3, "Allow Short")
+    table.cell(info, 1, 3, allow_short ? "YES" : "NO")
+
+// ----- MARKERS -----
+plotshape(bull_start, title="L", style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.tiny, text="L")
+plotshape(bull_end,   title="x", style=shape.xcross,       location=location.abovebar, color=color.new(color.green,30), size=size.tiny)
+plotshape(bear_start, title="S", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,   0), size=size.tiny, text="S")
+plotshape(bear_end,   title="x", style=shape.xcross,       location=location.belowbar, color=color.new(color.red,  30), size=size.tiny)

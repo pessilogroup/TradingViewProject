@@ -1,0 +1,56 @@
+// (c) TradingViewProject
+//@version=5
+strategy("strategy_MTT_v1.A004 (Long Only)",
+     shorttitle="strategy_MTT v1.A004 L",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.075,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+grp_p = "Trading Profile (Long Only)"
+profile = input.string("Futures", title="Profile", options=["Spot","Margin","Futures"], group=grp_p)
+override_qty = input.bool(false, title="Override profile qty %", group=grp_p)
+manual_qty   = input.float(10.0, title="Manual qty %", minval=1.0, maxval=100.0, step=1.0, group=grp_p)
+
+spot_pct    = 25.0
+margin_pct  = 60.0
+futures_pct = 30.0
+qty_pct = override_qty ? manual_qty : (profile == "Spot" ? spot_pct : profile == "Margin" ? margin_pct : futures_pct)
+
+sma50  = ta.sma(close, 50)
+sma150 = ta.sma(close, 150)
+sma200 = ta.sma(close, 200)
+
+bull_stack = sma50 > sma150 and sma150 > sma200
+bull_start = bull_stack and not bull_stack[1]
+bull_end   = not bull_stack and bull_stack[1]
+
+p_sma50  = plot(sma50,  color=color.blue,   title="SMA 50",  linewidth=1)
+p_sma150 = plot(sma150, color=color.orange, title="SMA 150", linewidth=1)
+p_sma200 = plot(sma200, color=color.red,    title="SMA 200", linewidth=2)
+fill(p_sma50, p_sma200, color=bull_stack ? color.new(color.green, 80) : na, title="Bull Zone")
+
+qty_contracts = (strategy.equity * qty_pct / 100.0) / close
+
+if bull_start
+    strategy.entry("LONG", strategy.long, qty=qty_contracts, comment="Bull Start")
+if bull_end
+    strategy.close("LONG", comment="Bull End")
+
+var table info = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "MODE", bgcolor=color.new(color.green, 30), text_color=color.white)
+    table.cell(info, 1, 0, "LONG ONLY", bgcolor=color.new(color.green, 30), text_color=color.white)
+    table.cell(info, 0, 1, "Profile")
+    table.cell(info, 1, 1, profile)
+    table.cell(info, 0, 2, "Qty %")
+    table.cell(info, 1, 2, str.tostring(qty_pct) + "%")
+
+plotshape(bull_start, title="L", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.tiny, text="L")
+plotshape(bull_end,   title="x", style=shape.xcross,     location=location.abovebar, color=color.new(color.green,30), size=size.tiny)

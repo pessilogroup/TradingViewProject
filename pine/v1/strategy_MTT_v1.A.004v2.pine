@@ -1,0 +1,64 @@
+// (c) TradingViewProject
+//@version=5
+strategy("strategy_MTT_v1.A.004v2 (Long Only, MA 20/50/100)",
+     shorttitle="A.004v2",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.075,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+grp_p = "Trading Profile (Long Only)"
+profile = input.string("Futures", title="Profile", options=["Spot","Margin","Futures"], group=grp_p)
+override_qty = input.bool(false, title="Override profile qty %", group=grp_p)
+manual_qty   = input.float(10.0, title="Manual qty %", minval=1.0, maxval=100.0, step=1.0, group=grp_p)
+
+grp_ma = "MA Periods"
+fast_len = input.int(20,  title="Fast MA",   minval=5,  maxval=100, group=grp_ma)
+med_len  = input.int(50,  title="Medium MA", minval=20, maxval=200, group=grp_ma)
+slow_len = input.int(100, title="Slow MA",   minval=50, maxval=400, group=grp_ma)
+
+// Profile presets V1.004 — qty per single entry (giảm so với V1.A004)
+spot_pct    = 10.0    // V1.A004 = 25%
+margin_pct  = 20.0    // V1.A004 = 60% (20% × 3x lev)
+futures_pct = 10.0    // V1.A004 = 30% (10% × 10x lev = 100% notional)
+qty_pct = override_qty ? manual_qty : (profile == "Spot" ? spot_pct : profile == "Margin" ? margin_pct : futures_pct)
+
+ma_fast = ta.sma(close, fast_len)
+ma_med  = ta.sma(close, med_len)
+ma_slow = ta.sma(close, slow_len)
+
+bull_stack = ma_fast > ma_med and ma_med > ma_slow
+bull_start = bull_stack and not bull_stack[1]
+bull_end   = not bull_stack and bull_stack[1]
+
+p_fast = plot(ma_fast, color=color.blue,   title="MA Fast")
+p_med  = plot(ma_med,  color=color.orange, title="MA Med")
+p_slow = plot(ma_slow, color=color.red,    title="MA Slow", linewidth=2)
+fill(p_fast, p_slow, color=bull_stack ? color.new(color.green, 80) : na, title="Bull Zone")
+
+qty_contracts = (strategy.equity * qty_pct / 100.0) / close
+
+if bull_start
+    strategy.entry("LONG", strategy.long, qty=qty_contracts, comment="Bull Start")
+if bull_end
+    strategy.close("LONG", comment="Bull End")
+
+var table info = table.new(position.top_right, 2, 4, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "MODE",    bgcolor=color.new(color.green, 30), text_color=color.white)
+    table.cell(info, 1, 0, "LONG ONLY", bgcolor=color.new(color.green, 30), text_color=color.white)
+    table.cell(info, 0, 1, "Profile")
+    table.cell(info, 1, 1, profile)
+    table.cell(info, 0, 2, "Qty %")
+    table.cell(info, 1, 2, str.tostring(qty_pct) + "%")
+    table.cell(info, 0, 3, "MA")
+    table.cell(info, 1, 3, str.tostring(fast_len) + "/" + str.tostring(med_len) + "/" + str.tostring(slow_len))
+
+plotshape(bull_start, title="L", style=shape.triangleup, location=location.belowbar, color=color.new(color.green, 0), size=size.tiny, text="L")
+plotshape(bull_end,   title="x", style=shape.xcross,     location=location.abovebar, color=color.new(color.green,30), size=size.tiny)
