@@ -4,7 +4,8 @@ Uses a temp file DB per test to avoid :memory: isolation issues.
 """
 import pytest
 import pytest_asyncio
-import os, sys, pathlib, tempfile
+import sys
+import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 import config

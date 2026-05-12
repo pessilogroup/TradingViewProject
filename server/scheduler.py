@@ -2,7 +2,6 @@
 P6 — APScheduler
 Cron job: Morning Brief tự động lúc 07:00 ICT (UTC+7) mỗi ngày.
 """
-import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler

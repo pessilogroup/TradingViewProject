@@ -1,13 +1,14 @@
-﻿"""
+"""
 conftest.py — Shared fixtures for entire test suite.
 - Uses temp file DB per test (not :memory:) to avoid SQLite isolation issues.
 - FastAPI TestClient via ASGITransport — no running server needed.
 - WEBHOOK_SECRET overridden to "test-secret" for all tests.
 """
 
-import pytest
 import pytest_asyncio
-import os, sys, pathlib
+import os
+import sys
+import pathlib
 
 # Override env BEFORE importing any app modules
 os.environ["WEBHOOK_SECRET"] = "test-secret"
@@ -18,34 +19,48 @@ os.environ["TELEGRAM_CHAT_ID"] = ""
 os.environ["DISCORD_WEBHOOK_URL"] = ""
 os.environ["ENABLE_IP_WHITELIST"] = "false"
 os.environ["LOG_FILE"] = "test_trades.log"
+os.environ["TELEGRAM_BOT_ENABLED"] = "false"
+os.environ["BRIEF_ENABLED"] = "false"
+os.environ["RAG_ENABLED"] = "false"
+os.environ["MCP_ENABLED"] = "false"
+os.environ["DASHBOARD_TOKEN"] = ""
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 import httpx
 from httpx import ASGITransport
+from fastapi.testclient import TestClient
 
+class AsyncTestClientWrapper:
+    def __init__(self, app):
+        self.client = TestClient(app)
+    
+    async def post(self, *args, **kwargs):
+        return self.client.post(*args, **kwargs)
+        
+    async def get(self, *args, **kwargs):
+        return self.client.get(*args, **kwargs)
 
 @pytest_asyncio.fixture
 async def client(tmp_path):
-    """
-    Async HTTP client connected to FastAPI app via ASGI transport.
-    Each test gets its own temp file DB — fully isolated.
-    """
+    """Fixture cung cap httpx.AsyncClient voi mocked environment."""
     import config
     import database
 
     # Point to per-test temp DB file
     config.DB_PATH = str(tmp_path / "test.db")
     config.WEBHOOK_SECRET = "test-secret"
+    config.TELEGRAM_BOT_ENABLED = False
+    config.BRIEF_ENABLED = False
+    config.MCP_ENABLED = False
+    config.RAG_ENABLED = False
+    config.DASHBOARD_TOKEN = ""
     os.environ["DB_PATH"] = config.DB_PATH
 
     await database.init_db()
 
     from main import app
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        yield ac
+    yield AsyncTestClientWrapper(app)
 
 
 @pytest_asyncio.fixture

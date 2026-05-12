@@ -25,13 +25,19 @@ grp_rs = "Relative Strength (RS) Settings"
 rs_option = input.string("BTCUSD (Crypto)", title="Chọn Benchmark Market", options=["SPY (Thị trường Mỹ)", "VNINDEX (Thị trường VN)", "BTCUSD (Crypto)"], group=grp_rs)
 
 grp_vcp = "VCP & Breakout Settings"
-vol_breakout_mult = input.float(1.5, title="Volume Breakout Multiplier [Khuyên dùng: 1.5x - 2.0x]", step=0.1, group=grp_vcp, tooltip="Minervini yêu cầu khối lượng lớn (Heavy Volume) khi vượt Pivot. 1.5 có nghĩa là khối lượng gấp 1.5 lần trung bình 50 phiên.")
+vol_breakout_mult = input.float(1.2, title="Volume Breakout Multiplier [MIS v1 khuyên dùng: 1.2x]", step=0.1, group=grp_vcp, tooltip="Minervini yêu cầu khối lượng lớn (Heavy Volume) khi vượt Pivot.")
 vcp_lookback = input.int(10, title="Số nến tối đa từ VCP đến Breakout", minval=1, maxval=20, group=grp_vcp)
 
-grp_risk = "Risk Management (Minervini Defaults)"
-stop_loss_pct = input.float(8.0, title="Stop Loss (%) [Minervini khuyên: 4-8%]", minval=1.0, maxval=20.0, step=0.5, group=grp_risk, tooltip="Mức cắt lỗ tối đa không bao giờ vượt quá 10%.")
-take_profit_pct = input.float(20.0, title="Take Profit (%) [Minervini khuyên: 2-3x Rủi ro]", minval=1.0, step=1.0, group=grp_risk, tooltip="Chốt lời khi lợi nhuận đạt gấp 2 hoặc 3 lần rủi ro (Risk/Reward 1:2 hoặc 1:3).")
-use_trailing_ma = input.bool(true, title="Bán khi thủng SMA 50 (Trailing Stop)", group=grp_risk, tooltip="Minervini thường chốt lời hoặc cắt vị thế khi cổ phiếu gãy đường MA 50 ngày với khối lượng lớn.")
+grp_risk = "Risk Management (MIS v1 Optimized)"
+use_atr_stops = input.bool(true, title="Sử dụng SL/TP dựa trên ATR (MIS v1)", group=grp_risk)
+atr_sl_mult = input.float(2.0, title="ATR Stop Loss Multiplier", group=grp_risk)
+atr_tp_mult = input.float(3.0, title="ATR Take Profit Multiplier", group=grp_risk)
+stop_loss_pct = input.float(8.0, title="Stop Loss Cố định (%)", minval=1.0, maxval=20.0, step=0.5, group=grp_risk)
+take_profit_pct = input.float(20.0, title="Take Profit Cố định (%)", minval=1.0, step=1.0, group=grp_risk)
+use_trailing_ma = input.bool(true, title="Bán khi thủng SMA 50 (Trailing Stop)", group=grp_risk)
+
+grp_webhook = "Webhook Settings"
+webhook_secret = input.string("change_me_in_dotenv", title="Webhook Secret", group=grp_webhook)
 
 grp_ui = "UI Settings"
 show_table = input.bool(true, title="Hiển thị bảng trạng thái (Table)", group=grp_ui)
@@ -106,20 +112,40 @@ vol_breakout = volume > (vol_sma * vol_breakout_mult)
 buy_signal = trend_template_met and is_breakout and vol_breakout
 
 // ================================================================================================= //
-// STRATEGY EXECUTION (RISK MANAGEMENT)
+// STRATEGY EXECUTION (RISK MANAGEMENT & WEBHOOK)
 // ================================================================================================= //
 
+// Tính toán SL / TP động (Chỉ dùng cho Visual Backtest trên TradingView)
+var float current_sl = na
+var float current_tp = na
+
 if buy_signal and strategy.position_size == 0
+    if use_atr_stops
+        current_sl := close - (atr * atr_sl_mult)
+        current_tp := close + (atr * atr_tp_mult)
+    else
+        current_sl := close * (1 - (stop_loss_pct / 100))
+        current_tp := close * (1 + (take_profit_pct / 100))
+        
+    // 🧠 GỬI TÍN HIỆU CHO AI BRAIN (ACTION = "alert")
+    alert_msg = '{"secret": "' + webhook_secret + '", "action": "alert", "symbol": "' + syminfo.ticker + '", "price": ' + str.tostring(close) + ', "interval": "' + timeframe.period + '"}'
+    
+    // Gửi webhook dưới dạng Alert thay vì Entry cứng
+    alert(alert_msg, alert.freq_once_per_bar_close)
+    
+    // Strategy entry chỉ dùng để backtest trên web
     strategy.entry("SEPA Long", strategy.long)
 
-// Cắt lỗ và Chốt lời cố định (Tính theo %)
+// Quản lý lệnh đang mở (Chỉ dùng cho Visual Backtest)
 if strategy.position_size > 0
-    entry_price = strategy.position_avg_price
-    stop_price = entry_price * (1 - (stop_loss_pct / 100))
-    limit_price = entry_price * (1 + (take_profit_pct / 100))
+    // Nếu SL/TP không hợp lệ (VD: đổi logic giữa chừng), tính lại tạm
+    stop_price = na(current_sl) ? strategy.position_avg_price * (1 - (stop_loss_pct / 100)) : current_sl
+    limit_price = na(current_tp) ? strategy.position_avg_price * (1 + (take_profit_pct / 100)) : current_tp
     
     // Cắt lỗ thủng MA50 (Trailing Stop)
     if use_trailing_ma and close < sma50
+        alert_msg_sell = '{"secret": "' + webhook_secret + '", "action": "sell", "symbol": "' + syminfo.ticker + '", "price": ' + str.tostring(close) + ', "interval": "' + timeframe.period + '"}'
+        alert(alert_msg_sell, alert.freq_once_per_bar_close)
         strategy.close("SEPA Long", comment="Thủng MA50")
     else
         strategy.exit("Take Profit / Stop Loss", "SEPA Long", stop=stop_price, limit=limit_price)

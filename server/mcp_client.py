@@ -5,7 +5,6 @@ TradingView Desktop phải đang chạy với --remote-debugging-port=9222
 """
 import json
 import asyncio
-import subprocess
 import base64
 import logging
 from pathlib import Path
@@ -178,18 +177,20 @@ class MCPClient:
 
     async def capture_screenshot(
         self,
-        symbol: str,
+        symbol: str = "active",
         timeframe: str = "D",
         region: str = "chart",
-        save_path: Optional[Path] = None
+        save_path: Optional[Path] = None,
+        active_only: bool = False
     ) -> Optional[Path]:
         """
         Capture chart screenshot.
         Returns path to saved PNG file, or None on failure.
         """
         try:
-            await self._run("symbol", symbol)
-            await self._run("timeframe", timeframe)
+            if not active_only:
+                if symbol != "active": await self._run("symbol", symbol)
+                if timeframe != "active": await self._run("timeframe", timeframe)
             raw = await self._run("screenshot", "-r", region, timeout=20)
 
             # MCP returns base64 or file path
@@ -201,6 +202,9 @@ class MCPClient:
                 save_path.write_bytes(img_data)
                 return save_path
 
+            if "file_path" in raw:
+                return Path(raw["file_path"])
+                
             if "path" in raw:
                 return Path(raw["path"])
 

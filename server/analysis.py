@@ -3,7 +3,7 @@ P6 — Analysis Engine
 Trend Template scorer (8 Minervini criteria) + VCP detector.
 """
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ class VCPResult:
     volume_ratio: float                 # current vol / 20-period avg (< 0.5 = contraction)
     range_ratio: float                  # (H-L) / ATR14 (< 0.5 = narrow)
     pivot_level: Optional[float]        # estimated breakout pivot
+    vol_breakout: bool                  # volume > 1.2x average (for breakout confirmation)
     note: str
 
 
@@ -156,6 +157,7 @@ def detect_vcp(
     vol_contracting = volume_ratio < 0.5
     range_contracting = range_ratio < 0.5
     near_high = (price >= high_52w * 0.90) if high_52w and high_52w > 0 else False
+    vol_breakout = volume_ratio > 1.2
 
     detected = vol_contracting and range_contracting
 
@@ -178,6 +180,7 @@ def detect_vcp(
         volume_ratio=volume_ratio,
         range_ratio=range_ratio,
         pivot_level=pivot_level,
+        vol_breakout=vol_breakout,
         note=note,
     )
 

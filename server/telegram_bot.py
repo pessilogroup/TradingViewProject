@@ -9,6 +9,7 @@ Commands:
     /brief      - Chạy Morning Brief ngay
     /scan       - Scan watchlist (Trend Template + VCP)
     /vision SYM - AI Vision phân tích chart screenshot
+    /grade      - AI Mentor chấm điểm trade (bảo toàn Bar Replay)
     /watchlist  - Xem watchlist hiện tại
     /add SYM    - Thêm symbol vào watchlist
     /remove SYM - Xóa symbol khỏi watchlist
@@ -85,6 +86,7 @@ async def cmd_help(update, context):
         "/brief — Chạy Morning Brief ngay\n"
         "/scan — Scan watchlist (TT + VCP)\n"
         "/vision `SYMBOL` — 👁️ AI Vision phân tích chart\n"
+        "/grade — 👨‍🏫 AI Mentor chấm điểm trade (Bar Replay)\n"
         "/watchlist — Xem danh sách symbols\n"
         "/add `SYMBOL` — Thêm symbol (VD: /add FPT)\n"
         "/remove `SYMBOL` — Xóa symbol (VD: /remove SOLUSDT)\n"
@@ -396,6 +398,71 @@ async def cmd_vision(update, context):
         await update.message.reply_text(f"❌ Vision failed: {e}")
 
 
+async def cmd_grade(update, context):
+    """AI Mentor — chấm điểm setup Long/Short trên màn hình hiện tại."""
+    await update.message.reply_text("👨‍🏫 Đang chụp và phân tích lệnh của bạn... Vui lòng chờ.", parse_mode="Markdown")
+
+    try:
+        import config
+        from pathlib import Path
+
+        if not config.MCP_ENABLED:
+            await update.message.reply_text("⚠️ Tính năng này yêu cầu bật MCP_ENABLED = True.")
+            return
+
+        screenshots_dir = Path(__file__).parent / "screenshots"
+        screenshot_path = None
+
+        try:
+            from mcp_client import get_mcp_client
+            mcp = get_mcp_client()
+            health = await mcp.health_check()
+            if health.get("connected"):
+                from datetime import datetime as dt
+                # Chụp màn hình hiện tại (active_only=True) để không phá Bar Replay
+                screenshot_path = await mcp.capture_screenshot(
+                    symbol="active",
+                    timeframe="active",
+                    region="chart",
+                    save_path=screenshots_dir / f"grade_{dt.now().strftime('%Y%m%d_%H%M%S')}.png",
+                    active_only=True
+                )
+            else:
+                await update.message.reply_text("⚠️ TradingView chưa kết nối (MCP CDP).")
+                return
+        except Exception as e:
+            log.warning(f"Grade screenshot capture failed: {e}")
+            await update.message.reply_text(f"❌ Lỗi chụp TradingView: {e}")
+            return
+
+        if not screenshot_path or not Path(screenshot_path).exists():
+            await update.message.reply_text("⚠️ Không lấy được ảnh từ TradingView.")
+            return
+
+        # Run Vision analysis on the captured screenshot
+        from vision import analyze_chart_vision, format_vision_telegram
+
+        # Use symbol from args or fallback to "CHART"
+        symbol = context.args[0].upper() if context.args else "ACTIVE CHART"
+
+        result = await analyze_chart_vision(
+            image_path=Path(screenshot_path),
+            symbol=symbol,
+        )
+
+        if result.get("error"):
+            await update.message.reply_text(f"\u274c Vision error: {result['error']}")
+            return
+
+        formatted = format_vision_telegram(result)
+        await update.message.reply_text(formatted, parse_mode="Markdown")
+
+
+    except Exception as e:
+        log.error(f"Grade command error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Grade failed: {e}")
+
+
 async def cmd_balance(update, context):
     """Xem Binance account balance."""
     try:
@@ -560,7 +627,24 @@ def start_bot():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).build()
+        # Build bot — force IPv4 to fix async httpx ConnectError on Windows
+        # httpx AsyncClient tries IPv6 first, which may not be routed on some networks.
+        # Fix: inject local_address="0.0.0.0" transport into HTTPXRequest._client_kwargs
+        from telegram.request import HTTPXRequest
+        import httpx as _httpx
+
+        _proxy = config.TELEGRAM_PROXY_URL or None
+        request = HTTPXRequest(proxy=_proxy)
+        # Inject IPv4-only transport (overrides default which allows IPv6)
+        request._client_kwargs["transport"] = _httpx.AsyncHTTPTransport(
+            local_address="0.0.0.0",
+        )
+        # Rebuild internal client with patched kwargs
+        request._client = request._build_client()
+
+        app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).request(request).build()
+        log.info("🤖 Telegram Bot using IPv4-forced async transport (fix for Windows)")
+
 
         # Register command handlers
         app.add_handler(CommandHandler("start", cmd_start))
@@ -572,6 +656,7 @@ def start_bot():
         app.add_handler(CommandHandler("scan", cmd_scan))
         app.add_handler(CommandHandler("brief", cmd_brief))
         app.add_handler(CommandHandler("vision", cmd_vision))
+        app.add_handler(CommandHandler("grade", cmd_grade))
         app.add_handler(CommandHandler("balance", cmd_balance))
         app.add_handler(CallbackQueryHandler(button_callback))
 

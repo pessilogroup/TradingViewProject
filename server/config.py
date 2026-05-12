@@ -36,6 +36,10 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS  = [c.strip() for c in TELEGRAM_CHAT_ID.split(",") if c.strip()]
 DISCORD_WEBHOOK_URL= os.getenv("DISCORD_WEBHOOK_URL", "")
 
+# Optional HTTP/SOCKS5 proxy for Telegram (e.g. "http://127.0.0.1:8090")
+TELEGRAM_PROXY_URL = os.getenv("TELEGRAM_PROXY_URL", "")
+
+
 # TradingView Whitelist IPs
 TV_WHITELIST_IPS = {
     "52.89.214.238",
@@ -60,6 +64,16 @@ CHROMA_DB_PATH = os.getenv(
 
 # Anthropic (Claude) API Key — dùng cho bước Generation trong RAG
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# AI Provider: "anthropic" hoặc "gemini"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
+
+# Gemini API Key (Fallback if not using Vertex AI)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Google Cloud Vertex AI (Primary auth for Gemini)
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
+GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
 
 # Số chunks tối đa trả về cho mỗi query (2-3 là tối ưu)
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", 3))

@@ -323,6 +323,8 @@ class BinanceClient:
         sl_pct: float = None,
         tp_pct: float = None,
         risk_pct: float = None,
+        sl_price: float = None,
+        tp_price: float = None,
         asset: str = "USDT",
     ) -> OrderResult:
         """Full workflow: MARKET entry → OCO exit with position sizing.
@@ -347,10 +349,18 @@ class BinanceClient:
             log.info(f"Account balance: ${balance:,.2f} {asset}")
 
             # 2. SL/TP levels
-            levels = self.calculate_sl_tp(entry_price, side_upper, sl_pct, tp_pct)
-            sl_price = levels["stop_loss"]
-            tp_price = levels["take_profit"]
-            rr_ratio = levels["risk_reward"]
+            if sl_price is not None and tp_price is not None:
+                # Use explicitly provided prices
+                rr_ratio = abs(tp_price - entry_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
+                calc_sl_pct = abs(sl_price - entry_price) / entry_price if entry_price > 0 else (sl_pct or config.STOP_LOSS_PCT)
+                calc_tp_pct = abs(tp_price - entry_price) / entry_price if entry_price > 0 else (tp_pct or config.TAKE_PROFIT_PCT)
+            else:
+                levels = self.calculate_sl_tp(entry_price, side_upper, sl_pct, tp_pct)
+                sl_price = levels["stop_loss"]
+                tp_price = levels["take_profit"]
+                rr_ratio = levels["risk_reward"]
+                calc_sl_pct = sl_pct or config.STOP_LOSS_PCT
+                calc_tp_pct = tp_pct or config.TAKE_PROFIT_PCT
 
             # 3. Position sizing
             qty = self.calculate_position_size(balance, entry_price, sl_price, risk_pct)
@@ -368,8 +378,8 @@ class BinanceClient:
                 entry_price=entry_price,
                 stop_loss_price=sl_price,
                 take_profit_price=tp_price,
-                stop_loss_pct=sl_pct,
-                take_profit_pct=tp_pct,
+                stop_loss_pct=calc_sl_pct,
+                take_profit_pct=calc_tp_pct,
                 risk_reward_ratio=rr_ratio,
                 quantity=qty,
                 cost=cost,
@@ -395,9 +405,16 @@ class BinanceClient:
 
             # Recalculate SL/TP from actual fill price
             if abs(fill_price - entry_price) > 0.01:
-                levels = self.calculate_sl_tp(fill_price, side_upper, sl_pct, tp_pct)
-                sl_price = levels["stop_loss"]
-                tp_price = levels["take_profit"]
+                price_diff = fill_price - entry_price
+                if hasattr(self, '_explicit_sl') and self._explicit_sl: 
+                    # Note: We just check if sl_price was passed into execute_smart_order
+                    # By shifting them exactly by price_diff, we maintain the exact risk $ amount per share
+                    pass
+                
+                # We shift the SL and TP by the exact same dollar amount of slippage to keep distance constant
+                sl_price += price_diff
+                tp_price += price_diff
+
                 risk_params.entry_price = fill_price
                 risk_params.stop_loss_price = sl_price
                 risk_params.take_profit_price = tp_price

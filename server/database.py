@@ -5,8 +5,7 @@ SQLite + aiosqlite for async I/O with FastAPI
 import aiosqlite
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import config
 

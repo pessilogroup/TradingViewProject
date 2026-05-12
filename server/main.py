@@ -1,9 +1,7 @@
-import json
 import logging
-import time
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional
 import secrets
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
@@ -42,7 +40,9 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-
+# ── Stealth Capture Cooldown ──
+LAST_CAPTURE_TIME = {}
+CAPTURE_COOLDOWN_SEC = 300  # Giới hạn 5 phút mỗi mã (chống spam Webhook)
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -293,6 +293,7 @@ async def scan_watchlist_endpoint(
                 "trend_template_stage": r.trend_template.stage,
                 "trend_template_criteria": r.trend_template.criteria,
                 "vcp_detected": r.vcp.detected,
+                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
                 "volume_ratio": round(r.vcp.volume_ratio, 2),
                 "range_ratio": round(r.vcp.range_ratio, 2),
                 "pivot_level": r.vcp.pivot_level,
@@ -398,6 +399,10 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     price = payload.get("price", "")
     ts = payload.get("time", "")
     quote_qty = payload.get("quoteQty", payload.get("size", 10))
+    interval = str(payload.get("interval", "")).strip().lower()
+    
+    sl_str = payload.get("sl", "")
+    tp_str = payload.get("tp", "")
 
     # Source IP
     source_ip = request.client.host
@@ -440,8 +445,42 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             log.error(f"RAG analysis error in webhook: {e}")
             rag_advice = ""
 
-    # Dat lenh tren Binance neu Action la buy/sell
+    # ── Autonomous AI Analyst (Stealth Capture) cho Action = "alert" ──────────
+    if action == "alert" and config.MCP_ENABLED:
+        now = datetime.now(timezone.utc).timestamp()
+        last_time = LAST_CAPTURE_TIME.get(symbol, 0)
+        
+        if now - last_time < CAPTURE_COOLDOWN_SEC:
+            log.warning(f"Cooldown active for {symbol}. Skipping Stealth Capture.")
+        else:
+            LAST_CAPTURE_TIME[symbol] = now
+            background_tasks.add_task(
+                process_alert_stealth_capture,
+                signal_id=signal_id,
+                symbol=symbol,
+                price=price,
+                quote_qty=quote_qty,
+                rag_advice=rag_advice
+            )
+            return {"received": True, "signal_id": signal_id, "status": "stealth_capture_async"}
+
+    # ── Đặt lệnh trực tiếp nếu Action = "buy" / "sell" (Pine Script cũ) ───────
     if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
+        # --- TIMEFRAME FILTER (CIRCUIT BREAKER) ---
+        valid_intervals = ["60", "1h", "60m"]
+        if interval not in valid_intervals:
+            log.warning(f"Rejecting trade for {symbol}: invalid interval '{interval}'. Only 1h/60 is allowed.")
+            await database.update_signal_status(signal_id, 2) # 2 = FAILED/REJECTED
+            msg = (
+                f"⛔ **Lệnh Bị Từ Chối (Timeframe Filter)**\n"
+                f"- Mã: `{symbol}`\n"
+                f"- Hành động: `{action.upper()}`\n"
+                f"- Lỗi: `Phát hiện khung thời gian '{interval}'. Chiến lược MIS v1 chỉ được phép chạy trên khung 1H (60).`\n"
+                f"- Signal ID: `#{signal_id}`"
+            )
+            background_tasks.add_task(notifier.notify_all, msg)
+            return {"received": True, "signal_id": signal_id, "status": "rejected", "reason": "invalid_timeframe"}
+
         background_tasks.add_task(
             execute_trade_and_notify,
             signal_id=signal_id,
@@ -449,6 +488,8 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             symbol=symbol,
             price=price,
             quote_qty=quote_qty,
+            sl=sl_str,
+            tp=tp_str,
             rag_advice=rag_advice,
         )
         return {"received": True, "signal_id": signal_id, "status": "processing_async"}
@@ -473,14 +514,109 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
 
 
+# ── STEALTH CAPTURE & AUTONOMOUS AI ANALYST ─────────────────────────
+import re
+
+async def process_alert_stealth_capture(
+    signal_id: int, symbol: str, price: str, quote_qty: float, rag_advice: str = ""
+):
+    """
+    Xử lý tín hiệu 'alert' từ Webhook:
+    1. Chụp màn hình TradingView ẩn danh (active_only).
+    2. Chạy Vision AI phân tích Hành vi + SL/TP.
+    3. Đặt lệnh nếu điểm >= 7.
+    """
+    log.info(f"Stealth capture triggered for {symbol}")
+    await notifier.notify_all(f"🤖 **Stealth Capture:** Đang chụp ảnh và phân tích `{symbol}`...")
+
+    try:
+        from mcp_client import get_mcp_client
+        mcp = get_mcp_client()
+        health = await mcp.health_check()
+        if not health.get("connected"):
+            await notifier.notify_all(f"⚠️ **Stealth Capture:** TradingView MCP chưa kết nối.")
+            return
+
+        screenshot_path = await mcp.capture_screenshot(
+            symbol="active",
+            timeframe="active",
+            region="chart",
+            active_only=True
+        )
+
+        if not screenshot_path:
+            await notifier.notify_all(f"⚠️ **Stealth Capture:** Lỗi chụp ảnh biểu đồ.")
+            return
+
+        # Gọi Vision AI
+        result = await vision_module.analyze_chart_vision(
+            image_path=Path(screenshot_path),
+            symbol=symbol,
+        )
+
+        if result.get("error"):
+            await notifier.notify_all(f"❌ **Stealth Capture Error:** {result['error']}")
+            return
+
+        analysis_text = result.get("analysis", "")
+        confidence = result.get("confidence", 0)
+
+        # Parse SL & TP bằng Regex
+        sl_match = re.search(r"Stop\s*Loss:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
+        tp_match = re.search(r"Take\s*Profit:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
+        
+        sl_val = sl_match.group(1) if sl_match else ""
+        tp_val = tp_match.group(1) if tp_match else ""
+
+        # Format thông báo
+        formatted_vision = vision_module.format_vision_telegram(result)
+        msg = f"🥷 **STEALTH CAPTURE HOÀN TẤT** 🥷\n\n{formatted_vision}"
+
+        if confidence >= 7:
+            msg += f"\n\n⚡ Điểm số đạt chuẩn (>=7). Tiến hành uỷ quyền đặt lệnh..."
+            await notifier.notify_all(msg)
+            
+            # Thực thi giao dịch
+            await execute_trade_and_notify(
+                signal_id=signal_id,
+                action="buy",
+                symbol=symbol,
+                price=price,
+                quote_qty=quote_qty,
+                sl=sl_val,
+                tp=tp_val,
+                rag_advice=rag_advice
+            )
+        else:
+            msg += f"\n\n🛑 Lệnh bị từ chối do điểm số ({confidence}/10) không đủ chuẩn SEPA."
+            await notifier.notify_all(msg)
+
+    except Exception as e:
+        log.error(f"Stealth capture process error: {e}", exc_info=True)
+        await notifier.notify_all(f"❌ **Stealth Capture Failed:** {str(e)}")
+
+
 # ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION (Sprint 7.2) ══
 async def execute_trade_and_notify(
     signal_id: int, action: str, symbol: str, price: str, quote_qty: float,
-    rag_advice: str = "",
+    sl: str = "", tp: str = "", rag_advice: str = "",
 ):
     """Smart order execution: MARKET entry + OCO exit with risk management."""
     client = binance_module.get_client()
-    entry_price = float(price) if price else 0
+    try:
+        entry_price = float(price) if price else 0.0
+    except (ValueError, TypeError):
+        entry_price = 0.0
+
+    try:
+        sl_price = float(sl) if sl else None
+    except (ValueError, TypeError):
+        sl_price = None
+
+    try:
+        tp_price = float(tp) if tp else None
+    except (ValueError, TypeError):
+        tp_price = None
 
     try:
         # Execute smart order (MARKET + OCO)
@@ -489,6 +625,8 @@ async def execute_trade_and_notify(
             side=action.upper(),
             entry_price=entry_price,
             quote_qty=quote_qty if quote_qty else None,
+            sl_price=sl_price,
+            tp_price=tp_price,
         )
         # Await the coroutine
         result = await result
@@ -747,6 +885,7 @@ async def trigger_scan_endpoint(
                 "trend_template_stage": r.trend_template.stage,
                 "trend_template_criteria": r.trend_template.criteria,
                 "vcp_detected": r.vcp.detected,
+                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
                 "volume_ratio": round(r.vcp.volume_ratio, 2),
                 "range_ratio": round(r.vcp.range_ratio, 2),
                 "pivot_level": r.vcp.pivot_level,

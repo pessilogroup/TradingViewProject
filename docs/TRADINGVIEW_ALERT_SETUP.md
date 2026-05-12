@@ -69,6 +69,7 @@ Ví dụ Payload chuẩn:
   "symbol": "BTCUSDT",
   "price": "{{close}}",
   "quoteQty": 50,
+  "interval": "{{interval}}",
   "time": "{{timenow}}"
 }
 ```
