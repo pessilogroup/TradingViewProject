@@ -1,6 +1,6 @@
 # AQH Verification Report
 
-- **Time**: Wed, 13 May 2026 22:33:16 +07
+- **Time**: Thu, 14 May 2026 06:00:48 +07
 ## KG CONTEXT: LEAF
 - **Blast Radius**: 0 dependents, 0 callers
 
@@ -14,8 +14,15 @@
 
 ### 🟢 Internal Integration Gate: PASSED
 
-### 🟢 Compliance Gate: PASSED
+### 🔴 External QA Gate: FAILED
+```
+external QA did not yield GO verdict: [QA Bridge] [23:04:01] Starting STAGED Strict QA Pipeline (No-Fallback Protocol)...
+[QA Bridge] [23:04:01] Exporting session...
+[QA Bridge] [23:04:01] Export error: No Codex session found for cwd: C:\Users\pesil\EAIS\.agents\tools
+{
+  "status": "error",
+  "error": "Session export failed"
+}
 
-### 🟢 Infrastructure Gate: PASSED
+```
 
-## 🏆 FINAL VERDICT: PASSED (Certified for Merge)
