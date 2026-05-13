@@ -605,8 +605,16 @@ async def cmd_brief_inline(message):
 
 # ── Bot Lifecycle ─────────────────────────────────────────────────────────
 
+_bot_thread_lock = threading.Lock()
+
+
 def start_bot():
-    """Start Telegram bot in a background thread (polling mode)."""
+    """Start Telegram bot in a background thread (polling mode).
+
+    SCAR-TG-001: singleton guard — if bot thread is already alive, skip.
+    Multiple calls (e.g. on hot-reload) must NOT spawn duplicate pollers.
+    409 Conflict from Telegram = two getUpdates sessions running simultaneously.
+    """
     global _bot_app, _bot_thread
 
     import config
@@ -620,58 +628,83 @@ def start_bot():
         log.warning("python-telegram-bot not installed — run: pip install python-telegram-bot")
         return
 
-    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
+    with _bot_thread_lock:
+        # ── Singleton guard ────────────────────────────────────────────
+        if _bot_thread is not None and _bot_thread.is_alive():
+            log.info("🤖 Telegram Bot already running — skipping duplicate start (SCAR-TG-001)")
+            return
 
-    def _run_bot():
-        """Bot runner in separate thread with its own event loop."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler
 
-        # Build bot — force IPv4 to fix async httpx ConnectError on Windows
-        # httpx AsyncClient tries IPv6 first, which may not be routed on some networks.
-        # Fix: inject local_address="0.0.0.0" transport into HTTPXRequest._client_kwargs
-        from telegram.request import HTTPXRequest
-        import httpx as _httpx
+        def _run_bot():
+            """Bot runner in separate thread with its own event loop."""
+            global _bot_app
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        _proxy = config.TELEGRAM_PROXY_URL or None
-        request = HTTPXRequest(proxy=_proxy)
-        # Inject IPv4-only transport (overrides default which allows IPv6)
-        request._client_kwargs["transport"] = _httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0",
-        )
-        # Rebuild internal client with patched kwargs
-        request._client = request._build_client()
+            # Build bot — force IPv4 to fix async httpx ConnectError on Windows
+            from telegram.request import HTTPXRequest
+            import httpx as _httpx
 
-        app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).request(request).build()
-        log.info("🤖 Telegram Bot using IPv4-forced async transport (fix for Windows)")
+            _proxy = config.TELEGRAM_PROXY_URL or None
+            request = HTTPXRequest(proxy=_proxy)
+            # Inject IPv4-only transport (overrides default which allows IPv6)
+            request._client_kwargs["transport"] = _httpx.AsyncHTTPTransport(
+                local_address="0.0.0.0",
+            )
+            request._client = request._build_client()
 
+            app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).request(request).build()
+            log.info("🤖 Telegram Bot using IPv4-forced async transport (fix for Windows)")
 
-        # Register command handlers
-        app.add_handler(CommandHandler("start", cmd_start))
-        app.add_handler(CommandHandler("help", cmd_help))
-        app.add_handler(CommandHandler("status", cmd_status))
-        app.add_handler(CommandHandler("watchlist", cmd_watchlist))
-        app.add_handler(CommandHandler("add", cmd_add))
-        app.add_handler(CommandHandler("remove", cmd_remove))
-        app.add_handler(CommandHandler("scan", cmd_scan))
-        app.add_handler(CommandHandler("brief", cmd_brief))
-        app.add_handler(CommandHandler("vision", cmd_vision))
-        app.add_handler(CommandHandler("grade", cmd_grade))
-        app.add_handler(CommandHandler("balance", cmd_balance))
-        app.add_handler(CallbackQueryHandler(button_callback))
+            # ── Conflict error handler (suppress 409 log spam) ────────
+            async def _on_error(update, context):
+                from telegram.error import Conflict, NetworkError
+                err = context.error
+                if isinstance(err, Conflict):
+                    log.warning("🤖 TG Conflict (409) — another instance terminated. Resuming...")
+                elif isinstance(err, NetworkError):
+                    log.warning(f"🤖 TG NetworkError: {err}")
+                else:
+                    log.error(f"🤖 TG Unhandled error: {err}", exc_info=err)
 
-        log.info("🤖 Telegram Bot started (polling mode)")
-        app.run_polling(drop_pending_updates=True)
+            app.add_error_handler(_on_error)
 
-    _bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
-    _bot_thread.start()
-    log.info("🤖 Telegram Bot thread launched")
+            # Register command handlers
+            app.add_handler(CommandHandler("start",     cmd_start))
+            app.add_handler(CommandHandler("help",      cmd_help))
+            app.add_handler(CommandHandler("status",    cmd_status))
+            app.add_handler(CommandHandler("watchlist", cmd_watchlist))
+            app.add_handler(CommandHandler("add",       cmd_add))
+            app.add_handler(CommandHandler("remove",    cmd_remove))
+            app.add_handler(CommandHandler("scan",      cmd_scan))
+            app.add_handler(CommandHandler("brief",     cmd_brief))
+            app.add_handler(CommandHandler("vision",    cmd_vision))
+            app.add_handler(CommandHandler("grade",     cmd_grade))
+            app.add_handler(CommandHandler("balance",   cmd_balance))
+            app.add_handler(CallbackQueryHandler(button_callback))
+
+            _bot_app = app
+            log.info("🤖 Telegram Bot started (polling mode)")
+            app.run_polling(drop_pending_updates=True, close_loop=False)
+
+        _bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
+        _bot_thread.start()
+        log.info("🤖 Telegram Bot thread launched")
 
 
 def stop_bot():
     """Stop Telegram bot gracefully."""
-    global _bot_app
-    if _bot_app:
+    global _bot_app, _bot_thread
+    if _bot_app is not None:
         log.info("🤖 Telegram Bot stopping...")
-        # Bot thread is daemon — will terminate with main process
-    _bot_app = None
+        try:
+            # stop_running() signals run_polling() to exit
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_bot_app.updater.stop())
+            loop.run_until_complete(_bot_app.stop())
+            loop.close()
+        except Exception as e:
+            log.warning(f"🤖 Bot stop error (non-fatal): {e}")
+        _bot_app = None
+    _bot_thread = None
