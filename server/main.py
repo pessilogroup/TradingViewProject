@@ -849,7 +849,7 @@ async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol 
         raise HTTPException(status_code=503, detail="TradingView CDP not connected — launch_tv_msix_cdp.ps1 phải đang chạy")
 
     screenshot_path = await mcp.capture_screenshot(symbol=sym)
-    if not screenshot_path or not Path(screenshot_path).exists():
+    if not screenshot_path or not screenshot_path.exists():
         raise HTTPException(status_code=500, detail="Screenshot capture failed — CDP may be busy")
 
     # ── Step 2: AI Vision Analysis ───────────────────────────────
@@ -880,31 +880,35 @@ async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol 
         symbols_scanned=1,
         brief_text=brief_text,
         ai_analysis=vision_result.get("analysis", vision_result.get("ai_analysis", "")),
-        screenshot=screenshot_path,
+        screenshot=str(screenshot_path),
         vision_data=vision_data_json,
     )
 
     # ── Step 4: Telegram notification ───────────────────────────
+    import asyncio as _asyncio
     try:
         caption = (
-            f"👁 **Stealth Capture** — `{sym}`\n"
-            f"Verdict: `{vision_result.get('verdict', '—')}`\n"
-            f"Confidence: `{vision_result.get('confidence', 0)}/10`"
+            f"\U0001f441 Stealth Capture -- {sym}\n"
+            f"Verdict: {vision_result.get('verdict', '--')}\n"
+            f"Confidence: {vision_result.get('confidence', 0)}/10"
         )
-        await notifier.send_photo(screenshot_path, caption=caption)
-    except Exception:
-        pass  # Telegram optional
+        await _asyncio.to_thread(
+            notifier.send_telegram_photo,
+            screenshot_path, caption
+        )
+    except Exception as _tg_err:
+        log.warning(f"Telegram photo send failed: {_tg_err}")  # non-fatal
 
     return {
         "status": "ok",
         "brief_id": brief_id,
         "symbol": sym,
-        "verdict": vision_result.get("verdict", "—"),
+        "verdict": vision_result.get("verdict", "--"),
         "confidence": vision_result.get("confidence", 0),
         "patterns": vision_result.get("patterns", []),
         "ai_analysis": vision_result.get("analysis", vision_result.get("ai_analysis", "")),
         "screenshot_url": f"/api/vision/screenshot/{brief_id}" if brief_id else None,
-        "has_screenshot": bool(screenshot_path),
+        "has_screenshot": screenshot_path.exists() if screenshot_path else False,
     }
 
 
