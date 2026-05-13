@@ -137,9 +137,10 @@ async def ip_whitelist_middleware(request: Request, call_next):
 async def dashboard_auth_middleware(request: Request, call_next):
     """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
     path = request.url.path
-    # Skip auth for: webhook, health check, static files, dashboard HTML, root
+    # Skip auth for: webhook, health check, static files, dashboard HTML, root, screenshot images
     skip_paths = ("/webhook", "/tv_health_check", "/health", "/static", "/dashboard", "/")
-    if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static"):
+    if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static") \
+            or path.startswith("/api/vision/screenshot/"):
         return await call_next(request)
 
     if path.startswith("/api/") or path.startswith("/trades"):
