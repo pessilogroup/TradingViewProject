@@ -31,6 +31,21 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
     log.warning("anthropic not installed. Run: pip install anthropic")
 
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    log.warning("google-generativeai not installed. Run: pip install google-generativeai")
+
+try:
+    import vertexai
+    from vertexai.generative_models import GenerativeModel as VertexGenerativeModel
+    VERTEXAI_AVAILABLE = True
+except ImportError:
+    VERTEXAI_AVAILABLE = False
+    log.warning("vertexai not installed. Run: pip install google-cloud-aiplatform")
+
 import config
 
 # ── Globals ────────────────────────────────────────────────────────────────
@@ -201,8 +216,16 @@ async def generate_trading_advice(
     Returns:
         Chuỗi phân tích từ Claude, hoặc thông báo lỗi.
     """
-    if not ANTHROPIC_AVAILABLE or not config.ANTHROPIC_API_KEY:
-        return "⚠️ RAG Analysis không khả dụng (thiếu ANTHROPIC_API_KEY)."
+    provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
+
+    if provider == "gemini":
+        has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
+        has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
+        if not (has_vertex or has_genai):
+            return "⚠️ RAG Analysis không khả dụng (thiếu GEMINI_API_KEY hoặc GCP_PROJECT_ID)."
+    else:
+        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
+            return "⚠️ RAG Analysis không khả dụng (thiếu ANTHROPIC_API_KEY)."
 
     if not rag_chunks:
         return "⚠️ Không tìm thấy kiến thức phù hợp trong Knowledge Base."
@@ -253,19 +276,47 @@ Dựa trên tín hiệu trên và quy tắc của Minervini trong Knowledge Base
 Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ đọc trên Telegram."""
 
     try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        advice = message.content[0].text
-        log.info(f"RAG: Claude generated advice for {symbol} ({action})")
-        return advice
+        if provider == "gemini":
+            model_name = "gemini-2.5-flash"
+            
+            _use_vertex = False
+            if has_vertex:
+                try:
+                    import google.auth
+                    google.auth.default()
+                    _use_vertex = True
+                except Exception:
+                    log.warning("Vertex AI ADC not found — falling back to GEMINI_API_KEY")
+
+            if _use_vertex:
+                vertexai.init(project=config.GCP_PROJECT_ID, location=getattr(config, "GCP_LOCATION", "us-central1"))
+                g_model = VertexGenerativeModel(model_name)
+                response = g_model.generate_content(prompt)
+                advice = response.text
+            elif has_genai:
+                genai.configure(api_key=config.GEMINI_API_KEY)
+                g_model = genai.GenerativeModel(model_name)
+                response = g_model.generate_content(prompt)
+                advice = response.text
+            else:
+                return "⚠️ RAG Analysis không khả dụng (thiếu Gemini auth)."
+            
+            log.info(f"RAG: Gemini generated advice for {symbol} ({action})")
+            return advice
+        else:
+            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+            message = client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            advice = message.content[0].text
+            log.info(f"RAG: Claude generated advice for {symbol} ({action})")
+            return advice
 
     except Exception as e:
-        log.error(f"RAG Claude API error: {e}")
-        return f"⚠️ Lỗi kết nối Claude API: {str(e)[:100]}"
+        log.error(f"RAG API error: {e}")
+        return f"⚠️ Lỗi kết nối AI API: {str(e)[:100]}"
 
 
 def build_rag_query(symbol: str, action: str, payload: dict) -> str:

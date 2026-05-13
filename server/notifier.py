@@ -10,10 +10,12 @@ async def send_telegram_alert(message: str):
         return
 
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    import socket
+    conn = aiohttp.TCPConnector(family=socket.AF_INET)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=conn) as session:
             for chat_id in config.TELEGRAM_CHAT_IDS:
-                payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+                payload = {"chat_id": chat_id, "text": message}
                 try:
                     async with session.post(url, json=payload) as response:
                         if response.status != 200:
@@ -32,8 +34,10 @@ async def send_discord_alert(message: str):
         "content": message
     }
     
+    import socket
+    conn = aiohttp.TCPConnector(family=socket.AF_INET)
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=conn) as session:
             async with session.post(config.DISCORD_WEBHOOK_URL, json=payload) as response:
                 if response.status not in (200, 204):
                     log.error(f"Discord API Error: {await response.text()}")

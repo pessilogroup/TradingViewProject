@@ -1,150 +1,383 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minervini SEPA — Trading Dashboard v2</title>
-    <meta name="description" content="Premium trading dashboard for Minervini SEPA strategy — Morning Briefs, Scanner, Watchlist & System Status">
-    <link rel="stylesheet" href="/static/css/dashboard.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minervini SEPA — Edge Node Dashboard</title>
+  <meta name="description" content="TradingView Webhook Edge Node — Pine V1/V2 Indicators, Quick Trade, Vision Capture">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
-    <!-- LOGIN OVERLAY -->
-    <div id="loginOverlay" class="login-overlay" style="display:none">
-        <div class="login-box">
-            <h2>🔐 Dashboard Access</h2>
-            <p>Enter your access token to continue</p>
-            <input type="password" id="loginToken" placeholder="Access Token" autocomplete="off">
-            <button id="loginBtn" onclick="handleLogin()">Authenticate</button>
-            <div id="loginError" class="login-error">Invalid token. Please try again.</div>
+
+<!-- LOGIN OVERLAY -->
+<div id="loginOverlay" class="login-overlay" style="display:none">
+  <div class="login-box">
+    <div class="login-logo">⚡</div>
+    <h2>Edge Node Access</h2>
+    <p>Minervini SEPA — TradingView Bridge</p>
+    <input type="password" id="loginToken" placeholder="Access Token" autocomplete="off">
+    <button id="loginBtn" onclick="handleLogin()">Authenticate</button>
+    <div id="loginError" class="login-error">Invalid token. Please try again.</div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toastContainer" class="toast-container"></div>
+
+<!-- QUICK ORDER MODAL -->
+<div id="orderModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">⚡ Đặt Lệnh Nhanh</span>
+      <button class="modal-close" onclick="closeOrderModal()">✕</button>
+    </div>
+    <div class="order-form">
+      <div class="form-row">
+        <label>Symbol</label>
+        <input id="orderSymbol" type="text" placeholder="BTCUSDT" class="form-input" style="text-transform:uppercase">
+      </div>
+      <div class="form-row">
+        <label>Side</label>
+        <div class="side-toggle">
+          <button id="btnBuy" class="side-btn active buy" onclick="setSide('BUY')">BUY</button>
+          <button id="btnSell" class="side-btn sell" onclick="setSide('SELL')">SELL</button>
         </div>
+      </div>
+      <div class="form-row">
+        <label>Giá (USDT)</label>
+        <input id="orderPrice" type="number" placeholder="80000" class="form-input">
+      </div>
+      <div class="form-row">
+        <label>Số lượng</label>
+        <input id="orderQty" type="number" placeholder="0.001" step="0.001" class="form-input">
+      </div>
+      <div class="form-row">
+        <label>Stop Loss</label>
+        <input id="orderSL" type="number" placeholder="78000" class="form-input sl-input">
+      </div>
+      <div class="form-row">
+        <label>Take Profit</label>
+        <input id="orderTP" type="number" placeholder="85000" class="form-input tp-input">
+      </div>
+      <div id="rrDisplay" class="rr-display">R:R — / —</div>
+      <button class="btn-submit-order" onclick="submitOrder()">
+        <span id="orderBtnText">⚡ Xác nhận lệnh</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ANALYSIS MODAL -->
+<div id="analysisModal" class="modal-overlay" style="display:none">
+  <div class="modal-box modal-wide">
+    <div class="modal-header">
+      <span class="modal-title">🧠 AI Vision Analysis</span>
+      <button class="modal-close" onclick="document.getElementById('analysisModal').style.display='none'">✕</button>
+    </div>
+    <div id="analysisContent" class="analysis-content">
+      <div class="analysis-loading">
+        <div class="spinner"></div>
+        <p>Đang phân tích chart...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo-mark">⚡</div>
+    <div class="header-title">
+      <h1>Minervini SEPA</h1>
+      <span class="header-sub">TradingView Edge Node v7.6</span>
+    </div>
+  </div>
+  <div class="header-center">
+    <div class="cdp-badge" id="cdpBadge">
+      <span class="cdp-dot"></span>
+      <span id="cdpLabel">CDP: Connecting...</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="clockDisplay" class="clock"></span>
+    <div id="serverDot" class="status-dot online" title="Server Online"></div>
+  </div>
+</header>
+
+<!-- QUICK ACTION BAR -->
+<div class="quick-bar">
+  <button class="qbtn qbtn-trade" id="btnQuickOrder" onclick="openOrderModal()">
+    <span class="qbtn-icon">⚡</span> Đặt Lệnh
+  </button>
+  <button class="qbtn qbtn-vision" id="btnVision" onclick="triggerVisionCapture()">
+    <span class="qbtn-icon">👁</span> Capture Chart
+  </button>
+  <button class="qbtn qbtn-brief" onclick="triggerBrief()">
+    <span class="qbtn-icon">🌅</span> Morning Brief
+  </button>
+  <button class="qbtn qbtn-scan" onclick="triggerScan()">
+    <span class="qbtn-icon">🔍</span> Run Scan
+  </button>
+  <div class="quick-symbol">
+    <span class="symbol-live" id="liveSymbol">BTCUSDT</span>
+    <span class="symbol-price" id="livePrice">—</span>
+    <span class="symbol-change" id="liveChange">—</span>
+  </div>
+</div>
+
+<!-- TAB NAV -->
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">🏠 Overview</button>
+  <button class="tab-btn" data-tab="indicators" onclick="switchTab('indicators')">📊 Chỉ Báo</button>
+  <button class="tab-btn" data-tab="notifications" onclick="switchTab('notifications')">
+    🔔 Thông Báo <span id="notifBadge" class="tab-badge">0</span>
+  </button>
+  <button class="tab-btn" data-tab="analysis" onclick="switchTab('analysis')">🧠 Phân Tích</button>
+  <button class="tab-btn" data-tab="scanner" onclick="switchTab('scanner')">📋 Scanner</button>
+  <button class="tab-btn" data-tab="status" onclick="switchTab('status')">⚡ System</button>
+</nav>
+
+<main class="container">
+
+  <!-- ═══ TAB: OVERVIEW ═══ -->
+  <div id="tab-overview" class="tab-panel active">
+    <div id="kpiGrid" class="kpi-grid"></div>
+
+    <section class="glass-section">
+      <div class="section-title">📈 Equity Curve</div>
+      <div class="chart-container"><canvas id="equityChart"></canvas></div>
+    </section>
+
+    <section class="glass-section">
+      <div class="section-header">
+        <div class="section-title">📋 Trade History</div>
+        <span id="tradeCount" class="muted-label"></span>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
+              <th>Score</th><th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tradesBody"><tr><td colspan="9"><div class="loading"><div class="spinner"></div></div></td></tr></tbody>
+        </table>
+      </div>
+      <div id="pagination" class="pagination"></div>
+    </section>
+  </div>
+
+  <!-- ═══ TAB: INDICATORS (Pine V1/V2) ═══ -->
+  <div id="tab-indicators" class="tab-panel">
+    <div class="ind-header">
+      <div class="ind-version-pills">
+        <button class="vpill active" id="pill-v1" onclick="setIndVersion('v1')">Pine V1</button>
+        <button class="vpill" id="pill-v2" onclick="setIndVersion('v2')">Pine V2</button>
+      </div>
+      <select id="indSymbolSelect" class="form-input" style="width:160px" onchange="loadIndicators()">
+        <option value="BTCUSDT">BTCUSDT</option>
+      </select>
     </div>
 
-    <!-- TOAST CONTAINER -->
-    <div id="toastContainer" class="toast-container"></div>
-
-    <!-- HEADER -->
-    <header class="header">
-        <div class="header-left">
-            <h1>📈 <span>Minervini SEPA</span> — Dashboard</h1>
+    <!-- Trend Template Score Card -->
+    <div class="ind-grid">
+      <div class="ind-card score-card" id="cardTrendScore">
+        <div class="ind-card-title">🎯 Trend Template Score</div>
+        <div class="score-ring-wrap">
+          <svg class="score-ring" viewBox="0 0 120 120">
+            <circle class="ring-bg" cx="60" cy="60" r="50"/>
+            <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="50" stroke-dasharray="0 314"/>
+          </svg>
+          <div class="score-text">
+            <span id="scoreNum">—</span>
+            <small>/8</small>
+          </div>
         </div>
-        <div class="header-right">
-            <span id="clockDisplay"></span>
-            <div id="serverDot" class="status-dot" title="Server Online"></div>
+        <div class="score-label" id="scoreLabel">Loading...</div>
+      </div>
+
+      <div class="ind-card" id="cardMAs">
+        <div class="ind-card-title">📈 Moving Averages</div>
+        <div class="ma-list" id="maList">
+          <div class="loading"><div class="spinner"></div></div>
         </div>
-    </header>
+      </div>
 
-    <!-- TAB NAVIGATION -->
-    <nav class="tab-nav">
-        <button class="tab-btn active" data-tab="overview">🏠 Overview</button>
-        <button class="tab-btn" data-tab="scanner">📊 Scanner</button>
-        <button class="tab-btn" data-tab="watchlist">📋 Watchlist <span id="wlBadge" class="tab-badge">0</span></button>
-        <button class="tab-btn" data-tab="status">⚡ Status</button>
-    </nav>
-
-    <main class="container">
-        <!-- ═══ TAB 1: OVERVIEW ═══ -->
-        <div id="tab-overview" class="tab-panel active">
-            <div id="kpiGrid" class="kpi-grid">
-                <div class="loading"><div class="spinner"></div></div>
-            </div>
-
-            <section class="glass-section">
-                <div class="section-title">📈 Equity Curve</div>
-                <div class="chart-container"><canvas id="equityChart"></canvas></div>
-            </section>
-
-            <section class="glass-section">
-                <div class="section-header">
-                    <div class="section-title">🌅 Morning Briefs</div>
-                    <button class="btn" onclick="triggerBrief()">▶ Trigger Brief</button>
-                </div>
-                <div id="briefsList"></div>
-            </section>
-
-            <section class="glass-section">
-                <div class="section-header">
-                    <div class="section-title">📋 Trade History</div>
-                    <span id="tradeCount" style="color:var(--text-muted);font-size:0.78rem"></span>
-                </div>
-                <div style="overflow-x:auto">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
-                                <th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tradesBody">
-                            <tr><td colspan="8"><div class="loading"><div class="spinner"></div></div></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div id="pagination" class="pagination"></div>
-            </section>
+      <div class="ind-card" id="cardVCP">
+        <div class="ind-card-title">🔺 VCP Signal</div>
+        <div id="vcpContent">
+          <div class="loading"><div class="spinner"></div></div>
         </div>
+      </div>
 
-        <!-- ═══ TAB 2: SCANNER ═══ -->
-        <div id="tab-scanner" class="tab-panel">
-            <section class="glass-section">
-                <div class="section-header">
-                    <div class="section-title">📊 Watchlist Scan Results</div>
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <select id="scanFilter" class="wl-input" style="flex:none;width:140px;padding:8px 12px">
-                            <option value="">All Symbols</option>
-                        </select>
-                        <button id="scanBtn" class="btn btn-primary" onclick="triggerScan()">🔍 Run Scan</button>
-                    </div>
-                </div>
-                <div id="scanStatus" style="color:var(--text-muted);font-size:0.78rem;margin-bottom:12px"></div>
-                <div style="overflow-x:auto">
-                    <table id="scanTable">
-                        <thead>
-                            <tr>
-                                <th data-sort="symbol">Symbol</th>
-                                <th data-sort="price">Price</th>
-                                <th data-sort="change_pct">Change%</th>
-                                <th data-sort="trend_template_score">TT Score</th>
-                                <th>Stage</th>
-                                <th data-sort="vcp_detected">VCP</th>
-                                <th data-sort="volume_ratio">Vol Ratio</th>
-                                <th>Note</th>
-                            </tr>
-                        </thead>
-                        <tbody id="scanBody">
-                            <tr><td colspan="8" class="empty-state"><div class="icon">📊</div><h3>No Scan Data</h3><p>Click "Run Scan" to analyze your watchlist.</p></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+      <div class="ind-card" id="cardRS">
+        <div class="ind-card-title">💪 Relative Strength</div>
+        <div id="rsContent">
+          <div class="loading"><div class="spinner"></div></div>
         </div>
+      </div>
+    </div>
 
-        <!-- ═══ TAB 3: WATCHLIST ═══ -->
-        <div id="tab-watchlist" class="tab-panel">
-            <section class="glass-section">
-                <div class="section-title">📋 Manage Watchlist</div>
-                <div class="wl-controls">
-                    <input type="text" id="wlInput" class="wl-input" placeholder="Enter symbol (e.g. BTCUSDT)" maxlength="20">
-                    <button class="btn btn-primary" onclick="addSymbol()">+ Add Symbol</button>
-                    <button class="btn" onclick="syncWatchlist()">🔄 Sync from TradingView</button>
-                </div>
-                <div id="wlGrid" class="wl-grid">
-                    <div class="loading"><div class="spinner"></div></div>
-                </div>
-            </section>
+    <!-- Trend Template Criteria Detail -->
+    <section class="glass-section">
+      <div class="section-title">📋 8 Tiêu Chuẩn Trend Template</div>
+      <div id="condGrid" class="cond-grid">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </section>
+
+    <!-- Pine Scripts List -->
+    <section class="glass-section">
+      <div class="section-title">🌲 Pine Scripts</div>
+      <div class="pine-list" id="pineList">
+        <div id="pine-v1-group" class="pine-group">
+          <div class="pine-group-label">V1 — Minervini Trend Template</div>
+          <div class="pine-scripts-row">
+            <div class="pine-chip active">indicator_MTT_v1.001</div>
+            <div class="pine-chip">indicator_MTT_v1.005</div>
+            <div class="pine-chip">strategy_MTT_v1.002</div>
+            <div class="pine-chip">strategy_MTT_v1.003</div>
+            <div class="pine-chip">strategy_multi_indicator_v15</div>
+            <div class="pine-chip">strategy_multi_indicator_v16</div>
+          </div>
         </div>
-
-        <!-- ═══ TAB 4: STATUS ═══ -->
-        <div id="tab-status" class="tab-panel">
-            <section class="glass-section">
-                <div class="section-title">⚡ System Status</div>
-                <div id="statusGrid" class="status-grid">
-                    <div class="loading"><div class="spinner"></div></div>
-                </div>
-            </section>
+        <div id="pine-v2-group" class="pine-group" style="display:none">
+          <div class="pine-group-label">V2 — Minervini Strategy V2</div>
+          <div class="pine-scripts-row">
+            <div class="pine-chip active">minervini_strategy</div>
+          </div>
         </div>
-    </main>
+      </div>
+    </section>
+  </div>
 
-    <script src="/static/js/dashboard.js"></script>
+  <!-- ═══ TAB: NOTIFICATIONS ═══ -->
+  <div id="tab-notifications" class="tab-panel">
+    <div class="notif-toolbar">
+      <select id="notifFilter" class="form-input" style="width:160px" onchange="filterNotifs()">
+        <option value="all">Tất cả</option>
+        <option value="WEBHOOK">Webhook Alert</option>
+        <option value="TRADE">Lệnh khớp</option>
+        <option value="VISION">Vision Capture</option>
+        <option value="BRIEF">Morning Brief</option>
+      </select>
+      <button class="qbtn qbtn-scan" style="padding:8px 16px" onclick="loadNotifications()">🔄 Refresh</button>
+      <button class="qbtn" style="padding:8px 16px;background:rgba(255,60,60,0.15);color:#ff6060" onclick="clearNotifs()">🗑 Clear All</button>
+    </div>
+    <div id="notifList" class="notif-list">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB: ANALYSIS (AI Vision) ═══ -->
+  <div id="tab-analysis" class="tab-panel">
+    <div class="analysis-toolbar">
+      <select id="analysisSymbol" class="form-input" style="width:180px">
+        <option value="BTCUSDT">BTCUSDT</option>
+      </select>
+      <button class="qbtn qbtn-vision" onclick="triggerVisionCapture()">👁 Stealth Capture + Analyze</button>
+      <button class="qbtn qbtn-brief" onclick="loadLatestBrief()">📄 Latest Brief</button>
+    </div>
+
+    <div class="analysis-grid">
+      <!-- Latest AI Analysis -->
+      <section class="glass-section analysis-main">
+        <div class="section-header">
+          <div class="section-title">🧠 AI Behavioral Analysis</div>
+          <span id="analysisTime" class="muted-label"></span>
+        </div>
+        <div id="analysisResult" class="analysis-result">
+          <div class="empty-state">
+            <div class="icon">🧠</div>
+            <h3>Chưa có phân tích</h3>
+            <p>Nhấn "Stealth Capture + Analyze" để chụp chart TradingView và gửi cho AI phân tích.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Brief / Docs sidebar -->
+      <section class="glass-section analysis-side">
+        <div class="section-title">📄 Morning Brief</div>
+        <div id="briefContent" class="brief-content">
+          <div class="empty-state">
+            <div class="icon">🌅</div>
+            <h3>Chưa có brief</h3>
+            <p>Click "Morning Brief" để tạo.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- RAG Query -->
+    <section class="glass-section">
+      <div class="section-header">
+        <div class="section-title">📚 Knowledge Base (RAG Query)</div>
+      </div>
+      <div class="rag-search">
+        <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về Minervini SEPA... (vd: Quy tắc VCP breakout là gì?)" style="flex:1">
+        <button class="qbtn qbtn-scan" onclick="submitRagQuery()">🔍 Query</button>
+      </div>
+      <div id="ragResults" class="rag-results"></div>
+    </section>
+  </div>
+
+  <!-- ═══ TAB: SCANNER ═══ -->
+  <div id="tab-scanner" class="tab-panel">
+    <section class="glass-section">
+      <div class="section-header">
+        <div class="section-title">📊 Watchlist Scan</div>
+        <button id="scanBtn" class="qbtn qbtn-scan" onclick="triggerScan()">🔍 Run Scan</button>
+      </div>
+      <div id="scanStatus" class="muted-label" style="margin-bottom:12px"></div>
+      <div style="overflow-x:auto">
+        <table id="scanTable">
+          <thead>
+            <tr>
+              <th>Symbol</th><th>Price</th><th>Change%</th>
+              <th>TT Score</th><th>Stage</th><th>VCP</th><th>Vol Ratio</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="scanBody">
+            <tr><td colspan="8"><div class="empty-state"><div class="icon">📊</div><h3>No data</h3><p>Click "Run Scan"</p></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ═══ TAB: SYSTEM ═══ -->
+  <div id="tab-status" class="tab-panel">
+    <div id="statusGrid" class="status-grid">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+
+    <!-- CDP Vision Status -->
+    <section class="glass-section" style="margin-top:20px">
+      <div class="section-title">👁 Vision Capture Status</div>
+      <div id="visionStatus" class="vision-status-grid">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </section>
+
+    <!-- Webhook Log -->
+    <section class="glass-section" style="margin-top:20px">
+      <div class="section-header">
+        <div class="section-title">📡 Webhook Log (Live)</div>
+        <button class="qbtn" style="padding:6px 14px;font-size:0.8rem" onclick="loadWebhookLog()">🔄 Refresh</button>
+      </div>
+      <div id="webhookLog" class="webhook-log">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </section>
+  </div>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="/static/js/dashboard-core.js"></script>
+<script src="/static/js/dashboard-features.js"></script>
 </body>
 </html>

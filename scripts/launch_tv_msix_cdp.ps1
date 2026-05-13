@@ -4,7 +4,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$pkgName = "31178TradingViewInc.TradingView"
+$pkgName = "TradingView.Desktop"
 $pkg = Get-AppxPackage -Name $pkgName -ErrorAction SilentlyContinue
 
 if (-not $pkg) {

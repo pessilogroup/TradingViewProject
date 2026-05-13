@@ -387,7 +387,15 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         or ""
     )
 
-    if secret != config.WEBHOOK_SECRET:
+    # Allow dashboard users (authenticated via DASHBOARD_TOKEN) to bypass webhook secret
+    dashboard_auth = request.headers.get("Authorization", "")
+    is_dashboard_user = (
+        config.DASHBOARD_TOKEN
+        and dashboard_auth.startswith("Bearer ")
+        and secrets.compare_digest(dashboard_auth[7:], config.DASHBOARD_TOKEN)
+    )
+
+    if not is_dashboard_user and secret != config.WEBHOOK_SECRET:
         log.warning("Unauthorized webhook attempt (secret mismatch)")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -585,7 +593,8 @@ async def process_alert_stealth_capture(
                 quote_qty=quote_qty,
                 sl=sl_val,
                 tp=tp_val,
-                rag_advice=rag_advice
+                rag_advice=rag_advice,
+                combined_score=result.get("combined_score"),
             )
         else:
             msg += f"\n\n🛑 Lệnh bị từ chối do điểm số ({confidence}/10) không đủ chuẩn SEPA."
@@ -600,6 +609,7 @@ async def process_alert_stealth_capture(
 async def execute_trade_and_notify(
     signal_id: int, action: str, symbol: str, price: str, quote_qty: float,
     sl: str = "", tp: str = "", rag_advice: str = "",
+    combined_score: str = None,
 ):
     """Smart order execution: MARKET entry + OCO exit with risk management."""
     client = binance_module.get_client()
@@ -653,6 +663,7 @@ async def execute_trade_and_notify(
                 requested_qty=quote_qty,
                 executed_qty=exec_qty,
                 executed_price=exec_price,
+                combined_score=combined_score,
             )
 
             # Update with OCO details
@@ -689,6 +700,7 @@ async def execute_trade_and_notify(
             requested_qty=float(quote_qty) if quote_qty else 0,
             error_message=error_msg,
             status="FAILED",
+            combined_score=combined_score,
         )
         await database.update_signal_status(signal_id, 2)
 

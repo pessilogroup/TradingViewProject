@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS trades (
     executed_price REAL,
     commission     REAL,
     error_message  TEXT,
-    pnl            REAL
+    pnl            REAL,
+    combined_score TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_symbol  ON signals(symbol);
@@ -81,6 +82,7 @@ async def init_db():
             "ALTER TABLE trades ADD COLUMN take_profit_price REAL",
             "ALTER TABLE trades ADD COLUMN oco_order_id TEXT",
             "ALTER TABLE trades ADD COLUMN order_type TEXT DEFAULT 'MARKET'",
+            "ALTER TABLE trades ADD COLUMN combined_score TEXT",
         ]:
             try:
                 await db.execute(col_def)
@@ -142,6 +144,7 @@ async def insert_trade(
     commission: Optional[float] = None,
     error_message: Optional[str] = None,
     pnl: Optional[float] = None,
+    combined_score: Optional[str] = None,
 ) -> int:
     """Luu ket qua giao dich Binance."""
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -149,11 +152,11 @@ async def insert_trade(
             """INSERT INTO trades
                (signal_id, symbol, side, order_id, status,
                 requested_qty, executed_qty, executed_price,
-                commission, error_message, pnl)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                commission, error_message, pnl, combined_score)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (signal_id, symbol, side, order_id, status,
              requested_qty, executed_qty, executed_price,
-             commission, error_message, pnl),
+             commission, error_message, pnl, combined_score),
         )
         await db.commit()
         trade_id = cursor.lastrowid

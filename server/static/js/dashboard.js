@@ -217,7 +217,7 @@ async function loadTrades() {
     const data = await apiFetch(`/trades?${params}`);
 
     if (!data || !data.trades?.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📋</div><h3>No Trades</h3></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div><h3>No Trades</h3></td></tr>';
         pag.innerHTML = '';
         return;
     }
@@ -233,6 +233,7 @@ async function loadTrades() {
             <td>${currentPage * PAGE_SIZE + i + 1}</td><td>${date}</td>
             <td style="color:var(--text-primary);font-weight:500">${t.symbol || '-'}</td>
             <td><span class="side-badge ${side}">${(t.side || '-').toUpperCase()}</span></td>
+            <td>${t.combined_score || '-'}</td>
             <td>${t.executed_qty || t.requested_qty || '-'}</td>
             <td>${t.executed_price ? '$' + Number(t.executed_price).toLocaleString() : '-'}</td>
             <td class="${pnlCls}">${pnlTxt}</td>

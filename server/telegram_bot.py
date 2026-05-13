@@ -455,7 +455,7 @@ async def cmd_grade(update, context):
             return
 
         formatted = format_vision_telegram(result)
-        await update.message.reply_text(formatted, parse_mode="Markdown")
+        await update.message.reply_text(formatted)
 
 
     except Exception as e:
