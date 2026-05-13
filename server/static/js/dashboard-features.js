@@ -341,6 +341,9 @@ async function loadLatestBriefText() {
   `;
 }
 
+// Cache for history items (avoids JSON injection in onclick)
+const _histCache = new Map();
+
 async function loadVisionHistory() {
   const container = document.getElementById('visionHistory');
   if (!container) return;
@@ -349,55 +352,73 @@ async function loadVisionHistory() {
   const filterVal = document.getElementById('captureFilter')?.value || 'all';
   const data = await apiFetch('/api/vision/history?limit=20');
   if (!data || !data.items || data.items.length === 0) {
-    container.innerHTML = '<div class="empty-state" style="padding:30px 16px"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Nhấn Capture + Analyze</p></div>';
+    container.innerHTML = '<div class="empty-state" style="padding:24px 16px"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Nhấn Capture + Analyze</p></div>';
     return;
   }
 
   let items = data.items;
   if (filterVal === 'stealth') items = items.filter(v => v.source === 'stealth');
-  else if (filterVal === 'brief') items = items.filter(v => v.source !== 'stealth');
+  else if (filterVal === 'brief')  items = items.filter(v => v.source !== 'stealth');
 
   if (items.length === 0) {
-    container.innerHTML = `<div class="empty-state" style="padding:30px 16px"><div class="icon">🔍</div><h3>Không có kết quả</h3><p>Filter: ${filterVal}</p></div>`;
+    container.innerHTML = `<div class="empty-state" style="padding:24px 16px"><div class="icon">🔍</div><h3>Không có kết quả</h3><p>${filterVal}</p></div>`;
     return;
   }
 
-  // Auto-load latest into canvas if canvas is empty
-  if (document.getElementById('csChartImg')?.style.display === 'none' && items[0]) {
+  // Store in cache keyed by id
+  _histCache.clear();
+  items.forEach(v => _histCache.set(String(v.id), v));
+
+  // Auto-load latest into canvas
+  if (!document.getElementById('csChartImg')?.src?.includes('/api/vision/') && items[0]) {
     _loadInCanvas(items[0]);
   }
 
-  container.innerHTML = items.map((v, idx) => {
-    const srcBadge = v.source === 'stealth'
-      ? '<span class="notif-tag tag-webhook" style="font-size:0.62rem;padding:1px 5px">S</span>'
-      : '<span class="notif-tag tag-brief" style="font-size:0.62rem;padding:1px 5px">B</span>';
+  container.innerHTML = items.map(v => {
+    const isS = v.source === 'stealth';
+    const srcBadge = isS
+      ? '<span class="hist-badge badge-s">STEALTH</span>'
+      : '<span class="hist-badge badge-b">BRIEF</span>';
     const conf = v.confidence || 0;
-    const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--accent2)' : 'var(--sell)';
-    const verdictColor = (v.verdict || '').includes('STRONG') ? 'var(--buy)'
-      : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
-    const thumbUrl = v.has_screenshot ? `${v.screenshot_url}?t=${Date.now()}` : null;
+    const confColor = conf >= 7 ? '#00c454' : conf >= 5 ? '#00d4aa' : '#ff5c5c';
+    const verdictColor = (v.verdict || '').includes('STRONG') ? '#00c454'
+      : (v.verdict || '').includes('AVOID') ? '#ff5c5c' : '#f59e0b';
+    const shortVerdict = (v.verdict || 'N/A').replace(/_/g,' ').substring(0, 22);
+    const timeStr = (v.created_at || '').slice(5, 16);
+    const sym = v.symbol || '—';
+    const thumbUrl = v.has_screenshot && v.screenshot_url ? v.screenshot_url : null;
 
-    return `<div class="cs-hist-card" onclick="_loadInCanvas(${JSON.stringify(v).replace(/"/g, '&quot;')})">
-      <div class="cs-hist-thumb">
-        ${thumbUrl
-          ? `<img src="${thumbUrl}" alt="${v.symbol}" onerror="this.parentElement.innerHTML='📷'">`
-          : '📷'}
-      </div>
+    return `<div class="cs-hist-card" data-id="${v.id}">
+      <div class="cs-hist-thumb">${
+        thumbUrl
+          ? `<img src="${thumbUrl}" alt="${sym}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <span class="cs-hist-no-img" style="display:none">📷</span>`
+          : '<span class="cs-hist-no-img">📷</span>'
+      }</div>
       <div class="cs-hist-body">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span class="cs-hist-sym">${v.symbol || '—'}</span>
+        <div class="cs-hist-row1">
+          <span class="cs-hist-sym">${sym}</span>
           ${srcBadge}
         </div>
-        <div class="cs-hist-meta">
-          <span class="cs-hist-verdict" style="color:${verdictColor}">${(v.verdict||'—').substring(0,28)}</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span class="cs-hist-conf" style="color:${confColor}">👁 ${conf}/10</span>
-          <span class="cs-hist-time">${(v.created_at||'').slice(5,16)}</span>
+        <div class="cs-hist-verdict" style="color:${verdictColor}">${shortVerdict}</div>
+        <div class="cs-hist-row3">
+          <span style="color:${confColor};font-size:0.72rem;font-family:monospace">👁 ${conf}/10</span>
+          <span class="cs-hist-time">${timeStr}</span>
         </div>
       </div>
     </div>`;
   }).join('');
+
+  // Bind click via event delegation (safe — no inline JSON)
+  container.querySelectorAll('.cs-hist-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.id;
+      const item = _histCache.get(id);
+      if (item) _loadInCanvas(item);
+      container.querySelectorAll('.cs-hist-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+    });
+  });
 }
 
 function _loadInCanvas(v) {

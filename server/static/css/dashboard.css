@@ -928,29 +928,75 @@ tr:hover td { background: var(--glass); }
 
 /* ── History List (compact) ── */
 .cs-history-section { height: 100%; }
-.cs-history-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow-y: auto; }
-.cs-hist-card {
-  background: var(--bg3); border: 1px solid var(--border);
-  border-radius: 10px; overflow: hidden; cursor: pointer;
-  transition: border-color 0.2s, transform 0.15s;
-  display: flex; gap: 0;
+.cs-history-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 500px; overflow-y: auto;
+  padding-right: 2px;
 }
-.cs-hist-card:hover { border-color: rgba(0,212,170,0.4); transform: translateX(2px); }
+.cs-hist-card {
+  display: flex; flex-direction: row;
+  min-height: 72px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden;
+  cursor: pointer; user-select: none;
+  transition: border-color 0.18s, background 0.18s;
+}
+.cs-hist-card:hover { border-color: rgba(0,212,170,0.5); background: rgba(0,212,170,0.05); }
+.cs-hist-card.active { border-color: var(--accent2); background: rgba(0,212,170,0.08); }
+
+/* Thumbnail column */
 .cs-hist-thumb {
-  width: 80px; flex-shrink: 0;
-  background: #000; border-right: 1px solid var(--border);
+  width: 82px; flex-shrink: 0;
+  background: #0a0a0a;
+  border-right: 1px solid var(--border);
   display: flex; align-items: center; justify-content: center;
-  font-size: 1.5rem; opacity: 0.4;
+  overflow: hidden;
 }
 .cs-hist-thumb img {
-  width: 80px; height: 60px; object-fit: cover; display: block;
+  width: 82px; height: 72px;
+  object-fit: cover; display: block;
 }
-.cs-hist-body { padding: 8px 10px; flex: 1; min-width: 0; }
-.cs-hist-sym { font-family: var(--mono); font-weight: 700; font-size: 0.85rem; }
-.cs-hist-meta { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin: 3px 0; }
-.cs-hist-verdict { font-size: 0.75rem; font-weight: 600; }
-.cs-hist-time { font-size: 0.68rem; color: var(--text-muted); }
-.cs-hist-conf { font-family: var(--mono); font-size: 0.72rem; }
+.cs-hist-no-img {
+  font-size: 1.6rem; opacity: 0.3;
+  display: flex; align-items: center; justify-content: center;
+  width: 82px; height: 72px;
+}
+
+/* Body column */
+.cs-hist-body {
+  flex: 1; min-width: 0;
+  padding: 8px 10px;
+  display: flex; flex-direction: column; justify-content: space-between;
+}
+.cs-hist-row1 {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 2px;
+}
+.cs-hist-sym {
+  font-family: var(--mono); font-weight: 700;
+  font-size: 0.85rem; color: #fff;
+}
+.cs-hist-verdict {
+  font-size: 0.74rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 2px;
+}
+.cs-hist-row3 {
+  display: flex; align-items: center; gap: 10px;
+}
+.cs-hist-time {
+  font-size: 0.68rem; color: var(--text-muted);
+}
+
+/* Badges */
+.hist-badge {
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 4px; flex-shrink: 0;
+  text-transform: uppercase;
+}
+.badge-s { background: rgba(139,92,246,0.25); color: #a78bfa; border: 1px solid rgba(139,92,246,0.4); }
+.badge-b { background: rgba(245,158,11,0.2);  color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); }
+
 
 /* Workspace responsive */
 @media (max-width: 1024px) {
