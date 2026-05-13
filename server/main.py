@@ -27,16 +27,27 @@ import vision as vision_module
 import binance_client as binance_module
 
 
-# Setup logging
+# ── Fix Windows cp1252 UnicodeEncodeError for emoji in log messages ──────────
+import sys, io
+if sys.stdout and hasattr(sys.stdout, 'buffer'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'buffer'):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# Setup logging — StreamHandler explicitly UTF-8 to avoid cp1252 crash on Windows
+_stream_handler = logging.StreamHandler(sys.stdout)
+_stream_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s"))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
     handlers=[
         logging.FileHandler(config.LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
+        _stream_handler,
     ],
 )
 log = logging.getLogger(__name__)
+
 
 STATIC_DIR = Path(__file__).parent / "static"
 
