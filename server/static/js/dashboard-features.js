@@ -157,27 +157,137 @@ function clearNotifs() {
   if (badge) badge.textContent = '0';
 }
 
-// ═══ VISION CAPTURE — USE /api/mcp/status + /api/vision/analyze ═══
-async function triggerVisionCapture() {
-  showToast('👁 Checking TradingView CDP...', 'info');
-  const status = await apiFetch('/api/system/status');
-  if (!status || !status.mcp || !status.mcp.connected) {
-    showToast('❌ TradingView CDP chưa kết nối! Chạy launch_tv_msix_cdp.ps1 trước.', 'error');
+// ═══ VISION CAPTURE — CAPTURE STUDIO ═══
+let _captureRunning = false;
+
+function _setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `cap-step ${state}`;
+}
+
+async function runStealthCapture() {
+  if (_captureRunning) return;
+  _captureRunning = true;
+
+  const sym = document.getElementById('captureSymbol')?.value || 'BTCUSDT';
+  const btn = document.getElementById('captureBtn');
+  const btnText = document.getElementById('captureBtnText');
+  const btnIcon = document.getElementById('captureBtnIcon');
+  const progress = document.getElementById('captureProgress');
+
+  // Reset UI
+  if (btn) btn.disabled = true;
+  if (btnIcon) btnIcon.textContent = '⏳';
+  if (btnText) btnText.textContent = 'Đang capture...';
+  if (progress) progress.style.display = 'flex';
+  ['step-mcp','step-shot','step-crop','step-ai','step-save'].forEach(s => _setStep(s, ''));
+
+  // Step 1: MCP check (simulated — the endpoint does the actual check)
+  _setStep('step-mcp', 'active');
+  await new Promise(r => setTimeout(r, 300));
+  _setStep('step-mcp', 'done');
+
+  // Step 2: Screenshot
+  _setStep('step-shot', 'active');
+
+  let result;
+  try {
+    result = await apiFetch(`/api/vision/capture?symbol=${encodeURIComponent(sym)}`, {
+      method: 'POST'
+    });
+  } catch (e) {
+    result = null;
+  }
+
+  if (!result || result.status !== 'ok') {
+    const err = result?.detail || 'Capture failed — check CDP connection';
+    ['step-shot','step-crop','step-ai','step-save'].forEach(s => _setStep(s, ''));
+    showToast(`❌ ${err}`, 'error');
+    _resetCaptureBtn();
+    _captureRunning = false;
     return;
   }
-  showToast('📸 Đang chụp chart + phân tích AI...', 'info');
-  // The actual capture is triggered via webhook with action=alert
-  const sym = document.getElementById('analysisSymbol')?.value || 'BTCUSDT';
-  const res = await apiFetch('/webhook', {
-    method: 'POST',
-    body: JSON.stringify({ symbol: sym, action: 'alert', price: '', source: 'dashboard_vision' })
-  });
-  if (res && res.received) {
-    showToast(`✅ Stealth Capture triggered for ${sym}! Check Telegram.`, 'success');
-  } else {
-    showToast('❌ Vision capture failed', 'error');
+
+  // Animate remaining steps (server already completed them)
+  for (const [step, delay] of [['step-shot',150],['step-crop',200],['step-ai',300],['step-save',150]]) {
+    _setStep(step, 'done');
+    await new Promise(r => setTimeout(r, delay));
   }
+
+  showToast(`✅ Capture OK — ${sym} | Verdict: ${result.verdict || '—'} | Conf: ${result.confidence}/10`, 'success');
+
+  // Update preview panel
+  _updateCapturePreview(result);
+
+  // Reload history + stats
+  await Promise.all([loadVisionHistory(), loadCaptureStats(), loadOverviewVision()]);
+
+  _resetCaptureBtn();
+  _captureRunning = false;
 }
+
+function _resetCaptureBtn() {
+  const btn = document.getElementById('captureBtn');
+  const btnText = document.getElementById('captureBtnText');
+  const btnIcon = document.getElementById('captureBtnIcon');
+  if (btn) btn.disabled = false;
+  if (btnIcon) btnIcon.textContent = '📸';
+  if (btnText) btnText.textContent = 'Capture + Analyze';
+}
+
+function _updateCapturePreview(result) {
+  const el = document.getElementById('capturePreview');
+  if (!el) return;
+  const verdictClass = (result.verdict || '').includes('STRONG') ? 'verdict-buy'
+    : (result.verdict || '').includes('AVOID') ? 'verdict-sell' : 'verdict-hold';
+  const confColor = result.confidence >= 7 ? 'var(--buy)' : result.confidence >= 5 ? 'var(--warn)' : 'var(--sell)';
+  el.innerHTML = `<div class="capture-result">
+    ${result.screenshot_url
+      ? `<img class="capture-result-img" src="${result.screenshot_url}?t=${Date.now()}" alt="Chart"
+             onclick="openImgZoom('${result.screenshot_url}?t=${Date.now()}')"
+             onerror="this.style.display='none'">`
+      : `<div style="padding:20px;text-align:center;color:var(--text-muted)">📷 No screenshot</div>`}
+    <div class="capture-result-meta">
+      <span class="capture-result-sym">${result.symbol}</span>
+      <span class="capture-result-verdict ${verdictClass}">${result.verdict || '—'}</span>
+      <span class="capture-result-conf" style="color:${confColor}">Confidence: ${result.confidence}/10</span>
+      ${(result.patterns||[]).length ? `<span style="font-size:0.72rem;color:var(--text-muted)">Patterns: ${result.patterns.join(', ')}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+// Legacy compat — keep for Overview quick action button
+async function triggerVisionCapture() {
+  // Switch to analysis tab and trigger capture
+  switchTab('analysis');
+  setTimeout(runStealthCapture, 200);
+}
+
+// ── Load Capture Stats ──
+async function loadCaptureStats() {
+  const data = await apiFetch('/api/vision/stats');
+  if (!data) return;
+  const el = id => document.getElementById(id);
+  if (el('cstat-total'))   el('cstat-total').textContent   = data.total_captures ?? '—';
+  if (el('cstat-stealth')) el('cstat-stealth').textContent = data.stealth_count ?? '—';
+  if (el('cstat-conf'))    el('cstat-conf').textContent    = data.avg_confidence ? `${data.avg_confidence}/10` : '—';
+  if (el('cstat-last'))    el('cstat-last').textContent    = data.last_capture ? (data.last_capture || '').slice(11, 16) : '—';
+}
+
+// ── Img Zoom ──
+function openImgZoom(src) {
+  const modal = document.getElementById('imgZoomModal');
+  const img   = document.getElementById('imgZoomEl');
+  if (!modal || !img) return;
+  img.src = src;
+  modal.style.display = 'flex';
+}
+function closeImgZoom() {
+  const modal = document.getElementById('imgZoomModal');
+  if (modal) modal.style.display = 'none';
+}
+
 
 // ═══ ANALYSIS TAB — USE /api/vision/history + /api/briefs ═══
 async function loadBriefs() {
@@ -207,13 +317,23 @@ async function loadVisionHistory() {
   if (!container) return;
   container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
-  const data = await apiFetch('/api/vision/history?limit=10');
+  const filterVal = document.getElementById('captureFilter')?.value || 'all';
+  const data = await apiFetch('/api/vision/history?limit=20');
   if (!data || !data.items || data.items.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Dùng "Capture Chart" để chụp + phân tích</p></div>';
+    container.innerHTML = '<div class="empty-state"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Nhấn "Capture + Analyze" để bắt đầu.</p></div>';
     return;
   }
 
-  container.innerHTML = data.items.map(v => {
+  let items = data.items;
+  if (filterVal === 'stealth') items = items.filter(v => v.source === 'stealth');
+  else if (filterVal === 'brief') items = items.filter(v => v.source !== 'stealth');
+
+  if (items.length === 0) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><h3>Không có kết quả</h3><p>Filter: ${filterVal}</p></div>`;
+    return;
+  }
+
+  container.innerHTML = items.map(v => {
     const srcBadge = v.source === 'stealth'
       ? '<span class="notif-tag tag-webhook" style="font-size:0.7rem">STEALTH</span>'
       : '<span class="notif-tag tag-brief" style="font-size:0.7rem">BRIEF</span>';
@@ -221,31 +341,30 @@ async function loadVisionHistory() {
       : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
     const conf = v.confidence || 0;
     const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--warn)' : 'var(--sell)';
-    const patterns = (v.patterns || []).join(', ') || '—';
+    const patterns = (v.patterns || [])
+      .map(p => `<span class="pine-chip" style="font-size:0.7rem;padding:2px 7px">${p}</span>`).join('')
+      || '<span style="color:var(--text-muted);font-size:0.78rem">—</span>';
+    const imgUrl = v.has_screenshot ? `${v.screenshot_url}?t=${Date.now()}` : null;
 
-    const imgSection = v.has_screenshot
-      ? `<div style="margin:12px 0">
-           <img src="${v.screenshot_url}?t=${Date.now()}"
-                alt="Chart ${v.symbol}"
-                style="width:100%;max-height:320px;object-fit:contain;border-radius:8px;border:1px solid var(--border);cursor:pointer"
-                onclick="this.style.maxHeight=this.style.maxHeight==='none'?'320px':'none'"
-                onerror="this.style.display='none'"/>
-         </div>`
-      : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:0.82rem">📷 Không có ảnh chart</div>`;
-
-    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <strong style="font-size:1rem">${v.symbol}</strong>
-          ${srcBadge}
-          <span style="color:${confColor};font-family:var(--mono);font-size:0.85rem">👁 ${conf}/10</span>
+    return `<div class="vision-card">
+      ${imgUrl
+        ? `<img class="vision-card-img" src="${imgUrl}" alt="Chart ${v.symbol}"
+               onclick="openImgZoom('${imgUrl}')"
+               onerror="this.style.display='none'">`
+        : `<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:0.8rem;border-bottom:1px solid var(--border)">📷 Không có ảnh chart</div>`}
+      <div class="vision-card-body">
+        <div class="vision-card-header">
+          <div class="vision-card-meta">
+            <span class="vision-card-sym">${v.symbol || '—'}</span>
+            ${srcBadge}
+            <span style="color:${confColor};font-family:var(--mono);font-size:0.8rem">👁 ${conf}/10</span>
+          </div>
+          <span style="font-size:0.72rem;color:var(--text-muted)">${(v.created_at || '').slice(0, 16)}</span>
         </div>
-        <span style="font-size:0.75rem;color:var(--text-muted)">${v.created_at || '—'}</span>
+        <div class="vision-card-verdict" style="color:${verdictColor};margin-bottom:8px">${v.verdict || '—'}</div>
+        <div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px">${patterns}</div>
+        <div class="vision-card-analysis">${v.ai_analysis || 'Không có phân tích'}</div>
       </div>
-      ${imgSection}
-      <div style="font-size:0.8rem;color:${verdictColor};font-weight:600;margin-bottom:8px">${v.verdict || ''}</div>
-      <div style="font-size:0.78rem;color:var(--text-sub);margin-bottom:6px">🔍 Patterns: ${patterns}</div>
-      <div style="font-size:0.78rem;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;max-height:180px;overflow-y:auto">${v.ai_analysis || 'Không có phân tích'}</div>
     </div>`;
   }).join('');
 }
@@ -358,7 +477,9 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(populateSymbols, 1500);
   setTimeout(loadNotifications, 2500);
   setTimeout(loadOverviewWidgets, 1000);
+  setTimeout(loadCaptureStats, 3000);
 });
+
 
 // ═══ OVERVIEW WIDGETS ═══
 

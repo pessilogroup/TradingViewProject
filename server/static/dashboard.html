@@ -404,56 +404,139 @@
     </div>
   </div>
 
-  <!-- ═══ TAB: ANALYSIS (AI Vision) ═══ -->
+  <!-- ═══ TAB: ANALYSIS (AI Vision Capture Studio) ═══ -->
   <div id="tab-analysis" class="tab-panel">
-    <div class="analysis-toolbar">
-      <select id="analysisSymbol" class="form-input" style="width:180px">
-        <option value="BTCUSDT">BTCUSDT</option>
-      </select>
-      <button class="qbtn qbtn-vision" onclick="triggerVisionCapture()">👁 Stealth Capture + Analyze</button>
-      <button class="qbtn qbtn-brief" onclick="loadBriefs()">🔄 Refresh</button>
+
+    <!-- ── CAPTURE STUDIO HERO ── -->
+    <section class="glass-section capture-hero">
+      <div class="capture-hero-inner">
+        <div class="capture-hero-left">
+          <div class="capture-hero-title">
+            <span class="capture-icon-pulse">👁</span>
+            <span>Stealth Capture Studio</span>
+          </div>
+          <p class="capture-hero-sub">Chụp chart ẩn + phân tích AI tức thì</p>
+
+          <div class="capture-controls">
+            <select id="captureSymbol" class="form-input capture-sym-select">
+              <option value="BTCUSDT">BTCUSDT</option>
+              <option value="ETHUSDT">ETHUSDT</option>
+              <option value="SOLUSDT">SOLUSDT</option>
+              <option value="BNBUSDT">BNBUSDT</option>
+            </select>
+            <select id="captureTimeframe" class="form-input" style="width:90px">
+              <option value="15">15m</option>
+              <option value="60" selected>1H</option>
+              <option value="240">4H</option>
+              <option value="D">1D</option>
+            </select>
+            <button id="captureBtn" class="btn-capture" onclick="runStealthCapture()">
+              <span id="captureBtnIcon">📸</span>
+              <span id="captureBtnText">Capture + Analyze</span>
+            </button>
+          </div>
+
+          <!-- Progress Steps -->
+          <div id="captureProgress" class="capture-progress" style="display:none">
+            <div class="cap-step" id="step-mcp"><span class="step-dot"></span><span>Kết nối TradingView CDP</span></div>
+            <div class="cap-step" id="step-shot"><span class="step-dot"></span><span>Chụp chart (Stealth)</span></div>
+            <div class="cap-step" id="step-crop"><span class="step-dot"></span><span>Crop chart area</span></div>
+            <div class="cap-step" id="step-ai"><span class="step-dot"></span><span>AI Vision Analysis</span></div>
+            <div class="cap-step" id="step-save"><span class="step-dot"></span><span>Lưu DB + Telegram</span></div>
+          </div>
+        </div>
+
+        <!-- Latest result preview -->
+        <div class="capture-hero-right" id="capturePreview">
+          <div class="capture-preview-empty">
+            <div style="font-size:2.5rem">📷</div>
+            <p>Kết quả sẽ xuất hiện ở đây</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── STATS BAR ── -->
+    <div class="capture-stats-bar" id="captureStatsBar">
+      <div class="cap-stat">
+        <span class="cap-stat-val" id="cstat-total">—</span>
+        <span class="cap-stat-lbl">Total Captures</span>
+      </div>
+      <div class="cap-stat">
+        <span class="cap-stat-val" id="cstat-stealth">—</span>
+        <span class="cap-stat-lbl">Stealth</span>
+      </div>
+      <div class="cap-stat">
+        <span class="cap-stat-val" id="cstat-conf">—</span>
+        <span class="cap-stat-lbl">Avg Confidence</span>
+      </div>
+      <div class="cap-stat">
+        <span class="cap-stat-val" id="cstat-last">—</span>
+        <span class="cap-stat-lbl">Last Capture</span>
+      </div>
     </div>
 
+    <!-- ── MAIN GRID ── -->
     <div class="analysis-grid">
-      <!-- Vision History (main column) -->
+
+      <!-- Vision History list (main) -->
       <section class="glass-section analysis-main">
         <div class="section-header">
-          <div class="section-title">👁 Vision Analysis History</div>
-          <span class="muted-label">Stealth Captures + Morning Briefs</span>
+          <div class="section-title">🎞 Capture History</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="captureFilter" class="form-input" style="width:130px;font-size:0.78rem" onchange="loadVisionHistory()">
+              <option value="all">All</option>
+              <option value="stealth">Stealth Only</option>
+              <option value="brief">Morning Brief</option>
+            </select>
+            <button class="qbtn qbtn-brief" style="padding:5px 12px;font-size:0.78rem" onclick="loadBriefs()">↻ Refresh</button>
+          </div>
         </div>
         <div id="visionHistory" class="vision-history-list">
           <div class="empty-state">
             <div class="icon">👁</div>
             <h3>Chưa có phân tích</h3>
-            <p>Nhấn "Stealth Capture + Analyze" để chụp chart và phân tích AI.</p>
+            <p>Nhấn "Capture + Analyze" để bắt đầu.</p>
           </div>
         </div>
       </section>
 
-      <!-- Brief / Docs sidebar -->
-      <section class="glass-section analysis-side">
-        <div class="section-title">📄 Morning Brief</div>
-        <div id="briefContent" class="brief-content">
-          <div class="empty-state">
-            <div class="icon">🌅</div>
-            <h3>Chưa có brief</h3>
-            <p>Click "Morning Brief" để tạo.</p>
+      <!-- Sidebar -->
+      <div class="analysis-side-stack">
+        <!-- Morning Brief -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">📄 Morning Brief</div>
+            <button class="qbtn qbtn-brief" style="padding:5px 12px;font-size:0.78rem" onclick="triggerBrief()">▶ Run</button>
           </div>
-        </div>
-      </section>
+          <div id="briefContent" class="brief-content">
+            <div class="empty-state" style="padding:20px">
+              <div class="icon">🌅</div>
+              <h3>Chưa có brief</h3>
+              <p>Click Run để tạo.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- RAG Query -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">📚 RAG Query</div>
+          </div>
+          <div class="rag-search">
+            <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về SEPA, VCP, Minervini..." style="flex:1;font-size:0.82rem">
+            <button class="qbtn qbtn-scan" onclick="submitRagQuery()">🔍</button>
+          </div>
+          <div id="ragResults" class="rag-results"></div>
+        </section>
+      </div>
     </div>
 
-    <!-- RAG Query -->
-    <section class="glass-section">
-      <div class="section-header">
-        <div class="section-title">📚 Knowledge Base (RAG Query)</div>
-      </div>
-      <div class="rag-search">
-        <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về Minervini SEPA... (vd: Quy tắc VCP breakout là gì?)" style="flex:1">
-        <button class="qbtn qbtn-scan" onclick="submitRagQuery()">🔍 Query</button>
-      </div>
-      <div id="ragResults" class="rag-results"></div>
-    </section>
+    <!-- Image Zoom Modal -->
+    <div id="imgZoomModal" class="img-zoom-overlay" onclick="closeImgZoom()" style="display:none">
+      <img id="imgZoomEl" class="img-zoom-img" src="" alt="Chart zoom">
+    </div>
+
   </div>
 
 

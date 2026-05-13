@@ -827,6 +827,114 @@ async def api_vision_analyze(symbol: str = Query(...), image_path: str = Query(.
     return result
 
 
+@app.post("/api/vision/capture")
+async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol to capture")):
+    """
+    Dashboard-callable Stealth Capture endpoint.
+    Combines: MCP CDP screenshot → crop → AI Vision → DB persist.
+    Returns structured result with screenshot_url for immediate display.
+    """
+    import json as _json
+    from pathlib import Path
+
+    sym = symbol.upper()
+
+    # ── Step 1: MCP Screenshot ───────────────────────────────────
+    if not config.MCP_ENABLED:
+        raise HTTPException(status_code=503, detail="MCP_ENABLED=false — TradingView CDP not configured")
+
+    mcp = _mcp_module.get_mcp_client()
+    health = await mcp.health_check()
+    if not health.get("connected"):
+        raise HTTPException(status_code=503, detail="TradingView CDP not connected — launch_tv_msix_cdp.ps1 phải đang chạy")
+
+    screenshot_path = await mcp.capture_screenshot(symbol=sym)
+    if not screenshot_path or not Path(screenshot_path).exists():
+        raise HTTPException(status_code=500, detail="Screenshot capture failed — CDP may be busy")
+
+    # ── Step 2: AI Vision Analysis ───────────────────────────────
+    try:
+        vision_result = await vision_module.analyze_chart_vision(
+            image_path=Path(screenshot_path),
+            symbol=sym,
+        )
+    except Exception as e:
+        vision_result = {"error": str(e), "verdict": "ERROR", "confidence": 0}
+
+    # ── Step 3: Persist to DB ────────────────────────────────────
+    import time as _time
+    brief_text = (
+        f"[Stealth Capture] {sym} @ {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
+        f"Verdict: {vision_result.get('verdict', '—')}\n"
+        f"Confidence: {vision_result.get('confidence', 0)}/10\n"
+        f"Analysis: {vision_result.get('analysis', vision_result.get('ai_analysis', ''))[:500]}"
+    )
+    vision_data_json = _json.dumps({
+        "symbol": sym,
+        "verdict": vision_result.get("verdict", ""),
+        "confidence": vision_result.get("confidence", 0),
+        "patterns": vision_result.get("patterns", []),
+        "combined_score": vision_result.get("combined_score", "—"),
+    })
+    brief_id = await database.insert_brief(
+        symbols_scanned=1,
+        brief_text=brief_text,
+        ai_analysis=vision_result.get("analysis", vision_result.get("ai_analysis", "")),
+        screenshot=screenshot_path,
+        vision_data=vision_data_json,
+    )
+
+    # ── Step 4: Telegram notification ───────────────────────────
+    try:
+        caption = (
+            f"👁 **Stealth Capture** — `{sym}`\n"
+            f"Verdict: `{vision_result.get('verdict', '—')}`\n"
+            f"Confidence: `{vision_result.get('confidence', 0)}/10`"
+        )
+        await notifier.send_photo(screenshot_path, caption=caption)
+    except Exception:
+        pass  # Telegram optional
+
+    return {
+        "status": "ok",
+        "brief_id": brief_id,
+        "symbol": sym,
+        "verdict": vision_result.get("verdict", "—"),
+        "confidence": vision_result.get("confidence", 0),
+        "patterns": vision_result.get("patterns", []),
+        "ai_analysis": vision_result.get("analysis", vision_result.get("ai_analysis", "")),
+        "screenshot_url": f"/api/vision/screenshot/{brief_id}" if brief_id else None,
+        "has_screenshot": bool(screenshot_path),
+    }
+
+
+@app.get("/api/vision/stats")
+async def get_vision_stats():
+    """Stats for Capture Studio header: total captures, last capture time, avg confidence."""
+    import json as _json
+    data = await database.get_briefs(limit=100, offset=0)
+    items = data.get("briefs", [])
+    total = data.get("total", 0)
+    stealth = [b for b in items if "[Stealth Capture]" in (b.get("brief_text") or "")]
+    confidences = []
+    for b in items:
+        if b.get("vision_data"):
+            try:
+                vd = _json.loads(b["vision_data"])
+                c = vd.get("confidence", 0)
+                if c: confidences.append(c)
+            except Exception:
+                pass
+    avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0
+    last_capture = items[0]["created_at"] if items else None
+    return {
+        "total_captures": total,
+        "stealth_count": len(stealth),
+        "avg_confidence": avg_conf,
+        "last_capture": last_capture,
+    }
+
+
 # ═══ BRIEFS ENDPOINTS (P7.6) ═════════════════════════════════════════
 
 @app.get("/api/briefs")
