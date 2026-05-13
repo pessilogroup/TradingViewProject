@@ -791,3 +791,174 @@ tr:hover td { background: var(--glass); }
   .capture-hero-right { width: 100%; min-height: 150px; }
   .capture-stats-bar { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ═══════════════════════════════════════════
+   CAPTURE STUDIO V2 — Professional Layout
+   ═══════════════════════════════════════════ */
+
+/* ── Control Bar ── */
+.cs-control-bar {
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  background: linear-gradient(135deg, rgba(0,212,170,0.07) 0%, rgba(16,18,28,0.95) 100%);
+  border: 1px solid rgba(0,212,170,0.18);
+  border-radius: var(--radius); padding: 14px 20px;
+  margin-bottom: 10px; position: relative; overflow: hidden;
+}
+.cs-control-bar::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: linear-gradient(180deg, var(--accent2), var(--accent));
+}
+.cs-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.cs-brand-title { font-weight: 700; font-size: 1rem; line-height: 1.2; }
+.cs-brand-sub { font-size: 0.72rem; color: var(--text-muted); }
+.cs-controls { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.cs-control-group { display: flex; flex-direction: column; gap: 4px; }
+.cs-label { font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.cs-select { width: 150px; }
+.cs-select-sm { width: 80px; }
+
+/* Stats pills in control bar */
+.cs-stats-pills {
+  display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; align-items: center;
+}
+.cs-pill {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 14px; min-width: 60px;
+}
+.cs-pill span { font-family: var(--mono); font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+.cs-pill small { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; }
+.cs-pill.accent { border-color: rgba(0,212,170,0.35); }
+.cs-pill.accent span { color: var(--accent2); }
+
+/* ── Pipeline Progress ── */
+.cs-pipeline {
+  display: flex; align-items: center; justify-content: center;
+  gap: 4px; padding: 10px 20px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 10px;
+  animation: fadeInDown 0.3s ease;
+}
+@keyframes fadeInDown { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: none; } }
+.cs-pipe-step {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 8px; transition: background 0.2s;
+}
+.cs-pipe-step.active { background: rgba(0,212,170,0.1); }
+.cs-pipe-step.done  { background: rgba(0,196,84,0.08); }
+.cs-pipe-icon { font-size: 1.1rem; line-height: 1; }
+.cs-pipe-label { font-size: 0.68rem; color: var(--text-muted); white-space: nowrap; }
+.cs-pipe-step.active .cs-pipe-label { color: var(--accent2); }
+.cs-pipe-step.done .cs-pipe-label  { color: var(--buy); }
+.cs-pipe-arrow { color: var(--border); font-size: 1rem; padding: 0 2px; }
+
+/* Dot still used for state */
+.cs-pipe-step .step-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border); transition: background 0.3s;
+}
+.cs-pipe-step.active .step-dot { background: var(--accent2); animation: stepPulse 0.8s infinite; }
+.cs-pipe-step.done .step-dot  { background: var(--buy); animation: none; }
+
+/* ── Main Workspace ── */
+.cs-workspace {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px; align-items: start;
+}
+.cs-canvas-col { display: flex; flex-direction: column; gap: 14px; }
+.cs-side-col   { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Chart Frame ── */
+.cs-chart-frame {
+  background: #000;
+  border: 1px solid rgba(0,212,170,0.15);
+  border-radius: 12px;
+  min-height: 340px; position: relative; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.cs-chart-frame:hover { border-color: rgba(0,212,170,0.35); }
+.cs-chart-placeholder {
+  width: 100%; height: 340px;
+  display: flex; align-items: center; justify-content: center;
+}
+.cs-chart-watermark { text-align: center; }
+.cs-chart-img {
+  width: 100%; height: auto; max-height: 480px;
+  object-fit: contain; cursor: zoom-in;
+  transition: opacity 0.3s; display: block;
+}
+.cs-chart-img:hover { opacity: 0.9; }
+.cs-chart-overlay {
+  position: absolute; top: 10px; left: 10px;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 5px 10px;
+}
+.cs-overlay-sym { font-family: var(--mono); font-weight: 700; font-size: 0.9rem; color: var(--accent2); }
+.cs-overlay-time { font-size: 0.72rem; color: var(--text-muted); }
+
+/* ── Verdict Card ── */
+.cs-verdict-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px;
+  animation: fadeInDown 0.4s ease;
+}
+.cs-verdict-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.cs-verdict-sym { font-family: var(--mono); font-size: 1.1rem; font-weight: 700; }
+.cs-verdict-val { font-size: 1rem; font-weight: 600; margin-top: 4px; }
+.cs-patterns { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.cs-analysis-text {
+  font-size: 0.78rem; line-height: 1.7; color: var(--text-sub);
+  background: var(--bg3); padding: 10px; border-radius: 8px;
+  max-height: 120px; overflow-y: auto; white-space: pre-wrap;
+}
+
+/* Confidence ring */
+.cs-conf-ring { position: relative; width: 56px; height: 56px; flex-shrink: 0; }
+.cs-conf-svg { width: 56px; height: 56px; transform: rotate(-90deg); }
+.cs-conf-bg   { fill: none; stroke: var(--border); stroke-width: 4; }
+.cs-conf-fill { fill: none; stroke: var(--accent2); stroke-width: 4;
+                stroke-linecap: round; transition: stroke-dasharray 0.8s ease; }
+.cs-conf-num {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 0.75rem; font-weight: 700; color: var(--accent2);
+}
+
+/* ── History List (compact) ── */
+.cs-history-section { height: 100%; }
+.cs-history-list { display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow-y: auto; }
+.cs-hist-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; cursor: pointer;
+  transition: border-color 0.2s, transform 0.15s;
+  display: flex; gap: 0;
+}
+.cs-hist-card:hover { border-color: rgba(0,212,170,0.4); transform: translateX(2px); }
+.cs-hist-thumb {
+  width: 80px; flex-shrink: 0;
+  background: #000; border-right: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.5rem; opacity: 0.4;
+}
+.cs-hist-thumb img {
+  width: 80px; height: 60px; object-fit: cover; display: block;
+}
+.cs-hist-body { padding: 8px 10px; flex: 1; min-width: 0; }
+.cs-hist-sym { font-family: var(--mono); font-weight: 700; font-size: 0.85rem; }
+.cs-hist-meta { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin: 3px 0; }
+.cs-hist-verdict { font-size: 0.75rem; font-weight: 600; }
+.cs-hist-time { font-size: 0.68rem; color: var(--text-muted); }
+.cs-hist-conf { font-family: var(--mono); font-size: 0.72rem; }
+
+/* Workspace responsive */
+@media (max-width: 1024px) {
+  .cs-workspace { grid-template-columns: 1fr; }
+  .cs-history-list { max-height: 300px; }
+}
+@media (max-width: 768px) {
+  .cs-control-bar { flex-direction: column; align-items: flex-start; }
+  .cs-stats-pills { margin-left: 0; }
+  .cs-pipeline { overflow-x: auto; }
+}

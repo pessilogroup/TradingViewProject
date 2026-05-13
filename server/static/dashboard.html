@@ -407,128 +407,176 @@
   <!-- ═══ TAB: ANALYSIS (AI Vision Capture Studio) ═══ -->
   <div id="tab-analysis" class="tab-panel">
 
-    <!-- ── CAPTURE STUDIO HERO ── -->
-    <section class="glass-section capture-hero">
-      <div class="capture-hero-inner">
-        <div class="capture-hero-left">
-          <div class="capture-hero-title">
-            <span class="capture-icon-pulse">👁</span>
-            <span>Stealth Capture Studio</span>
-          </div>
-          <p class="capture-hero-sub">Chụp chart ẩn + phân tích AI tức thì</p>
-
-          <div class="capture-controls">
-            <select id="captureSymbol" class="form-input capture-sym-select">
-              <option value="BTCUSDT">BTCUSDT</option>
-              <option value="ETHUSDT">ETHUSDT</option>
-              <option value="SOLUSDT">SOLUSDT</option>
-              <option value="BNBUSDT">BNBUSDT</option>
-            </select>
-            <select id="captureTimeframe" class="form-input" style="width:90px">
-              <option value="15">15m</option>
-              <option value="60" selected>1H</option>
-              <option value="240">4H</option>
-              <option value="D">1D</option>
-            </select>
-            <button id="captureBtn" class="btn-capture" onclick="runStealthCapture()">
-              <span id="captureBtnIcon">📸</span>
-              <span id="captureBtnText">Capture + Analyze</span>
-            </button>
-          </div>
-
-          <!-- Progress Steps -->
-          <div id="captureProgress" class="capture-progress" style="display:none">
-            <div class="cap-step" id="step-mcp"><span class="step-dot"></span><span>Kết nối TradingView CDP</span></div>
-            <div class="cap-step" id="step-shot"><span class="step-dot"></span><span>Chụp chart (Stealth)</span></div>
-            <div class="cap-step" id="step-crop"><span class="step-dot"></span><span>Crop chart area</span></div>
-            <div class="cap-step" id="step-ai"><span class="step-dot"></span><span>AI Vision Analysis</span></div>
-            <div class="cap-step" id="step-save"><span class="step-dot"></span><span>Lưu DB + Telegram</span></div>
-          </div>
-        </div>
-
-        <!-- Latest result preview -->
-        <div class="capture-hero-right" id="capturePreview">
-          <div class="capture-preview-empty">
-            <div style="font-size:2.5rem">📷</div>
-            <p>Kết quả sẽ xuất hiện ở đây</p>
-          </div>
+    <!-- ── CONTROL BAR (horizontal, full-width) ── -->
+    <div class="cs-control-bar">
+      <div class="cs-brand">
+        <span class="capture-icon-pulse">👁</span>
+        <div>
+          <div class="cs-brand-title">Stealth Capture Studio</div>
+          <div class="cs-brand-sub">AI Vision Analysis Pipeline</div>
         </div>
       </div>
-    </section>
 
-    <!-- ── STATS BAR ── -->
-    <div class="capture-stats-bar" id="captureStatsBar">
-      <div class="cap-stat">
-        <span class="cap-stat-val" id="cstat-total">—</span>
-        <span class="cap-stat-lbl">Total Captures</span>
+      <div class="cs-controls">
+        <div class="cs-control-group">
+          <label class="cs-label">Symbol</label>
+          <select id="captureSymbol" class="form-input cs-select">
+            <option value="BTCUSDT">BTCUSDT</option>
+            <option value="ETHUSDT">ETHUSDT</option>
+            <option value="SOLUSDT">SOLUSDT</option>
+            <option value="BNBUSDT">BNBUSDT</option>
+            <option value="XRPUSDT">XRPUSDT</option>
+            <option value="ADAUSDT">ADAUSDT</option>
+          </select>
+        </div>
+        <div class="cs-control-group">
+          <label class="cs-label">Timeframe</label>
+          <select id="captureTimeframe" class="form-input cs-select-sm">
+            <option value="15">15m</option>
+            <option value="60" selected>1H</option>
+            <option value="240">4H</option>
+            <option value="D">1D</option>
+            <option value="W">1W</option>
+          </select>
+        </div>
+        <button id="captureBtn" class="btn-capture" onclick="runStealthCapture()">
+          <span id="captureBtnIcon">📸</span>
+          <span id="captureBtnText">Capture + Analyze</span>
+        </button>
       </div>
-      <div class="cap-stat">
-        <span class="cap-stat-val" id="cstat-stealth">—</span>
-        <span class="cap-stat-lbl">Stealth</span>
-      </div>
-      <div class="cap-stat">
-        <span class="cap-stat-val" id="cstat-conf">—</span>
-        <span class="cap-stat-lbl">Avg Confidence</span>
-      </div>
-      <div class="cap-stat">
-        <span class="cap-stat-val" id="cstat-last">—</span>
-        <span class="cap-stat-lbl">Last Capture</span>
+
+      <!-- Stats pills inline -->
+      <div class="cs-stats-pills">
+        <div class="cs-pill"><span id="cstat-total">—</span><small>Total</small></div>
+        <div class="cs-pill"><span id="cstat-stealth">—</span><small>Stealth</small></div>
+        <div class="cs-pill accent"><span id="cstat-conf">—</span><small>Avg Conf</small></div>
+        <div class="cs-pill"><span id="cstat-last">—</span><small>Last</small></div>
       </div>
     </div>
 
-    <!-- ── MAIN GRID ── -->
-    <div class="analysis-grid">
+    <!-- ── PROGRESS PIPELINE ── -->
+    <div id="captureProgress" class="cs-pipeline" style="display:none">
+      <div class="cs-pipe-step" id="step-mcp">
+        <div class="cs-pipe-icon">🔌</div>
+        <div class="step-dot"></div>
+        <div class="cs-pipe-label">CDP Connect</div>
+      </div>
+      <div class="cs-pipe-arrow">→</div>
+      <div class="cs-pipe-step" id="step-shot">
+        <div class="cs-pipe-icon">📸</div>
+        <div class="step-dot"></div>
+        <div class="cs-pipe-label">Screenshot</div>
+      </div>
+      <div class="cs-pipe-arrow">→</div>
+      <div class="cs-pipe-step" id="step-crop">
+        <div class="cs-pipe-icon">✂️</div>
+        <div class="step-dot"></div>
+        <div class="cs-pipe-label">Auto-Crop</div>
+      </div>
+      <div class="cs-pipe-arrow">→</div>
+      <div class="cs-pipe-step" id="step-ai">
+        <div class="cs-pipe-icon">🧠</div>
+        <div class="step-dot"></div>
+        <div class="cs-pipe-label">AI Vision</div>
+      </div>
+      <div class="cs-pipe-arrow">→</div>
+      <div class="cs-pipe-step" id="step-save">
+        <div class="cs-pipe-icon">💾</div>
+        <div class="step-dot"></div>
+        <div class="cs-pipe-label">Save + TG</div>
+      </div>
+    </div>
 
-      <!-- Vision History list (main) -->
-      <section class="glass-section analysis-main">
-        <div class="section-header">
-          <div class="section-title">🎞 Capture History</div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <select id="captureFilter" class="form-input" style="width:130px;font-size:0.78rem" onchange="loadVisionHistory()">
-              <option value="all">All</option>
-              <option value="stealth">Stealth Only</option>
-              <option value="brief">Morning Brief</option>
-            </select>
-            <button class="qbtn qbtn-brief" style="padding:5px 12px;font-size:0.78rem" onclick="loadBriefs()">↻ Refresh</button>
+    <!-- ── MAIN WORKSPACE ── -->
+    <div class="cs-workspace">
+
+      <!-- Left: Chart Canvas + Latest Result -->
+      <div class="cs-canvas-col">
+        <!-- Chart image display -->
+        <div class="cs-chart-frame" id="csChartFrame">
+          <div class="cs-chart-placeholder" id="csChartPlaceholder">
+            <div class="cs-chart-watermark">
+              <span style="font-size:3rem;opacity:0.15">📈</span>
+              <div style="opacity:0.3;font-size:0.85rem;margin-top:8px">Chart will appear after capture</div>
+            </div>
+          </div>
+          <img id="csChartImg" class="cs-chart-img" src="" alt="Chart" style="display:none"
+               onclick="openImgZoom(this.src)" onerror="this.style.display='none'">
+          <div class="cs-chart-overlay" id="csChartOverlay" style="display:none">
+            <div class="cs-overlay-sym" id="csOverlaySym">BTCUSDT</div>
+            <div class="cs-overlay-time" id="csOverlayTime"></div>
           </div>
         </div>
-        <div id="visionHistory" class="vision-history-list">
-          <div class="empty-state">
-            <div class="icon">👁</div>
-            <h3>Chưa có phân tích</h3>
-            <p>Nhấn "Capture + Analyze" để bắt đầu.</p>
-          </div>
-        </div>
-      </section>
 
-      <!-- Sidebar -->
-      <div class="analysis-side-stack">
+        <!-- Verdict card (below chart) -->
+        <div class="cs-verdict-card" id="csVerdictCard" style="display:none">
+          <div class="cs-verdict-row">
+            <div>
+              <div class="cs-verdict-sym" id="csVerdictSym">—</div>
+              <div class="cs-verdict-val" id="csVerdictVal">—</div>
+            </div>
+            <div class="cs-conf-ring">
+              <svg viewBox="0 0 44 44" class="cs-conf-svg">
+                <circle cx="22" cy="22" r="18" class="cs-conf-bg"/>
+                <circle cx="22" cy="22" r="18" class="cs-conf-fill" id="csConfCircle" stroke-dasharray="0 113"/>
+              </svg>
+              <div class="cs-conf-num" id="csConfNum">—</div>
+            </div>
+          </div>
+          <div class="cs-patterns" id="csPatterns"></div>
+          <div class="cs-analysis-text" id="csAnalysisText"></div>
+        </div>
+      </div>
+
+      <!-- Right: History List + Brief + RAG -->
+      <div class="cs-side-col">
+
+        <!-- Capture History -->
+        <section class="glass-section cs-history-section">
+          <div class="section-header">
+            <div class="section-title">🎞 History</div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="captureFilter" class="form-input" style="width:110px;font-size:0.75rem" onchange="loadVisionHistory()">
+                <option value="all">All</option>
+                <option value="stealth">Stealth</option>
+                <option value="brief">Brief</option>
+              </select>
+              <button class="qbtn qbtn-brief" style="padding:4px 10px;font-size:0.75rem" onclick="loadBriefs()">↻</button>
+            </div>
+          </div>
+          <div id="visionHistory" class="cs-history-list">
+            <div class="empty-state" style="padding:30px 16px">
+              <div class="icon">👁</div>
+              <h3>Chưa có phân tích</h3>
+              <p>Nhấn Capture + Analyze</p>
+            </div>
+          </div>
+        </section>
+
         <!-- Morning Brief -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">📄 Morning Brief</div>
-            <button class="qbtn qbtn-brief" style="padding:5px 12px;font-size:0.78rem" onclick="triggerBrief()">▶ Run</button>
+            <div class="section-title">🌅 Morning Brief</div>
+            <button class="qbtn qbtn-brief" style="padding:4px 10px;font-size:0.75rem" onclick="triggerBrief()">▶ Run</button>
           </div>
-          <div id="briefContent" class="brief-content">
-            <div class="empty-state" style="padding:20px">
-              <div class="icon">🌅</div>
-              <h3>Chưa có brief</h3>
-              <p>Click Run để tạo.</p>
+          <div id="briefContent" class="brief-content" style="max-height:180px;overflow-y:auto">
+            <div class="empty-state" style="padding:16px">
+              <div class="icon" style="font-size:1.5rem">🌅</div>
+              <p style="font-size:0.8rem">Click Run để tạo</p>
             </div>
           </div>
         </section>
 
         <!-- RAG Query -->
         <section class="glass-section">
-          <div class="section-header">
-            <div class="section-title">📚 RAG Query</div>
-          </div>
+          <div class="section-title" style="margin-bottom:10px">📚 RAG Query</div>
           <div class="rag-search">
-            <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về SEPA, VCP, Minervini..." style="flex:1;font-size:0.82rem">
-            <button class="qbtn qbtn-scan" onclick="submitRagQuery()">🔍</button>
+            <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về SEPA, VCP..." style="flex:1;font-size:0.8rem">
+            <button class="qbtn qbtn-scan" onclick="submitRagQuery()" style="padding:8px 12px">🔍</button>
           </div>
           <div id="ragResults" class="rag-results"></div>
         </section>
+
       </div>
     </div>
 

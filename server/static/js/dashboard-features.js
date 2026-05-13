@@ -237,32 +237,61 @@ function _resetCaptureBtn() {
 }
 
 function _updateCapturePreview(result) {
-  const el = document.getElementById('capturePreview');
-  if (!el) return;
-  const verdictClass = (result.verdict || '').includes('STRONG') ? 'verdict-buy'
-    : (result.verdict || '').includes('AVOID') ? 'verdict-sell' : 'verdict-hold';
-  const confColor = result.confidence >= 7 ? 'var(--buy)' : result.confidence >= 5 ? 'var(--warn)' : 'var(--sell)';
-  el.innerHTML = `<div class="capture-result">
-    ${result.screenshot_url
-      ? `<img class="capture-result-img" src="${result.screenshot_url}?t=${Date.now()}" alt="Chart"
-             onclick="openImgZoom('${result.screenshot_url}?t=${Date.now()}')"
-             onerror="this.style.display='none'">`
-      : `<div style="padding:20px;text-align:center;color:var(--text-muted)">📷 No screenshot</div>`}
-    <div class="capture-result-meta">
-      <span class="capture-result-sym">${result.symbol}</span>
-      <span class="capture-result-verdict ${verdictClass}">${result.verdict || '—'}</span>
-      <span class="capture-result-conf" style="color:${confColor}">Confidence: ${result.confidence}/10</span>
-      ${(result.patterns||[]).length ? `<span style="font-size:0.72rem;color:var(--text-muted)">Patterns: ${result.patterns.join(', ')}</span>` : ''}
-    </div>
-  </div>`;
+  const verdictColor = (result.verdict || '').includes('STRONG') ? 'var(--buy)'
+    : (result.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
+  const conf = result.confidence || 0;
+  const circumference = 113; // 2πr where r=18
+  const dashVal = Math.round((conf / 10) * circumference);
+
+  // ── Chart image ──
+  const chartImg = document.getElementById('csChartImg');
+  const placeholder = document.getElementById('csChartPlaceholder');
+  const overlay = document.getElementById('csChartOverlay');
+  if (chartImg && result.screenshot_url) {
+    chartImg.src = `${result.screenshot_url}?t=${Date.now()}`;
+    chartImg.style.display = 'block';
+    if (placeholder) placeholder.style.display = 'none';
+    if (overlay) {
+      overlay.style.display = 'block';
+      const sym = document.getElementById('csOverlaySym');
+      const time = document.getElementById('csOverlayTime');
+      if (sym) sym.textContent = result.symbol || '—';
+      if (time) time.textContent = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
+    }
+  }
+
+  // ── Verdict card ──
+  const card = document.getElementById('csVerdictCard');
+  if (card) {
+    card.style.display = 'block';
+    const s = document.getElementById('csVerdictSym'); if (s) s.textContent = result.symbol || '—';
+    const v = document.getElementById('csVerdictVal');
+    if (v) { v.textContent = result.verdict || '—'; v.style.color = verdictColor; }
+    const num = document.getElementById('csConfNum');
+    if (num) { num.textContent = `${conf}/10`; }
+    const circle = document.getElementById('csConfCircle');
+    if (circle) circle.setAttribute('stroke-dasharray', `${dashVal} ${circumference}`);
+    const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--accent2)' : 'var(--sell)';
+    if (circle) circle.style.stroke = confColor;
+    if (num) num.style.color = confColor;
+
+    // Patterns
+    const pats = document.getElementById('csPatterns');
+    if (pats) pats.innerHTML = (result.patterns || [])
+      .map(p => `<span class="pine-chip" style="font-size:0.7rem;padding:2px 8px">${p}</span>`).join('');
+
+    // Analysis text
+    const txt = document.getElementById('csAnalysisText');
+    if (txt) txt.textContent = result.ai_analysis || '—';
+  }
 }
 
 // Legacy compat — keep for Overview quick action button
 async function triggerVisionCapture() {
-  // Switch to analysis tab and trigger capture
   switchTab('analysis');
   setTimeout(runStealthCapture, 200);
 }
+
 
 // ── Load Capture Stats ──
 async function loadCaptureStats() {
@@ -320,7 +349,7 @@ async function loadVisionHistory() {
   const filterVal = document.getElementById('captureFilter')?.value || 'all';
   const data = await apiFetch('/api/vision/history?limit=20');
   if (!data || !data.items || data.items.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Nhấn "Capture + Analyze" để bắt đầu.</p></div>';
+    container.innerHTML = '<div class="empty-state" style="padding:30px 16px"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Nhấn Capture + Analyze</p></div>';
     return;
   }
 
@@ -329,44 +358,89 @@ async function loadVisionHistory() {
   else if (filterVal === 'brief') items = items.filter(v => v.source !== 'stealth');
 
   if (items.length === 0) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><h3>Không có kết quả</h3><p>Filter: ${filterVal}</p></div>`;
+    container.innerHTML = `<div class="empty-state" style="padding:30px 16px"><div class="icon">🔍</div><h3>Không có kết quả</h3><p>Filter: ${filterVal}</p></div>`;
     return;
   }
 
-  container.innerHTML = items.map(v => {
+  // Auto-load latest into canvas if canvas is empty
+  if (document.getElementById('csChartImg')?.style.display === 'none' && items[0]) {
+    _loadInCanvas(items[0]);
+  }
+
+  container.innerHTML = items.map((v, idx) => {
     const srcBadge = v.source === 'stealth'
-      ? '<span class="notif-tag tag-webhook" style="font-size:0.7rem">STEALTH</span>'
-      : '<span class="notif-tag tag-brief" style="font-size:0.7rem">BRIEF</span>';
+      ? '<span class="notif-tag tag-webhook" style="font-size:0.62rem;padding:1px 5px">S</span>'
+      : '<span class="notif-tag tag-brief" style="font-size:0.62rem;padding:1px 5px">B</span>';
+    const conf = v.confidence || 0;
+    const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--accent2)' : 'var(--sell)';
     const verdictColor = (v.verdict || '').includes('STRONG') ? 'var(--buy)'
       : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
-    const conf = v.confidence || 0;
-    const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--warn)' : 'var(--sell)';
-    const patterns = (v.patterns || [])
-      .map(p => `<span class="pine-chip" style="font-size:0.7rem;padding:2px 7px">${p}</span>`).join('')
-      || '<span style="color:var(--text-muted);font-size:0.78rem">—</span>';
-    const imgUrl = v.has_screenshot ? `${v.screenshot_url}?t=${Date.now()}` : null;
+    const thumbUrl = v.has_screenshot ? `${v.screenshot_url}?t=${Date.now()}` : null;
 
-    return `<div class="vision-card">
-      ${imgUrl
-        ? `<img class="vision-card-img" src="${imgUrl}" alt="Chart ${v.symbol}"
-               onclick="openImgZoom('${imgUrl}')"
-               onerror="this.style.display='none'">`
-        : `<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:0.8rem;border-bottom:1px solid var(--border)">📷 Không có ảnh chart</div>`}
-      <div class="vision-card-body">
-        <div class="vision-card-header">
-          <div class="vision-card-meta">
-            <span class="vision-card-sym">${v.symbol || '—'}</span>
-            ${srcBadge}
-            <span style="color:${confColor};font-family:var(--mono);font-size:0.8rem">👁 ${conf}/10</span>
-          </div>
-          <span style="font-size:0.72rem;color:var(--text-muted)">${(v.created_at || '').slice(0, 16)}</span>
+    return `<div class="cs-hist-card" onclick="_loadInCanvas(${JSON.stringify(v).replace(/"/g, '&quot;')})">
+      <div class="cs-hist-thumb">
+        ${thumbUrl
+          ? `<img src="${thumbUrl}" alt="${v.symbol}" onerror="this.parentElement.innerHTML='📷'">`
+          : '📷'}
+      </div>
+      <div class="cs-hist-body">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="cs-hist-sym">${v.symbol || '—'}</span>
+          ${srcBadge}
         </div>
-        <div class="vision-card-verdict" style="color:${verdictColor};margin-bottom:8px">${v.verdict || '—'}</div>
-        <div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px">${patterns}</div>
-        <div class="vision-card-analysis">${v.ai_analysis || 'Không có phân tích'}</div>
+        <div class="cs-hist-meta">
+          <span class="cs-hist-verdict" style="color:${verdictColor}">${(v.verdict||'—').substring(0,28)}</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="cs-hist-conf" style="color:${confColor}">👁 ${conf}/10</span>
+          <span class="cs-hist-time">${(v.created_at||'').slice(5,16)}</span>
+        </div>
       </div>
     </div>`;
   }).join('');
+}
+
+function _loadInCanvas(v) {
+  if (!v) return;
+  const conf = v.confidence || 0;
+  const circumference = 113;
+  const dashVal = Math.round((conf / 10) * circumference);
+  const verdictColor = (v.verdict || '').includes('STRONG') ? 'var(--buy)'
+    : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
+  const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--accent2)' : 'var(--sell)';
+
+  // Chart image
+  const chartImg = document.getElementById('csChartImg');
+  const placeholder = document.getElementById('csChartPlaceholder');
+  const overlay = document.getElementById('csChartOverlay');
+  if (chartImg && v.has_screenshot && v.screenshot_url) {
+    chartImg.src = `${v.screenshot_url}?t=${Date.now()}`;
+    chartImg.style.display = 'block';
+    if (placeholder) placeholder.style.display = 'none';
+    if (overlay) {
+      overlay.style.display = 'block';
+      const sym = document.getElementById('csOverlaySym');
+      const time = document.getElementById('csOverlayTime');
+      if (sym) sym.textContent = v.symbol || '—';
+      if (time) time.textContent = (v.created_at || '').slice(5, 16);
+    }
+  }
+  // Verdict card
+  const card = document.getElementById('csVerdictCard');
+  if (card) {
+    card.style.display = 'block';
+    const s = document.getElementById('csVerdictSym'); if (s) s.textContent = v.symbol || '—';
+    const vv = document.getElementById('csVerdictVal');
+    if (vv) { vv.textContent = v.verdict || '—'; vv.style.color = verdictColor; }
+    const num = document.getElementById('csConfNum'); if (num) { num.textContent = `${conf}/10`; num.style.color = confColor; }
+    const circle = document.getElementById('csConfCircle');
+    if (circle) { circle.setAttribute('stroke-dasharray', `${dashVal} ${circumference}`); circle.style.stroke = confColor; }
+    const pats = document.getElementById('csPatterns');
+    if (pats) pats.innerHTML = (v.patterns || [])
+      .map(p => `<span class="pine-chip" style="font-size:0.7rem;padding:2px 8px">${p}</span>`).join('');
+    const txt = document.getElementById('csAnalysisText');
+    if (txt) txt.textContent = v.ai_analysis || '—';
+  }
 }
 
 
