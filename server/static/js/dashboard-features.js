@@ -504,9 +504,10 @@ async function loadOverviewHealth() {
   try {
     const status = await apiFetch('/api/system/status');
     if (status) {
-      setDot('hd-mcp',      status.mcp?.connected ? 'ok' : 'err');
-      setDot('hd-telegram', status.telegram?.running ? 'ok' : 'warn');
-      setDot('hd-binance',  status.binance?.connected ? 'ok' : 'warn');
+      // Actual schema: mcp.connected, telegram_bot.enabled, rag.enabled
+      setDot('hd-mcp',      status.mcp?.connected  ? 'ok' : 'err');
+      setDot('hd-telegram', status.telegram_bot?.enabled ? 'ok' : 'warn');
+      setDot('hd-binance',  status.rag?.enabled ? 'ok' : 'warn');  // use RAG as 4th indicator
     }
   } catch(e) {
     setDot('hd-mcp', 'err');
@@ -514,6 +515,7 @@ async function loadOverviewHealth() {
     setDot('hd-binance', 'err');
   }
 }
+
 
 // ── EQUITY RANGE ──
 function setEquityRange(range, btn) {
