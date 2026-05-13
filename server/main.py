@@ -859,27 +859,43 @@ async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol 
             symbol=sym,
         )
     except Exception as e:
-        vision_result = {"error": str(e), "verdict": "ERROR", "confidence": 0}
+        vision_result = {"error": str(e), "verdict": "ERROR", "confidence": 0, "analysis": "", "patterns": []}
+
+    # Normalize fields (vision module uses 'analysis' not 'ai_analysis')
+    analysis_text = vision_result.get("analysis", "")
+    confidence    = vision_result.get("confidence", 0)
+    patterns      = vision_result.get("patterns", [])
+    # Derive verdict from confidence when scan_result=None (vision module returns '' in that case)
+    verdict = vision_result.get("verdict") or ""
+    if not verdict:
+        if confidence >= 8:
+            verdict = "STRONG SETUP — High Visual Confidence"
+        elif confidence >= 6:
+            verdict = "WATCHLIST — Monitor for breakout"
+        elif confidence >= 4:
+            verdict = "NEUTRAL — Base building"
+        else:
+            verdict = "WEAK SETUP — Low confidence"
 
     # ── Step 3: Persist to DB ────────────────────────────────────
-    import time as _time
+    import time as _time  # noqa: F401
     brief_text = (
         f"[Stealth Capture] {sym} @ {datetime.now(timezone.utc).strftime('%H:%M UTC')}\n"
-        f"Verdict: {vision_result.get('verdict', '—')}\n"
-        f"Confidence: {vision_result.get('confidence', 0)}/10\n"
-        f"Analysis: {vision_result.get('analysis', vision_result.get('ai_analysis', ''))[:500]}"
+        f"Verdict: {verdict}\n"
+        f"Confidence: {confidence}/10\n"
+        f"Analysis: {analysis_text[:500]}"
     )
     vision_data_json = _json.dumps({
-        "symbol": sym,
-        "verdict": vision_result.get("verdict", ""),
-        "confidence": vision_result.get("confidence", 0),
-        "patterns": vision_result.get("patterns", []),
-        "combined_score": vision_result.get("combined_score", "—"),
-    })
+        "symbol":         sym,
+        "verdict":        verdict,
+        "confidence":     confidence,
+        "patterns":       patterns,
+        "combined_score": vision_result.get("combined_score", f"{confidence}/10"),
+    }, ensure_ascii=False)
     brief_id = await database.insert_brief(
         symbols_scanned=1,
         brief_text=brief_text,
-        ai_analysis=vision_result.get("analysis", vision_result.get("ai_analysis", "")),
+        ai_analysis=analysis_text,
         screenshot=str(screenshot_path),
         vision_data=vision_data_json,
     )
@@ -887,26 +903,19 @@ async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol 
     # ── Step 4: Telegram notification ───────────────────────────
     import asyncio as _asyncio
     try:
-        caption = (
-            f"\U0001f441 Stealth Capture -- {sym}\n"
-            f"Verdict: {vision_result.get('verdict', '--')}\n"
-            f"Confidence: {vision_result.get('confidence', 0)}/10"
-        )
-        await _asyncio.to_thread(
-            notifier.send_telegram_photo,
-            screenshot_path, caption
-        )
+        tg_caption = f"\U0001f441 Stealth Capture \u2014 {sym}\nVerdict: {verdict}\nConfidence: {confidence}/10"
+        await _asyncio.to_thread(notifier.send_telegram_photo, screenshot_path, tg_caption)
     except Exception as _tg_err:
-        log.warning(f"Telegram photo send failed: {_tg_err}")  # non-fatal
+        log.warning(f"Telegram photo send failed: {_tg_err}")
 
     return {
-        "status": "ok",
-        "brief_id": brief_id,
-        "symbol": sym,
-        "verdict": vision_result.get("verdict", "--"),
-        "confidence": vision_result.get("confidence", 0),
-        "patterns": vision_result.get("patterns", []),
-        "ai_analysis": vision_result.get("analysis", vision_result.get("ai_analysis", "")),
+        "status":         "ok",
+        "brief_id":       brief_id,
+        "symbol":         sym,
+        "verdict":        verdict,
+        "confidence":     confidence,
+        "patterns":       patterns,
+        "ai_analysis":    analysis_text,
         "screenshot_url": f"/api/vision/screenshot/{brief_id}" if brief_id else None,
         "has_screenshot": screenshot_path.exists() if screenshot_path else False,
     }
