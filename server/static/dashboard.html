@@ -143,32 +143,163 @@
 
   <!-- ═══ TAB: OVERVIEW ═══ -->
   <div id="tab-overview" class="tab-panel active">
+
+    <!-- ── KPI STRIP ── -->
     <div id="kpiGrid" class="kpi-grid"></div>
 
-    <section class="glass-section">
-      <div class="section-title">📈 Equity Curve</div>
-      <div class="chart-container"><canvas id="equityChart"></canvas></div>
-    </section>
+    <!-- ── MAIN 2-COL GRID ── -->
+    <div class="overview-grid">
 
-    <section class="glass-section">
-      <div class="section-header">
-        <div class="section-title">📋 Trade History</div>
-        <span id="tradeCount" class="muted-label"></span>
+      <!-- LEFT COLUMN -->
+      <div class="overview-left">
+
+        <!-- Live Market Ticker -->
+        <section class="glass-section overview-ticker-section">
+          <div class="section-header">
+            <div class="section-title">📡 Live Market</div>
+            <span class="live-dot-wrap"><span class="live-dot"></span> LIVE</span>
+          </div>
+          <div class="ticker-grid" id="tickerGrid">
+            <div class="ticker-card" id="ticker-BTCUSDT">
+              <div class="ticker-sym">BTCUSDT</div>
+              <div class="ticker-price" id="tp-BTCUSDT">—</div>
+              <div class="ticker-chg" id="tc-BTCUSDT">—</div>
+            </div>
+            <div class="ticker-card" id="ticker-ETHUSDT">
+              <div class="ticker-sym">ETHUSDT</div>
+              <div class="ticker-price" id="tp-ETHUSDT">—</div>
+              <div class="ticker-chg" id="tc-ETHUSDT">—</div>
+            </div>
+            <div class="ticker-card" id="ticker-SOLUSDT">
+              <div class="ticker-sym">SOLUSDT</div>
+              <div class="ticker-price" id="tp-SOLUSDT">—</div>
+              <div class="ticker-chg" id="tc-SOLUSDT">—</div>
+            </div>
+            <div class="ticker-card" id="ticker-BNBUSDT">
+              <div class="ticker-sym">BNBUSDT</div>
+              <div class="ticker-price" id="tp-BNBUSDT">—</div>
+              <div class="ticker-chg" id="tc-BNBUSDT">—</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Equity Curve -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">📈 Equity Curve</div>
+            <div style="display:flex;gap:6px">
+              <button class="eq-range-btn active" onclick="setEquityRange('7d',this)">7D</button>
+              <button class="eq-range-btn" onclick="setEquityRange('30d',this)">30D</button>
+              <button class="eq-range-btn" onclick="setEquityRange('all',this)">All</button>
+            </div>
+          </div>
+          <div class="chart-container"><canvas id="equityChart"></canvas></div>
+        </section>
+
+        <!-- Trade History -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">📋 Trade History</div>
+            <span id="tradeCount" class="muted-label"></span>
+          </div>
+          <div style="overflow-x:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
+                  <th>Score</th><th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="tradesBody"><tr><td colspan="9"><div class="loading"><div class="spinner"></div></div></td></tr></tbody>
+            </table>
+          </div>
+          <div id="pagination" class="pagination"></div>
+        </section>
       </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
-              <th>Score</th><th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="tradesBody"><tr><td colspan="9"><div class="loading"><div class="spinner"></div></div></td></tr></tbody>
-        </table>
+
+      <!-- RIGHT COLUMN -->
+      <div class="overview-right">
+
+        <!-- Quick Actions -->
+        <section class="glass-section overview-actions-section">
+          <div class="section-title">⚡ Quick Actions</div>
+          <div class="action-grid">
+            <button class="action-btn action-trade" onclick="openOrderModal()">
+              <span class="action-icon">⚡</span>
+              <span class="action-label">Đặt Lệnh</span>
+              <span class="action-sub">Market / Limit</span>
+            </button>
+            <button class="action-btn action-vision" onclick="triggerVisionCapture()">
+              <span class="action-icon">👁</span>
+              <span class="action-label">Capture Chart</span>
+              <span class="action-sub">Stealth + AI</span>
+            </button>
+            <button class="action-btn action-brief" onclick="triggerBrief()">
+              <span class="action-icon">🌅</span>
+              <span class="action-label">Morning Brief</span>
+              <span class="action-sub">AI Scan All</span>
+            </button>
+            <button class="action-btn action-scan" onclick="triggerScan()">
+              <span class="action-icon">🔍</span>
+              <span class="action-label">Run Scanner</span>
+              <span class="action-sub">SEPA Filter</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Recent Signals -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">🔔 Recent Signals</div>
+            <button class="qbtn qbtn-scan" style="padding:5px 12px;font-size:0.78rem" onclick="loadNotifications()">↻</button>
+          </div>
+          <div id="overviewSignals" class="overview-signals-list">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </section>
+
+        <!-- Last Vision Analysis -->
+        <section class="glass-section">
+          <div class="section-header">
+            <div class="section-title">🧠 Last AI Analysis</div>
+            <button class="qbtn qbtn-vision" style="padding:5px 12px;font-size:0.78rem" onclick="triggerVisionCapture()">+ New</button>
+          </div>
+          <div id="overviewVision">
+            <div class="empty-state" style="padding:24px">
+              <div class="icon">👁</div>
+              <h3>No analysis yet</h3>
+              <p>Capture a chart to start</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- System Health Mini -->
+        <section class="glass-section overview-health-section">
+          <div class="section-title">🖥 System</div>
+          <div class="health-grid" id="overviewHealth">
+            <div class="health-item">
+              <span class="health-dot" id="hd-server"></span>
+              <span class="health-label">Server</span>
+            </div>
+            <div class="health-item">
+              <span class="health-dot" id="hd-mcp"></span>
+              <span class="health-label">TradingView</span>
+            </div>
+            <div class="health-item">
+              <span class="health-dot" id="hd-telegram"></span>
+              <span class="health-label">Telegram</span>
+            </div>
+            <div class="health-item">
+              <span class="health-dot" id="hd-binance"></span>
+              <span class="health-label">Binance</span>
+            </div>
+          </div>
+        </section>
+
       </div>
-      <div id="pagination" class="pagination"></div>
-    </section>
+    </div>
   </div>
+
 
   <!-- ═══ TAB: INDICATORS (Pine V1/V2) ═══ -->
   <div id="tab-indicators" class="tab-panel">

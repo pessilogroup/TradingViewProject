@@ -357,4 +357,170 @@ async function syncWatchlist() {
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(populateSymbols, 1500);
   setTimeout(loadNotifications, 2500);
+  setTimeout(loadOverviewWidgets, 1000);
 });
+
+// ═══ OVERVIEW WIDGETS ═══
+
+async function loadOverviewWidgets() {
+  await Promise.all([
+    loadOverviewSignals(),
+    loadOverviewVision(),
+    loadOverviewHealth(),
+    startTickerPolling(),
+  ]);
+}
+
+// ── LIVE TICKER ──
+const _tickerSyms = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+const _tickerPrev = {};
+let _tickerInterval = null;
+
+async function fetchTickerPrices() {
+  try {
+    const syms = _tickerSyms.map(s => `"${s}"`).join(',');
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=[${syms}]`);
+    if (!res.ok) return;
+    const data = await res.json();
+    data.forEach(d => {
+      const sym = d.symbol;
+      const price = parseFloat(d.lastPrice);
+      const chgPct = parseFloat(d.priceChangePercent);
+      const prev = _tickerPrev[sym];
+
+      const priceEl = document.getElementById(`tp-${sym}`);
+      const chgEl   = document.getElementById(`tc-${sym}`);
+      const card    = document.getElementById(`ticker-${sym}`);
+      if (!priceEl || !card) return;
+
+      // Flash animation on price change
+      if (prev !== undefined) {
+        card.classList.remove('flash-up', 'flash-down');
+        void card.offsetWidth; // reflow
+        if (price > prev) card.classList.add('flash-up');
+        else if (price < prev) card.classList.add('flash-down');
+        setTimeout(() => card.classList.remove('flash-up', 'flash-down'), 600);
+      }
+      _tickerPrev[sym] = price;
+
+      const fmt = price > 1000 ? price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                               : price.toFixed(4);
+      priceEl.textContent = '$' + fmt;
+
+      const sign = chgPct >= 0 ? '+' : '';
+      chgEl.textContent = `${sign}${chgPct.toFixed(2)}%`;
+      chgEl.className = `ticker-chg ${chgPct >= 0 ? 'up' : 'down'}`;
+    });
+
+    // Also update header live price with BTC
+    const btc = data.find(d => d.symbol === 'BTCUSDT');
+    if (btc) {
+      const lp = document.getElementById('livePrice');
+      const lc = document.getElementById('liveChange');
+      if (lp) lp.textContent = '$' + parseFloat(btc.lastPrice).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      if (lc) {
+        const chg = parseFloat(btc.priceChangePercent);
+        lc.textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`;
+        lc.style.color = chg >= 0 ? 'var(--buy)' : 'var(--sell)';
+      }
+    }
+  } catch (e) {
+    // Binance unreachable — fallback silently
+  }
+}
+
+function startTickerPolling() {
+  fetchTickerPrices();
+  if (_tickerInterval) clearInterval(_tickerInterval);
+  _tickerInterval = setInterval(fetchTickerPrices, 15000);
+}
+
+// ── RECENT SIGNALS (Overview) ──
+async function loadOverviewSignals() {
+  const el = document.getElementById('overviewSignals');
+  if (!el) return;
+  const data = await apiFetch('/trades?limit=8');
+  if (!data || !data.trades || data.trades.length === 0) {
+    el.innerHTML = '<p class="muted-label" style="padding:12px">Chưa có tín hiệu nào</p>';
+    return;
+  }
+  el.innerHTML = data.trades.map(t => {
+    const side = (t.side || 'INFO').toUpperCase();
+    const dotClass = side === 'BUY' ? 'buy' : side === 'SELL' ? 'sell' : 'info';
+    const sym = t.symbol || '—';
+    const msg = t.signal_action === 'alert'
+      ? `Webhook alert @ ${t.executed_price || '—'}`
+      : `${side} @ ${t.executed_price || '—'} | ${(t.status || '').toUpperCase()}`;
+    const ts = (t.created_at || '').slice(11, 16);
+    return `<div class="signal-row">
+      <span class="signal-dot ${dotClass}"></span>
+      <span class="signal-sym">${sym}</span>
+      <span class="signal-msg">${msg}</span>
+      <span class="signal-ts">${ts}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── LAST VISION (Overview) ──
+async function loadOverviewVision() {
+  const el = document.getElementById('overviewVision');
+  if (!el) return;
+  const data = await apiFetch('/api/vision/history?limit=1');
+  if (!data || !data.items || data.items.length === 0) {
+    el.innerHTML = `<div class="empty-state" style="padding:24px">
+      <div class="icon">👁</div><h3>No analysis yet</h3><p>Capture a chart to start</p>
+    </div>`;
+    return;
+  }
+  const v = data.items[0];
+  const verdictClass = (v.verdict || '').includes('STRONG') ? 'verdict-buy'
+    : (v.verdict || '').includes('AVOID') ? 'verdict-sell' : 'verdict-hold';
+  const conf = v.confidence || 0;
+  const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--warn)' : 'var(--sell)';
+
+  el.innerHTML = `<div class="vision-mini">
+    ${v.has_screenshot
+      ? `<img class="vision-mini-img" src="${v.screenshot_url}?t=${Date.now()}" alt="Chart"
+             onerror="this.style.display='none'">`
+      : ''}
+    <div class="vision-mini-meta">
+      <span class="vision-mini-sym">${v.symbol || '—'}</span>
+      <span class="vision-mini-conf" style="color:${confColor}">Confidence: ${conf}/10</span>
+      <span class="vision-mini-verdict ${verdictClass}">${v.verdict || '—'}</span>
+      <span style="font-size:0.72rem;color:var(--text-muted)">${(v.created_at || '').slice(0,16)}</span>
+    </div>
+  </div>`;
+}
+
+// ── SYSTEM HEALTH (Overview) ──
+async function loadOverviewHealth() {
+  const setDot = (id, state) => {
+    const el = document.getElementById(id);
+    if (el) el.className = `health-dot ${state}`;
+  };
+  // Server always OK if we got here
+  setDot('hd-server', 'ok');
+
+  try {
+    const status = await apiFetch('/api/system/status');
+    if (status) {
+      setDot('hd-mcp',      status.mcp?.connected ? 'ok' : 'err');
+      setDot('hd-telegram', status.telegram?.running ? 'ok' : 'warn');
+      setDot('hd-binance',  status.binance?.connected ? 'ok' : 'warn');
+    }
+  } catch(e) {
+    setDot('hd-mcp', 'err');
+    setDot('hd-telegram', 'err');
+    setDot('hd-binance', 'err');
+  }
+}
+
+// ── EQUITY RANGE ──
+function setEquityRange(range, btn) {
+  document.querySelectorAll('.eq-range-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  // TODO: filter equityChart data by range when trade history supports date filter
+  // For now just show toast
+  showToast(`Equity range: ${range}`, 'info');
+}
+
