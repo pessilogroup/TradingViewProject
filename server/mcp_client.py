@@ -9,7 +9,7 @@ import base64
 import logging
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import config
 
@@ -175,38 +175,99 @@ class MCPClient:
 
     # ── Screenshot ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _crop_chart_area(img_path: Path, save_path: Path) -> bool:
+        """
+        Crop TradingView screenshot to chart-only area using Pillow.
+        Removes: top toolbar (~60px), left sidebar (~60px),
+                 right side panel (~280px), bottom bar (~30px).
+        Returns True if crop succeeded.
+        """
+        try:
+            from PIL import Image
+            img = Image.open(img_path)
+            w, h = img.size
+
+            # TradingView layout crop offsets (% based for resolution-independence)
+            top    = int(h * 0.07)   # ~60px on 1080p — toolbar
+            left   = int(w * 0.045)  # ~60px — symbol sidebar
+            right  = int(w * 0.21)   # ~280px — right panel (watchlist/indicators)
+            bottom = int(h * 0.04)   # ~30px — bottom bar
+
+            box = (left, top, w - right, h - bottom)
+            cropped = img.crop(box)
+
+            # Upscale for sharpness (2x) if image is small
+            if cropped.width < 800:
+                cropped = cropped.resize((cropped.width * 2, cropped.height * 2), Image.LANCZOS)
+
+            cropped.save(save_path, format="PNG", optimize=False)
+            logger.info(f"Cropped chart: {img.size} -> {cropped.size} saved to {save_path.name}")
+            return True
+        except ImportError:
+            logger.warning("Pillow not available — using full screenshot (install: pip install Pillow)")
+            return False
+        except Exception as e:
+            logger.warning(f"Crop failed: {e}")
+            return False
+
     async def capture_screenshot(
         self,
         symbol: str = "active",
         timeframe: str = "D",
         region: str = "chart",
         save_path: Optional[Path] = None,
-        active_only: bool = False
+        active_only: bool = False,
+        crop: bool = True,
     ) -> Optional[Path]:
         """
-        Capture chart screenshot.
+        Capture chart screenshot, then auto-crop to chart area.
         Returns path to saved PNG file, or None on failure.
         """
         try:
             if not active_only:
                 if symbol != "active": await self._run("symbol", symbol)
                 if timeframe != "active": await self._run("timeframe", timeframe)
-            raw = await self._run("screenshot", "-r", region, timeout=20)
+
+            # Try screenshot with region first, fall back without
+            try:
+                raw = await self._run("screenshot", "-r", region, timeout=20)
+            except Exception:
+                raw = await self._run("screenshot", timeout=20)
+
+            if save_path is None:
+                save_path = Path(__file__).parent / "screenshots" / f"{symbol}_{timeframe}.png"
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            raw_path: Optional[Path] = None
 
             # MCP returns base64 or file path
             if "base64" in raw:
                 img_data = base64.b64decode(raw["base64"])
-                if save_path is None:
-                    save_path = Path(__file__).parent / "screenshots" / f"{symbol}_{timeframe}.png"
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                save_path.write_bytes(img_data)
-                return save_path
+                raw_path = save_path.parent / f"_raw_{save_path.name}"
+                raw_path.write_bytes(img_data)
+            elif "file_path" in raw:
+                raw_path = Path(raw["file_path"])
+            elif "path" in raw:
+                raw_path = Path(raw["path"])
 
-            if "file_path" in raw:
-                return Path(raw["file_path"])
-                
-            if "path" in raw:
-                return Path(raw["path"])
+            if raw_path and raw_path.exists():
+                if crop and region == "chart":
+                    # Auto-crop to remove TradingView UI chrome
+                    cropped = self._crop_chart_area(raw_path, save_path)
+                    if not cropped:
+                        # Fallback: just copy raw as-is
+                        import shutil
+                        shutil.copy2(raw_path, save_path)
+                else:
+                    import shutil
+                    shutil.copy2(raw_path, save_path)
+
+                # Clean up temp raw file
+                if raw_path != save_path and raw_path.name.startswith("_raw_"):
+                    raw_path.unlink(missing_ok=True)
+
+                return save_path
 
         except Exception as e:
             logger.warning(f"Screenshot failed for {symbol}: {e}")

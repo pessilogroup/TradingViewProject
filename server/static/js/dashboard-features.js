@@ -179,11 +179,17 @@ async function triggerVisionCapture() {
   }
 }
 
-// ═══ ANALYSIS TAB — USE /api/briefs ═══
+// ═══ ANALYSIS TAB — USE /api/vision/history + /api/briefs ═══
 async function loadBriefs() {
   const el = document.getElementById('briefContent');
   if (!el) return;
   el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  await Promise.all([loadVisionHistory(), loadLatestBriefText()]);
+}
+
+async function loadLatestBriefText() {
+  const el = document.getElementById('briefContent');
+  if (!el) return;
   const data = await apiFetch('/api/briefs?limit=1');
   if (!data || !data.briefs || data.briefs.length === 0) {
     el.innerHTML = '<div class="empty-state"><div class="icon">🌅</div><h3>Chưa có brief</h3><p>Click "Morning Brief" để tạo</p></div>';
@@ -195,6 +201,55 @@ async function loadBriefs() {
     <div style="white-space:pre-wrap;line-height:1.7;font-size:0.85rem">${b.brief_text || b.ai_analysis || 'No content'}</div>
   `;
 }
+
+async function loadVisionHistory() {
+  const container = document.getElementById('visionHistory');
+  if (!container) return;
+  container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  const data = await apiFetch('/api/vision/history?limit=10');
+  if (!data || !data.items || data.items.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="icon">👁</div><h3>Chưa có phân tích</h3><p>Dùng "Capture Chart" để chụp + phân tích</p></div>';
+    return;
+  }
+
+  container.innerHTML = data.items.map(v => {
+    const srcBadge = v.source === 'stealth'
+      ? '<span class="notif-tag tag-webhook" style="font-size:0.7rem">STEALTH</span>'
+      : '<span class="notif-tag tag-brief" style="font-size:0.7rem">BRIEF</span>';
+    const verdictColor = (v.verdict || '').includes('STRONG') ? 'var(--buy)'
+      : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
+    const conf = v.confidence || 0;
+    const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--warn)' : 'var(--sell)';
+    const patterns = (v.patterns || []).join(', ') || '—';
+
+    const imgSection = v.has_screenshot
+      ? `<div style="margin:12px 0">
+           <img src="${v.screenshot_url}?t=${Date.now()}"
+                alt="Chart ${v.symbol}"
+                style="width:100%;max-height:320px;object-fit:contain;border-radius:8px;border:1px solid var(--border);cursor:pointer"
+                onclick="this.style.maxHeight=this.style.maxHeight==='none'?'320px':'none'"
+                onerror="this.style.display='none'"/>
+         </div>`
+      : `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:0.82rem">📷 Không có ảnh chart</div>`;
+
+    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <strong style="font-size:1rem">${v.symbol}</strong>
+          ${srcBadge}
+          <span style="color:${confColor};font-family:var(--mono);font-size:0.85rem">👁 ${conf}/10</span>
+        </div>
+        <span style="font-size:0.75rem;color:var(--text-muted)">${v.created_at || '—'}</span>
+      </div>
+      ${imgSection}
+      <div style="font-size:0.8rem;color:${verdictColor};font-weight:600;margin-bottom:8px">${v.verdict || ''}</div>
+      <div style="font-size:0.78rem;color:var(--text-sub);margin-bottom:6px">🔍 Patterns: ${patterns}</div>
+      <div style="font-size:0.78rem;line-height:1.6;color:var(--text-primary);white-space:pre-wrap;max-height:180px;overflow-y:auto">${v.ai_analysis || 'Không có phân tích'}</div>
+    </div>`;
+  }).join('');
+}
+
 
 async function submitRagQuery() {
   const q = document.getElementById('ragQuery')?.value.trim();

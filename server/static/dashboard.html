@@ -279,21 +279,21 @@
         <option value="BTCUSDT">BTCUSDT</option>
       </select>
       <button class="qbtn qbtn-vision" onclick="triggerVisionCapture()">👁 Stealth Capture + Analyze</button>
-      <button class="qbtn qbtn-brief" onclick="loadLatestBrief()">📄 Latest Brief</button>
+      <button class="qbtn qbtn-brief" onclick="loadBriefs()">🔄 Refresh</button>
     </div>
 
     <div class="analysis-grid">
-      <!-- Latest AI Analysis -->
+      <!-- Vision History (main column) -->
       <section class="glass-section analysis-main">
         <div class="section-header">
-          <div class="section-title">🧠 AI Behavioral Analysis</div>
-          <span id="analysisTime" class="muted-label"></span>
+          <div class="section-title">👁 Vision Analysis History</div>
+          <span class="muted-label">Stealth Captures + Morning Briefs</span>
         </div>
-        <div id="analysisResult" class="analysis-result">
+        <div id="visionHistory" class="vision-history-list">
           <div class="empty-state">
-            <div class="icon">🧠</div>
+            <div class="icon">👁</div>
             <h3>Chưa có phân tích</h3>
-            <p>Nhấn "Stealth Capture + Analyze" để chụp chart TradingView và gửi cho AI phân tích.</p>
+            <p>Nhấn "Stealth Capture + Analyze" để chụp chart và phân tích AI.</p>
           </div>
         </div>
       </section>
@@ -323,6 +323,7 @@
       <div id="ragResults" class="rag-results"></div>
     </section>
   </div>
+
 
   <!-- ═══ TAB: SCANNER ═══ -->
   <div id="tab-scanner" class="tab-panel">

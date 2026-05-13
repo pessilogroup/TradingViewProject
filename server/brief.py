@@ -136,8 +136,17 @@ async def generate_morning_brief() -> Optional[dict]:
 
     # 4b. AI Vision analysis on screenshot (P7)
     vision_result = None
-    if screenshot_path and screenshot_path.exists() and config.ANTHROPIC_API_KEY:
-        logger.info(f"[Brief] Running AI Vision analysis on {screenshot_path.name}")
+    # Check if ANY AI vision provider is available (Gemini or Anthropic)
+    _has_vision = (
+        (getattr(config, "AI_PROVIDER", "anthropic").lower() == "gemini" and
+         (getattr(config, "GEMINI_API_KEY", None) or getattr(config, "GCP_PROJECT_ID", None)))
+        or
+        (getattr(config, "AI_PROVIDER", "anthropic").lower() == "anthropic" and
+         getattr(config, "ANTHROPIC_API_KEY", None) and
+         not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx"))
+    )
+    if screenshot_path and screenshot_path.exists() and _has_vision:
+        logger.info(f"[Brief] Running AI Vision analysis ({config.AI_PROVIDER}) on {screenshot_path.name}")
         try:
             # Prepare scan result dict for combined scoring
             top_scan_dict = None
@@ -164,6 +173,8 @@ async def generate_morning_brief() -> Optional[dict]:
                 logger.warning(f"[Brief] Vision analysis error: {vision_result.get('error')}")
         except Exception as e:
             logger.warning(f"[Brief] Vision analysis failed: {e}")
+    elif screenshot_path and not _has_vision:
+        logger.warning("[Brief] Vision skipped — no AI provider configured (check GEMINI_API_KEY or ANTHROPIC_API_KEY)")
 
     # 5. RAG + Claude analysis
     ai_analysis = ""

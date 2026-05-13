@@ -545,18 +545,25 @@ async def process_alert_stealth_capture(
             await notifier.notify_all(f"⚠️ **Stealth Capture:** TradingView MCP chưa kết nối.")
             return
 
+        # ── Screenshot với tên file cụ thể để truy vết ──────────────────
+        from datetime import datetime as _dt
+        ts_str = _dt.now().strftime("%Y%m%d_%H%M%S")
+        save_path = Path(__file__).parent / "screenshots" / f"stealth_{symbol}_{ts_str}.png"
+
         screenshot_path = await mcp.capture_screenshot(
             symbol="active",
             timeframe="active",
             region="chart",
-            active_only=True
+            save_path=save_path,
+            active_only=True,
+            crop=True,  # Crop chart area only
         )
 
-        if not screenshot_path:
+        if not screenshot_path or not Path(screenshot_path).exists():
             await notifier.notify_all(f"⚠️ **Stealth Capture:** Lỗi chụp ảnh biểu đồ.")
             return
 
-        # Gọi Vision AI
+        # ── Vision AI Analysis ───────────────────────────────────────────
         result = await vision_module.analyze_chart_vision(
             image_path=Path(screenshot_path),
             symbol=symbol,
@@ -569,22 +576,47 @@ async def process_alert_stealth_capture(
         analysis_text = result.get("analysis", "")
         confidence = result.get("confidence", 0)
 
+        # ── Persist Vision Result to DB ──────────────────────────────────
+        import json as _json
+        try:
+            await database.insert_brief(
+                symbols_scanned=1,
+                scan_data=_json.dumps([{"symbol": symbol, "source": "stealth_capture"}]),
+                ai_analysis=analysis_text,
+                vision_data=_json.dumps(result),
+                screenshot=str(screenshot_path),
+                brief_text=f"[Stealth Capture] {symbol} @ {ts_str}\n\n{analysis_text}",
+                success=1,
+            )
+            log.info(f"Stealth capture vision result saved to DB for {symbol}")
+        except Exception as db_err:
+            log.warning(f"Failed to persist stealth capture to DB: {db_err}")
+
         # Parse SL & TP bằng Regex
         sl_match = re.search(r"Stop\s*Loss:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
         tp_match = re.search(r"Take\s*Profit:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
-        
         sl_val = sl_match.group(1) if sl_match else ""
         tp_val = tp_match.group(1) if tp_match else ""
 
-        # Format thông báo
+        # ── Format & Send Telegram (photo + caption) ─────────────────────
         formatted_vision = vision_module.format_vision_telegram(result)
-        msg = f"🥷 **STEALTH CAPTURE HOÀN TẤT** 🥷\n\n{formatted_vision}"
+        caption = f"🥷 **STEALTH CAPTURE** — `{symbol}`\n\n{formatted_vision}"
 
         if confidence >= 7:
-            msg += f"\n\n⚡ Điểm số đạt chuẩn (>=7). Tiến hành uỷ quyền đặt lệnh..."
-            await notifier.notify_all(msg)
-            
-            # Thực thi giao dịch
+            caption += f"\n\n⚡ Điểm đủ chuẩn (≥7). Tiến hành đặt lệnh..."
+
+        # Gửi ảnh chart kèm phân tích
+        try:
+            from notifier import send_telegram_photo as _send_photo
+            import asyncio as _aio
+            await _aio.to_thread(_send_photo, Path(screenshot_path), caption=caption[:1024])
+            if len(caption) > 1024:
+                await notifier.notify_all(caption)
+        except Exception as tg_err:
+            log.warning(f"Photo send failed, falling back to text: {tg_err}")
+            await notifier.notify_all(caption)
+
+        if confidence >= 7:
             await execute_trade_and_notify(
                 signal_id=signal_id,
                 action="buy",
@@ -597,12 +629,14 @@ async def process_alert_stealth_capture(
                 combined_score=result.get("combined_score"),
             )
         else:
-            msg += f"\n\n🛑 Lệnh bị từ chối do điểm số ({confidence}/10) không đủ chuẩn SEPA."
-            await notifier.notify_all(msg)
+            await notifier.notify_all(
+                f"🛑 Lệnh `{symbol}` bị từ chối — điểm ({confidence}/10) không đủ chuẩn SEPA."
+            )
 
     except Exception as e:
         log.error(f"Stealth capture process error: {e}", exc_info=True)
         await notifier.notify_all(f"❌ **Stealth Capture Failed:** {str(e)}")
+
 
 
 # ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION (Sprint 7.2) ══
@@ -800,6 +834,59 @@ async def get_brief_detail_endpoint(brief_id: int):
     if brief is None:
         raise HTTPException(status_code=404, detail=f"Brief #{brief_id} not found")
     return brief
+
+
+@app.get("/api/vision/history")
+async def get_vision_history(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """
+    List vision analysis history (Stealth Captures + Morning Briefs with vision data).
+    Returns items with screenshot path, ai_analysis, vision_data JSON.
+    """
+    import json as _json
+    data = await database.get_briefs(limit=limit, offset=offset)
+    items = data.get("briefs", [])
+
+    result = []
+    for b in items:
+        vision_data = {}
+        if b.get("vision_data"):
+            try:
+                vision_data = _json.loads(b["vision_data"])
+            except Exception:
+                pass
+
+        screenshot = b.get("screenshot", "")
+        # Determine if screenshot is accessible (serve from /api/vision/screenshot/<id>)
+        result.append({
+            "id": b["id"],
+            "created_at": b["created_at"],
+            "symbol": vision_data.get("symbol", "—"),
+            "ai_analysis": b.get("ai_analysis", ""),
+            "confidence": vision_data.get("confidence", 0),
+            "patterns": vision_data.get("patterns", []),
+            "combined_score": vision_data.get("combined_score", "—"),
+            "verdict": vision_data.get("verdict", ""),
+            "has_screenshot": bool(screenshot),
+            "screenshot_url": f"/api/vision/screenshot/{b['id']}" if screenshot else None,
+            "source": "stealth" if "[Stealth Capture]" in (b.get("brief_text") or "") else "morning_brief",
+        })
+    return {"items": result, "total": data.get("total", 0)}
+
+
+@app.get("/api/vision/screenshot/{brief_id}")
+async def get_vision_screenshot(brief_id: int):
+    """Serve screenshot image for a vision analysis entry."""
+    from fastapi.responses import FileResponse
+    brief = await database.get_brief_by_id(brief_id)
+    if not brief or not brief.get("screenshot"):
+        raise HTTPException(status_code=404, detail="No screenshot for this brief")
+    img_path = Path(brief["screenshot"])
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail=f"Screenshot file not found: {img_path}")
+    return FileResponse(img_path, media_type="image/png")
 
 
 # ═══ SYSTEM STATUS (P7.6) ════════════════════════════════════════════
