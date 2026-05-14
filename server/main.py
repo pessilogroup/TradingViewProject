@@ -26,6 +26,13 @@ import telegram_bot as tg_bot_module
 import vision as vision_module
 import binance_client as binance_module
 
+# ── Phase 4: EventBus imports ────────────────────────────────────────────────
+from core.event_bus import bus as _event_bus
+from core.events import SignalReceived
+
+# ── Phase 5: WebhookGateway (Component 8/8) ──────────────────────────────────
+from gateway.webhook import router as _webhook_router
+
 
 # ── Fix Windows cp1252 UnicodeEncodeError for emoji in log messages ──────────
 # Guard: Only replace stdout/stderr when NOT running under pytest capture.
@@ -56,17 +63,23 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# ── Stealth Capture Cooldown ──
-import time
-LAST_CAPTURE_TIME = {}
-CAPTURE_COOLDOWN_SEC = 300  # Giới hạn 5 phút mỗi mã (chống spam Webhook)
-_WEBHOOK_RATE_LIMITS = {}
+# ── Rate limiting state moved to gateway.webhook (Phase 5) ──
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Khoi tao database, RAG Vector DB, MCP client va Scheduler khi server start."""
     await database.init_db()
     log.info("Database ready.")
+
+    # ── Phase 4: Register EventBus components (triggers @bus.on() decorators) ──
+    import processor.signal_processor  # noqa: F401 — @bus.on(SignalReceived)
+    import engine.trade_engine          # noqa: F401 — @bus.on(SignalValidated)
+    import analyzer.ai_analyzer         # noqa: F401 — @bus.on(AlertTriggered)
+    import hub.notification_hub          # noqa: F401 — @bus.on(SignalRejected)
+    log.info(
+        f"EventBus: {_event_bus.metrics['total_handlers']} handlers registered "
+        f"across {_event_bus.metrics['registered_topics']} topics."
+    )
 
     # ── RAG ───────────────────────────────────────────────────
     if config.RAG_ENABLED:
@@ -116,6 +129,9 @@ app = FastAPI(
     version="7.6",
     lifespan=lifespan,
 )
+
+# ── WebhookGateway router (Component 8/8) ────────────────────────────────────
+app.include_router(_webhook_router)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -390,414 +406,11 @@ async def rag_status_endpoint():
     }
 
 
-# ═══ WEBHOOK ENDPOINT ═════════════════════════════════════════
-@app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    # Xac thuc bao mat
-    # BUG-06 fix: Use .get() instead of .pop() — do NOT mutate payload before the
-    # empty-payload check below. Removing the only key ("secret") would leave
-    # payload={} and trigger a misleading 400 Empty payload instead of a
-    # proper 400 for missing signal fields.
-    secret = (
-        request.headers.get("X-TV-Secret")
-        or request.query_params.get("secret")
-        or payload.get("secret", None)
-        or ""
-    )
-    # Strip secret from payload after auth so it isn't stored in DB
-    payload.pop("secret", None)
-
-    # Allow dashboard users (authenticated via DASHBOARD_TOKEN) to bypass webhook secret
-    dashboard_auth = request.headers.get("Authorization", "")
-    is_dashboard_user = (
-        config.DASHBOARD_TOKEN
-        and dashboard_auth.startswith("Bearer ")
-        and secrets.compare_digest(dashboard_auth[7:], config.DASHBOARD_TOKEN)
-    )
-
-    if not is_dashboard_user and secret != config.WEBHOOK_SECRET:
-        log.warning("Unauthorized webhook attempt (secret mismatch)")
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    if not payload:
-        raise HTTPException(status_code=400, detail="Empty payload")
-
-    action = (payload.get("action") or payload.get("side", "")).lower()
-    symbol = payload.get("symbol", "")
-    price = payload.get("price", "")
-    ts = payload.get("time", "")
-    quote_qty = payload.get("quoteQty", payload.get("size", 10))
-    interval = str(payload.get("interval", "")).strip().lower()
-    
-    sl_str = payload.get("sl", "")
-    tp_str = payload.get("tp", "")
-
-    # Source IP
-    source_ip = request.client.host
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        source_ip = forwarded.split(",")[0].strip()
-
-    # TVP-004: Basic Rate Limiting
-    now = time.time()
-    count, first_req = _WEBHOOK_RATE_LIMITS.get(source_ip, (0, now))
-    if now - first_req < 60:
-        if count >= 15:
-            log.warning(f"Rate limit exceeded for {source_ip}")
-            raise HTTPException(status_code=429, detail="Too Many Requests")
-        _WEBHOOK_RATE_LIMITS[source_ip] = (count + 1, first_req)
-    else:
-        _WEBHOOK_RATE_LIMITS[source_ip] = (1, now)
-
-    # TVP-001 & TVP-002: Safe parsing and Max limits
-    try:
-        price_float = float(str(price).replace(',', '')) if price else None
-    except (ValueError, TypeError):
-        price_float = None
-
-    try:
-        quote_qty_val = float(quote_qty) if quote_qty else 10.0
-        quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
-    except (ValueError, TypeError):
-        quote_qty_val = 10.0
-
-    # Luu signal vao database
-    signal_id = await database.insert_signal(
-        symbol=symbol,
-        action=action,
-        price=price_float,
-        quote_qty=quote_qty_val,
-        source_ip=source_ip,
-        payload=payload,
-    )
-
-    log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty_val}  time={ts}")
-
-    # ── RAG Analysis (chạy song song với trade execution) ─────────────
-    rag_advice = ""
-    if config.RAG_ENABLED and rag._collection is not None:
-        try:
-            query = rag.build_rag_query(symbol, action, payload)
-            chunks = rag.query_knowledge(query, n_results=config.RAG_TOP_K)
-            if chunks:
-                rag_advice = await rag.generate_trading_advice(
-                    symbol=symbol,
-                    action=action,
-                    price=price,
-                    payload=payload,
-                    rag_chunks=chunks,
-                )
-        except Exception as e:
-            log.error(f"RAG analysis error in webhook: {e}")
-            rag_advice = ""
-
-    # ── Autonomous AI Analyst (Stealth Capture) cho Action = "alert" ──────────
-    if action == "alert" and config.MCP_ENABLED:
-        now = datetime.now(timezone.utc).timestamp()
-        last_time = LAST_CAPTURE_TIME.get(symbol, 0)
-        
-        if now - last_time < CAPTURE_COOLDOWN_SEC:
-            log.warning(f"Cooldown active for {symbol}. Skipping Stealth Capture.")
-        else:
-            LAST_CAPTURE_TIME[symbol] = now
-            background_tasks.add_task(
-                process_alert_stealth_capture,
-                signal_id=signal_id,
-                symbol=symbol,
-                price=price,
-                quote_qty=quote_qty_val,
-                rag_advice=rag_advice
-            )
-            return {"received": True, "signal_id": signal_id, "status": "stealth_capture_async"}
-
-    # ── Đặt lệnh trực tiếp nếu Action = "buy" / "sell" (Pine Script cũ) ───────
-    if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
-        # --- TIMEFRAME FILTER (CIRCUIT BREAKER) ---
-        valid_intervals = ["60", "1h", "60m"]
-        if interval not in valid_intervals:
-            log.warning(f"Rejecting trade for {symbol}: invalid interval '{interval}'. Only 1h/60 is allowed.")
-            await database.update_signal_status(signal_id, 2) # 2 = FAILED/REJECTED
-            msg = (
-                f"⛔ **Lệnh Bị Từ Chối (Timeframe Filter)**\n"
-                f"- Mã: `{symbol}`\n"
-                f"- Hành động: `{action.upper()}`\n"
-                f"- Lỗi: `Phát hiện khung thời gian '{interval}'. Chiến lược MIS v1 chỉ được phép chạy trên khung 1H (60).`\n"
-                f"- Signal ID: `#{signal_id}`"
-            )
-            background_tasks.add_task(notifier.notify_all, msg)
-            return {"received": True, "signal_id": signal_id, "status": "rejected", "reason": "invalid_timeframe"}
-
-        background_tasks.add_task(
-            execute_trade_and_notify,
-            signal_id=signal_id,
-            action=action,
-            symbol=symbol,
-            price=price,
-            quote_qty=quote_qty_val,
-            sl=sl_str,
-            tp=tp_str,
-            rag_advice=rag_advice,
-        )
-        return {"received": True, "signal_id": signal_id, "status": "processing_async"}
-
-    # Bao cao ngay neu chi nhan tin hieu
-    await database.update_signal_status(signal_id, 1)
-
-    msg = (
-        f"📡 **Tín hiệu TradingView**\n"
-        f"- Mã: `{symbol}`\n"
-        f"- Hành động: `{action.upper()}`\n"
-        f"- Giá: `{price}`\n"
-        f"- Signal ID: `#{signal_id}`"
-    )
-
-    # Đính kèm phân tích RAG nếu có
-    if rag_advice:
-        msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
-
-    background_tasks.add_task(notifier.notify_all, msg)
-
-    return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
+# ═══ WEBHOOK ENDPOINT — moved to gateway/webhook.py (Phase 5) ═══════════════
+# Registered via app.include_router(_webhook_router) above.
+# See: server/gateway/webhook.py
 
 
-# ── STEALTH CAPTURE & AUTONOMOUS AI ANALYST ─────────────────────────
-import re
-
-async def process_alert_stealth_capture(
-    signal_id: int, symbol: str, price: str, quote_qty: float, rag_advice: str = ""
-):
-    """
-    Xử lý tín hiệu 'alert' từ Webhook:
-    1. Chụp màn hình TradingView ẩn danh (active_only).
-    2. Chạy Vision AI phân tích Hành vi + SL/TP.
-    3. Đặt lệnh nếu điểm >= 7.
-    """
-    log.info(f"Stealth capture triggered for {symbol}")
-    await notifier.notify_all(f"🤖 **Stealth Capture:** Đang chụp ảnh và phân tích `{symbol}`...")
-
-    try:
-        from mcp_client import get_mcp_client
-        mcp = get_mcp_client()
-        health = await mcp.health_check()
-        if not health.get("connected"):
-            await notifier.notify_all(f"⚠️ **Stealth Capture:** TradingView MCP chưa kết nối.")
-            return
-
-        # ── Screenshot với tên file cụ thể để truy vết ──────────────────
-        from datetime import datetime as _dt
-        ts_str = _dt.now().strftime("%Y%m%d_%H%M%S")
-        safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
-        save_path = Path(__file__).parent / "screenshots" / f"stealth_{safe_symbol}_{ts_str}.png"
-
-        screenshot_path = await mcp.capture_screenshot(
-            symbol="active",
-            timeframe="active",
-            region="chart",
-            save_path=save_path,
-            active_only=True,
-            crop=True,  # Crop chart area only
-        )
-
-        if not screenshot_path or not Path(screenshot_path).exists():
-            await notifier.notify_all(f"⚠️ **Stealth Capture:** Lỗi chụp ảnh biểu đồ.")
-            return
-
-        # ── Vision AI Analysis ───────────────────────────────────────────
-        result = await vision_module.analyze_chart_vision(
-            image_path=Path(screenshot_path),
-            symbol=symbol,
-        )
-
-        if result.get("error"):
-            await notifier.notify_all(f"❌ **Stealth Capture Error:** {result['error']}")
-            return
-
-        analysis_text = result.get("analysis", "")
-        confidence = result.get("confidence", 0)
-
-        # ── Persist Vision Result to DB ──────────────────────────────────
-        import json as _json
-        try:
-            await database.insert_brief(
-                symbols_scanned=1,
-                scan_data=_json.dumps([{"symbol": symbol, "source": "stealth_capture"}]),
-                ai_analysis=analysis_text,
-                vision_data=_json.dumps(result),
-                screenshot=str(screenshot_path),
-                brief_text=f"[Stealth Capture] {symbol} @ {ts_str}\n\n{analysis_text}",
-                success=1,
-            )
-            log.info(f"Stealth capture vision result saved to DB for {symbol}")
-        except Exception as db_err:
-            log.warning(f"Failed to persist stealth capture to DB: {db_err}")
-
-        # Parse SL & TP bằng Regex
-        sl_match = re.search(r"Stop\s*Loss:.*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
-        tp_match = re.search(r"Take\s*Profit:.*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
-        sl_val = sl_match.group(1).replace(",", "") if sl_match else ""
-        tp_val = tp_match.group(1).replace(",", "") if tp_match else ""
-
-        # ── Format & Send Telegram (photo + caption) ─────────────────────
-        formatted_vision = vision_module.format_vision_telegram(result)
-        caption = f"🥷 **STEALTH CAPTURE** — `{symbol}`\n\n{formatted_vision}"
-
-        if confidence >= 7:
-            caption += f"\n\n⚡ Điểm đủ chuẩn (≥7). Tiến hành đặt lệnh..."
-
-        # Gửi ảnh chart kèm phân tích
-        try:
-            from notifier import send_telegram_photo as _send_photo
-            import asyncio as _aio
-            await _aio.to_thread(_send_photo, Path(screenshot_path), caption=caption[:1024])
-            if len(caption) > 1024:
-                await notifier.notify_all(caption)
-        except Exception as tg_err:
-            log.warning(f"Photo send failed, falling back to text: {tg_err}")
-            await notifier.notify_all(caption)
-
-        if confidence >= 7:
-            await execute_trade_and_notify(
-                signal_id=signal_id,
-                action="buy",
-                symbol=symbol,
-                price=price,
-                quote_qty=quote_qty,
-                sl=sl_val,
-                tp=tp_val,
-                rag_advice=rag_advice,
-                combined_score=result.get("combined_score"),
-            )
-        else:
-            await notifier.notify_all(
-                f"🛑 Lệnh `{symbol}` bị từ chối — điểm ({confidence}/10) không đủ chuẩn SEPA."
-            )
-
-    except Exception as e:
-        log.error(f"Stealth capture process error: {e}", exc_info=True)
-        await notifier.notify_all(f"❌ **Stealth Capture Failed:** {str(e)}")
-
-
-
-# ═══ BACKGROUND TRADE EXECUTION & NOTIFICATION (Sprint 7.2) ══
-async def execute_trade_and_notify(
-    signal_id: int, action: str, symbol: str, price: str, quote_qty: float,
-    sl: str = "", tp: str = "", rag_advice: str = "",
-    combined_score: str = None,
-):
-    """Smart order execution: MARKET entry + OCO exit with risk management."""
-    client = binance_module.get_client()
-    try:
-        entry_price = float(str(price).replace(',', '')) if price else 0.0
-    except (ValueError, TypeError):
-        entry_price = 0.0
-
-    try:
-        sl_price = float(str(sl).replace(',', '')) if sl else None
-    except (ValueError, TypeError):
-        sl_price = None
-
-    try:
-        tp_price = float(str(tp).replace(',', '')) if tp else None
-    except (ValueError, TypeError):
-        tp_price = None
-
-    try:
-        # Execute smart order (MARKET + OCO)
-        result = client.execute_smart_order(
-            symbol=symbol,
-            side=action.upper(),
-            entry_price=entry_price,
-            quote_qty=quote_qty if quote_qty else None,
-            sl_price=sl_price,
-            tp_price=tp_price,
-        )
-        # Await the coroutine
-        result = await result
-
-        if result.success:
-            entry = result.entry_order
-            order_id = str(entry.get("orderId", "N/A"))
-            order_status = entry.get("status", "FILLED")
-            exec_qty = float(entry.get("executedQty", 0))
-            cum_quote = float(entry.get("cummulativeQuoteQty", 0))
-            exec_price = cum_quote / exec_qty if exec_qty > 0 else None
-
-            order_type = "DRY_RUN" if result.dry_run else "OCO"
-            oco_id = None
-            if result.oco_order:
-                oco_id = str(result.oco_order.get("orderListId", ""))
-
-            trade_id = await database.insert_trade(
-                signal_id=signal_id,
-                symbol=symbol,
-                side=action.upper(),
-                order_id=order_id,
-                status=order_status,
-                requested_qty=quote_qty,
-                executed_qty=exec_qty,
-                executed_price=exec_price,
-                combined_score=combined_score,
-            )
-
-            # Update with OCO details
-            if result.risk:
-                await database.update_trade_oco(
-                    trade_id=trade_id,
-                    stop_loss_price=result.risk.stop_loss_price,
-                    take_profit_price=result.risk.take_profit_price,
-                    oco_order_id=oco_id,
-                    order_type=order_type,
-                )
-
-            await database.update_signal_status(signal_id, 1)
-
-            # Telegram notification
-            msg = binance_module.format_order_telegram(result)
-            if rag_advice:
-                msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
-
-            log.info(f"Smart Order Success: {order_id} (type={order_type})")
-            await notifier.notify_all(msg)
-
-        else:
-            raise Exception(result.error or "Smart order failed")
-
-    except Exception as e:
-        error_msg = str(e)
-        log.error(f"Trade Execution Failed: {error_msg}")
-
-        try:
-            req_qty = float(quote_qty) if quote_qty else 0.0
-        except (ValueError, TypeError):
-            req_qty = 0.0
-
-        await database.insert_trade(
-            signal_id=signal_id,
-            symbol=symbol,
-            side=action.upper(),
-            requested_qty=req_qty,
-            error_message=error_msg,
-            status="FAILED",
-            combined_score=combined_score,
-        )
-        await database.update_signal_status(signal_id, 2)
-
-        msg = (
-            f"❌ **Lỗi Đặt Lệnh Binance**\n"
-            f"- Mã: `{symbol}`\n"
-            f"- Lệnh: `{action.upper()}`\n"
-            f"- Chi tiết lỗi: `{error_msg}`\n"
-            f"- Signal ID: `#{signal_id}`"
-        )
-        await notifier.notify_all(msg)
-
-
-# ═══ TRADE HISTORY ENDPOINT ═══════════════════════════════════
 @app.get("/trades")
 async def get_trades_endpoint(
     symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),

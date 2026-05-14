@@ -1,0 +1,205 @@
+"""
+WebhookGateway — HTTP ingress for TradingView webhook signals.
+
+Component 8/8 in the Event-Driven architecture.
+
+Responsibilities:
+1. Parse JSON payload from TradingView
+2. Authenticate (secret check + dashboard bypass)
+3. Rate limiting (15 req/min per IP)
+4. Safe price/qty parsing (TVP-001, TVP-002)
+5. Insert signal to DB
+6. RAG analysis (if enabled)
+7. Dispatch via EventBus → SignalReceived
+
+Does NOT own:
+- IP whitelist middleware (stays in main.py, applies to all routes)
+- Dashboard auth middleware (stays in main.py, applies to all routes)
+- Trade execution (TradeEngine)
+- Vision analysis (AIAnalyzer)
+- Notifications (NotificationHub)
+"""
+import logging
+import time
+import secrets
+
+from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+
+import config
+import database
+import notifier
+import rag
+
+from core.event_bus import bus as _event_bus
+from core.events import SignalReceived
+
+log = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# ── Rate Limiting State ──────────────────────────────────────────────────────
+_WEBHOOK_RATE_LIMITS: dict = {}
+
+
+# ═══ WEBHOOK ENDPOINT ═════════════════════════════════════════════════════════
+@router.post("/webhook")
+async def webhook(request: Request, background_tasks: BackgroundTasks):
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Xac thuc bao mat
+    # BUG-06 fix: Use .get() instead of .pop() — do NOT mutate payload before the
+    # empty-payload check below. Removing the only key ("secret") would leave
+    # payload={} and trigger a misleading 400 Empty payload instead of a
+    # proper 400 for missing signal fields.
+    secret = (
+        request.headers.get("X-TV-Secret")
+        or request.query_params.get("secret")
+        or payload.get("secret", None)
+        or ""
+    )
+    # Strip secret from payload after auth so it isn't stored in DB
+    payload.pop("secret", None)
+
+    # Allow dashboard users (authenticated via DASHBOARD_TOKEN) to bypass webhook secret
+    dashboard_auth = request.headers.get("Authorization", "")
+    is_dashboard_user = (
+        config.DASHBOARD_TOKEN
+        and dashboard_auth.startswith("Bearer ")
+        and secrets.compare_digest(dashboard_auth[7:], config.DASHBOARD_TOKEN)
+    )
+
+    if not is_dashboard_user and secret != config.WEBHOOK_SECRET:
+        log.warning("Unauthorized webhook attempt (secret mismatch)")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty payload")
+
+    action = (payload.get("action") or payload.get("side", "")).lower()
+    symbol = payload.get("symbol", "")
+    price = payload.get("price", "")
+    ts = payload.get("time", "")
+    quote_qty = payload.get("quoteQty", payload.get("size", 10))
+    interval = str(payload.get("interval", "")).strip().lower()
+
+    sl_str = payload.get("sl", "")
+    tp_str = payload.get("tp", "")
+
+    # Source IP
+    source_ip = request.client.host
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        source_ip = forwarded.split(",")[0].strip()
+
+    # TVP-004: Basic Rate Limiting
+    now = time.time()
+    count, first_req = _WEBHOOK_RATE_LIMITS.get(source_ip, (0, now))
+    if now - first_req < 60:
+        if count >= 15:
+            log.warning(f"Rate limit exceeded for {source_ip}")
+            raise HTTPException(status_code=429, detail="Too Many Requests")
+        _WEBHOOK_RATE_LIMITS[source_ip] = (count + 1, first_req)
+    else:
+        _WEBHOOK_RATE_LIMITS[source_ip] = (1, now)
+
+    # TVP-001 & TVP-002: Safe parsing and Max limits
+    try:
+        price_float = float(str(price).replace(',', '')) if price else None
+    except (ValueError, TypeError):
+        price_float = None
+
+    try:
+        quote_qty_val = float(quote_qty) if quote_qty else 10.0
+        quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
+    except (ValueError, TypeError):
+        quote_qty_val = 10.0
+
+    # Luu signal vao database
+    signal_id = await database.insert_signal(
+        symbol=symbol,
+        action=action,
+        price=price_float,
+        quote_qty=quote_qty_val,
+        source_ip=source_ip,
+        payload=payload,
+    )
+
+    log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty_val}  time={ts}")
+
+    # ── RAG Analysis (chạy song song với trade execution) ─────────────
+    rag_advice = ""
+    if config.RAG_ENABLED and rag._collection is not None:
+        try:
+            query = rag.build_rag_query(symbol, action, payload)
+            chunks = rag.query_knowledge(query, n_results=config.RAG_TOP_K)
+            if chunks:
+                rag_advice = await rag.generate_trading_advice(
+                    symbol=symbol,
+                    action=action,
+                    price=price,
+                    payload=payload,
+                    rag_chunks=chunks,
+                )
+        except Exception as e:
+            log.error(f"RAG analysis error in webhook: {e}")
+            rag_advice = ""
+
+    # ══════════════════════════════════════════════════════════════════════
+    # EventBus Dispatch
+    # SignalReceived → SignalProcessor → (SignalValidated → TradeEngine)
+    #                                    (AlertTriggered → AIAnalyzer)
+    #                                    (SignalRejected → NotificationHub)
+    # ══════════════════════════════════════════════════════════════════════
+
+    if action == "alert" and config.MCP_ENABLED:
+        # Alert pathway — AIAnalyzer handles cooldown, capture, Vision AI
+        await _event_bus.emit_background(SignalReceived(
+            signal_id=signal_id,
+            symbol=symbol,
+            action=action,
+            price=price_float,
+            quote_qty=quote_qty_val,
+            interval=interval,
+            sl=sl_str,
+            tp=tp_str,
+            source_ip=source_ip,
+            rag_advice=rag_advice,
+        ))
+        return {"received": True, "signal_id": signal_id, "status": "stealth_capture_async"}
+
+    if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
+        # Trade pathway — SignalProcessor validates, TradeEngine executes
+        await _event_bus.emit_background(SignalReceived(
+            signal_id=signal_id,
+            symbol=symbol,
+            action=action,
+            price=price_float,
+            quote_qty=quote_qty_val,
+            interval=interval,
+            sl=sl_str,
+            tp=tp_str,
+            source_ip=source_ip,
+            rag_advice=rag_advice,
+        ))
+        return {"received": True, "signal_id": signal_id, "status": "processing_async"}
+
+    # ── Fallback: signal-only (no trade, no alert) ────────────────────
+    await database.update_signal_status(signal_id, 1)
+
+    msg = (
+        f"📡 **Tín hiệu TradingView**\n"
+        f"- Mã: `{symbol}`\n"
+        f"- Hành động: `{action.upper()}`\n"
+        f"- Giá: `{price}`\n"
+        f"- Signal ID: `#{signal_id}`"
+    )
+
+    if rag_advice:
+        msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
+
+    background_tasks.add_task(notifier.notify_all, msg)
+
+    return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}

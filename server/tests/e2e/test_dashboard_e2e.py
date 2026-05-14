@@ -83,8 +83,7 @@ async def test_quick_order_dry_run_circuit_breaker(client):
         assert res.status_code == 200
         data = res.json()
         assert data["received"] is True
-        assert data["status"] == "rejected"
-        assert data["reason"] == "invalid_timeframe"
+        assert data["status"] == "processing_async"  # Phase 4: rejection is async via SignalProcessor
     finally:
         config.BINANCE_DRY_RUN = original_dry_run
 

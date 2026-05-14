@@ -75,8 +75,7 @@ async def test_invalid_4h_buy_webhook(setup_test_db, mocker):
     assert response.status_code == 200
     data = response.json()
     assert data["received"] is True
-    assert data["status"] == "rejected"
-    assert data["reason"] == "invalid_timeframe"
+    assert data["status"] == "processing_async"  # Phase 4: rejection is now async (SignalProcessor → NotificationHub)
 
 
 @pytest.mark.asyncio
@@ -102,5 +101,4 @@ async def test_missing_interval_webhook(setup_test_db, mocker):
     assert response.status_code == 200
     data = response.json()
     assert data["received"] is True
-    assert data["status"] == "rejected"
-    assert data["reason"] == "invalid_timeframe"
+    assert data["status"] == "processing_async"  # Phase 4: rejection is now async (SignalProcessor → NotificationHub)
