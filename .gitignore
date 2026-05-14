@@ -28,3 +28,17 @@ server/.venv
 # Docker runtime
 .env
 .claude/worktrees/
+
+# Root-level runtime data (should never be committed)
+trades.db
+trades.log
+trace_out.txt
+test_out.txt
+test_script.py
+
+# Test temp / issue body files
+issue_*.md
+refactor_styles.py
+
+# Kiro IDE
+.kiro/

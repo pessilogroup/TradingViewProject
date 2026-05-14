@@ -12,7 +12,7 @@
 <body>
 
 <!-- LOGIN OVERLAY -->
-<div id="loginOverlay" class="login-overlay" style="display:none">
+<div id="loginOverlay" class="login-overlay d-none" >
   <div class="login-box">
     <div class="login-logo">⚡</div>
     <h2>Edge Node Access</h2>
@@ -27,7 +27,7 @@
 <div id="toastContainer" class="toast-container"></div>
 
 <!-- QUICK ORDER MODAL -->
-<div id="orderModal" class="modal-overlay" style="display:none">
+<div id="orderModal" class="modal-overlay d-none" >
   <div class="modal-box">
     <div class="modal-header">
       <span class="modal-title">⚡ Đặt Lệnh Nhanh</span>
@@ -36,7 +36,7 @@
     <div class="order-form">
       <div class="form-row">
         <label>Symbol</label>
-        <input id="orderSymbol" type="text" placeholder="BTCUSDT" class="form-input" style="text-transform:uppercase">
+        <input id="orderSymbol" type="text" placeholder="BTCUSDT" class="form-input text-uppercase" >
       </div>
       <div class="form-row">
         <label>Side</label>
@@ -70,7 +70,7 @@
 </div>
 
 <!-- ANALYSIS MODAL -->
-<div id="analysisModal" class="modal-overlay" style="display:none">
+<div id="analysisModal" class="modal-overlay d-none" >
   <div class="modal-box modal-wide">
     <div class="modal-header">
       <span class="modal-title">🧠 AI Vision Analysis</span>
@@ -187,7 +187,7 @@
         <section class="glass-section">
           <div class="section-header">
             <div class="section-title">📈 Equity Curve</div>
-            <div style="display:flex;gap:6px">
+            <div class="flex-gap-6" >
               <button class="eq-range-btn active" onclick="setEquityRange('7d',this)">7D</button>
               <button class="eq-range-btn" onclick="setEquityRange('30d',this)">30D</button>
               <button class="eq-range-btn" onclick="setEquityRange('all',this)">All</button>
@@ -202,7 +202,7 @@
             <div class="section-title">📋 Trade History</div>
             <span id="tradeCount" class="muted-label"></span>
           </div>
-          <div style="overflow-x:auto">
+          <div class="overflow-x-auto" >
             <table>
               <thead>
                 <tr>
@@ -251,7 +251,7 @@
         <section class="glass-section">
           <div class="section-header">
             <div class="section-title">🔔 Recent Signals</div>
-            <button class="qbtn qbtn-scan" style="padding:5px 12px;font-size:0.78rem" onclick="loadNotifications()">↻</button>
+            <button class="qbtn qbtn-scan btn-sm-1" onclick="loadNotifications()">↻</button>
           </div>
           <div id="overviewSignals" class="overview-signals-list">
             <div class="loading"><div class="spinner"></div></div>
@@ -262,10 +262,10 @@
         <section class="glass-section">
           <div class="section-header">
             <div class="section-title">🧠 Last AI Analysis</div>
-            <button class="qbtn qbtn-vision" style="padding:5px 12px;font-size:0.78rem" onclick="triggerVisionCapture()">+ New</button>
+            <button class="qbtn qbtn-vision btn-sm-1" onclick="triggerVisionCapture()">+ New</button>
           </div>
           <div id="overviewVision">
-            <div class="empty-state" style="padding:24px">
+            <div class="empty-state p-24" >
               <div class="icon">👁</div>
               <h3>No analysis yet</h3>
               <p>Capture a chart to start</p>
@@ -309,7 +309,7 @@
         <button class="vpill active" id="pill-v1" onclick="setIndVersion('v1')">Pine V1</button>
         <button class="vpill" id="pill-v2" onclick="setIndVersion('v2')">Pine V2</button>
       </div>
-      <select id="indSymbolSelect" class="form-input" style="width:160px" onchange="loadIndicators()">
+      <select id="indSymbolSelect" class="form-input w-160" onchange="loadIndicators()" title="Select Indicator Symbol">
         <option value="BTCUSDT">BTCUSDT</option>
       </select>
     </div>
@@ -376,7 +376,7 @@
             <div class="pine-chip">strategy_multi_indicator_v16</div>
           </div>
         </div>
-        <div id="pine-v2-group" class="pine-group" style="display:none">
+        <div id="pine-v2-group" class="pine-group d-none" >
           <div class="pine-group-label">V2 — Minervini Strategy V2</div>
           <div class="pine-scripts-row">
             <div class="pine-chip active">minervini_strategy</div>
@@ -389,15 +389,15 @@
   <!-- ═══ TAB: NOTIFICATIONS ═══ -->
   <div id="tab-notifications" class="tab-panel">
     <div class="notif-toolbar">
-      <select id="notifFilter" class="form-input" style="width:160px" onchange="filterNotifs()">
+      <select id="notifFilter" class="form-input w-160" onchange="filterNotifs()" title="Filter Notifications">
         <option value="all">Tất cả</option>
         <option value="WEBHOOK">Webhook Alert</option>
         <option value="TRADE">Lệnh khớp</option>
         <option value="VISION">Vision Capture</option>
         <option value="BRIEF">Morning Brief</option>
       </select>
-      <button class="qbtn qbtn-scan" style="padding:8px 16px" onclick="loadNotifications()">🔄 Refresh</button>
-      <button class="qbtn" style="padding:8px 16px;background:rgba(255,60,60,0.15);color:#ff6060" onclick="clearNotifs()">🗑 Clear All</button>
+      <button class="qbtn qbtn-scan btn-sm-3" onclick="loadNotifications()">🔄 Refresh</button>
+      <button class="qbtn btn-danger-soft" onclick="clearNotifs()">🗑 Clear All</button>
     </div>
     <div id="notifList" class="notif-list">
       <div class="loading"><div class="spinner"></div></div>
@@ -420,7 +420,7 @@
       <div class="cs-controls">
         <div class="cs-control-group">
           <label class="cs-label">Symbol</label>
-          <select id="captureSymbol" class="form-input cs-select">
+          <select id="captureSymbol" class="form-input cs-select" title="Select Capture Symbol">
             <option value="BTCUSDT">BTCUSDT</option>
             <option value="ETHUSDT">ETHUSDT</option>
             <option value="SOLUSDT">SOLUSDT</option>
@@ -431,7 +431,7 @@
         </div>
         <div class="cs-control-group">
           <label class="cs-label">Timeframe</label>
-          <select id="captureTimeframe" class="form-input cs-select-sm">
+          <select id="captureTimeframe" class="form-input cs-select-sm" title="Select Capture Timeframe">
             <option value="15">15m</option>
             <option value="60" selected>1H</option>
             <option value="240">4H</option>
@@ -455,7 +455,7 @@
     </div>
 
     <!-- ── PROGRESS PIPELINE ── -->
-    <div id="captureProgress" class="cs-pipeline" style="display:none">
+    <div id="captureProgress" class="cs-pipeline d-none" >
       <div class="cs-pipe-step" id="step-mcp">
         <div class="cs-pipe-icon">🔌</div>
         <div class="step-dot"></div>
@@ -496,20 +496,19 @@
         <div class="cs-chart-frame" id="csChartFrame">
           <div class="cs-chart-placeholder" id="csChartPlaceholder">
             <div class="cs-chart-watermark">
-              <span style="font-size:3rem;opacity:0.15">📈</span>
-              <div style="opacity:0.3;font-size:0.85rem;margin-top:8px">Chart will appear after capture</div>
+              <span class="fs-3rem op-15" >📈</span>
+              <div class="op-30 fs-0_85rem mt-8" >Chart will appear after capture</div>
             </div>
           </div>
-          <img id="csChartImg" class="cs-chart-img" src="" alt="Chart" style="display:none"
-               onclick="openImgZoom(this.src)" onerror="this.style.display='none'">
-          <div class="cs-chart-overlay" id="csChartOverlay" style="display:none">
+          <img id="csChartImg" class="cs-chart-img d-none" src="" alt="Chart" onclick="openImgZoom(this.src)" onerror="this.style.display='none'">
+          <div class="cs-chart-overlay d-none" id="csChartOverlay" >
             <div class="cs-overlay-sym" id="csOverlaySym">BTCUSDT</div>
             <div class="cs-overlay-time" id="csOverlayTime"></div>
           </div>
         </div>
 
         <!-- Verdict card (below chart) -->
-        <div class="cs-verdict-card" id="csVerdictCard" style="display:none">
+        <div class="cs-verdict-card d-none" id="csVerdictCard" >
           <div class="cs-verdict-row">
             <div>
               <div class="cs-verdict-sym" id="csVerdictSym">—</div>
@@ -535,17 +534,17 @@
         <section class="glass-section cs-history-section">
           <div class="section-header">
             <div class="section-title">🎞 History</div>
-            <div style="display:flex;gap:6px;align-items:center">
-              <select id="captureFilter" class="form-input" style="width:110px;font-size:0.75rem" onchange="loadVisionHistory()">
+            <div class="flex-gap-6-center" >
+              <select id="captureFilter" class="form-input w-110 fs-0_75rem" onchange="loadVisionHistory()" title="Filter Capture History">
                 <option value="all">All</option>
                 <option value="stealth">Stealth</option>
                 <option value="brief">Brief</option>
               </select>
-              <button class="qbtn qbtn-brief" style="padding:4px 10px;font-size:0.75rem" onclick="loadBriefs()">↻</button>
+              <button class="qbtn qbtn-brief btn-sm-2" onclick="loadBriefs()">↻</button>
             </div>
           </div>
           <div id="visionHistory" class="cs-history-list">
-            <div class="empty-state" style="padding:30px 16px">
+            <div class="empty-state p-30-16" >
               <div class="icon">👁</div>
               <h3>Chưa có phân tích</h3>
               <p>Nhấn Capture + Analyze</p>
@@ -557,22 +556,22 @@
         <section class="glass-section">
           <div class="section-header">
             <div class="section-title">🌅 Morning Brief</div>
-            <button class="qbtn qbtn-brief" style="padding:4px 10px;font-size:0.75rem" onclick="triggerBrief()">▶ Run</button>
+            <button class="qbtn qbtn-brief btn-sm-2" onclick="triggerBrief()">▶ Run</button>
           </div>
-          <div id="briefContent" class="brief-content" style="max-height:180px;overflow-y:auto">
-            <div class="empty-state" style="padding:16px">
-              <div class="icon" style="font-size:1.5rem">🌅</div>
-              <p style="font-size:0.8rem">Click Run để tạo</p>
+          <div id="briefContent" class="brief-content max-h-180 overflow-y-auto" >
+            <div class="empty-state p-16" >
+              <div class="icon fs-1_5rem" >🌅</div>
+              <p class="fs-0_8rem" >Click Run để tạo</p>
             </div>
           </div>
         </section>
 
         <!-- RAG Query -->
         <section class="glass-section">
-          <div class="section-title" style="margin-bottom:10px">📚 RAG Query</div>
+          <div class="section-title mb-10" >📚 RAG Query</div>
           <div class="rag-search">
-            <input id="ragQuery" type="text" class="form-input" placeholder="Hỏi về SEPA, VCP..." style="flex:1;font-size:0.8rem">
-            <button class="qbtn qbtn-scan" onclick="submitRagQuery()" style="padding:8px 12px">🔍</button>
+            <input id="ragQuery" type="text" class="form-input flex-1 fs-0_8rem" placeholder="Hỏi về SEPA, VCP..." >
+            <button class="qbtn qbtn-scan btn-sm-4" onclick="submitRagQuery()" >🔍</button>
           </div>
           <div id="ragResults" class="rag-results"></div>
         </section>
@@ -581,7 +580,7 @@
     </div>
 
     <!-- Image Zoom Modal -->
-    <div id="imgZoomModal" class="img-zoom-overlay" onclick="closeImgZoom()" style="display:none">
+    <div id="imgZoomModal" class="img-zoom-overlay d-none" onclick="closeImgZoom()" >
       <img id="imgZoomEl" class="img-zoom-img" src="" alt="Chart zoom">
     </div>
 
@@ -595,8 +594,8 @@
         <div class="section-title">📊 Watchlist Scan</div>
         <button id="scanBtn" class="qbtn qbtn-scan" onclick="triggerScan()">🔍 Run Scan</button>
       </div>
-      <div id="scanStatus" class="muted-label" style="margin-bottom:12px"></div>
-      <div style="overflow-x:auto">
+      <div id="scanStatus" class="muted-label mb-12" ></div>
+      <div class="overflow-x-auto" >
         <table id="scanTable">
           <thead>
             <tr>
@@ -619,7 +618,7 @@
     </div>
 
     <!-- CDP Vision Status -->
-    <section class="glass-section" style="margin-top:20px">
+    <section class="glass-section mt-20" >
       <div class="section-title">👁 Vision Capture Status</div>
       <div id="visionStatus" class="vision-status-grid">
         <div class="loading"><div class="spinner"></div></div>
@@ -627,10 +626,10 @@
     </section>
 
     <!-- Webhook Log -->
-    <section class="glass-section" style="margin-top:20px">
+    <section class="glass-section mt-20" >
       <div class="section-header">
         <div class="section-title">📡 Webhook Log (Live)</div>
-        <button class="qbtn" style="padding:6px 14px;font-size:0.8rem" onclick="loadWebhookLog()">🔄 Refresh</button>
+        <button class="qbtn btn-sm-5" onclick="loadWebhookLog()">🔄 Refresh</button>
       </div>
       <div id="webhookLog" class="webhook-log">
         <div class="loading"><div class="spinner"></div></div>

@@ -27,19 +27,7 @@ os.environ["DASHBOARD_TOKEN"] = ""
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-import httpx
-from httpx import ASGITransport
-from fastapi.testclient import TestClient
-
-class AsyncTestClientWrapper:
-    def __init__(self, app):
-        self.client = TestClient(app)
-    
-    async def post(self, *args, **kwargs):
-        return self.client.post(*args, **kwargs)
-        
-    async def get(self, *args, **kwargs):
-        return self.client.get(*args, **kwargs)
+from httpx import AsyncClient, ASGITransport
 
 @pytest_asyncio.fixture
 async def client(tmp_path):
@@ -60,7 +48,8 @@ async def client(tmp_path):
     await database.init_db()
 
     from main import app
-    yield AsyncTestClientWrapper(app)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
 
 
 @pytest_asyncio.fixture

@@ -15,35 +15,20 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ── Lazy imports (tránh crash nếu chưa install) ────────────────────────────
-try:
-    import chromadb
-    from chromadb.utils import embedding_functions
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    CHROMADB_AVAILABLE = False
+import importlib.util
+
+CHROMADB_AVAILABLE = importlib.util.find_spec("chromadb") is not None
+ANTHROPIC_AVAILABLE = importlib.util.find_spec("anthropic") is not None
+GENAI_AVAILABLE = importlib.util.find_spec("google.generativeai") is not None
+VERTEXAI_AVAILABLE = importlib.util.find_spec("vertexai") is not None
+
+if not CHROMADB_AVAILABLE:
     log.warning("chromadb not installed. Run: pip install chromadb sentence-transformers")
-
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
+if not ANTHROPIC_AVAILABLE:
     log.warning("anthropic not installed. Run: pip install anthropic")
-
-try:
-    import google.generativeai as genai
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
+if not GENAI_AVAILABLE:
     log.warning("google-generativeai not installed. Run: pip install google-generativeai")
-
-try:
-    import vertexai
-    from vertexai.generative_models import GenerativeModel as VertexGenerativeModel
-    VERTEXAI_AVAILABLE = True
-except ImportError:
-    VERTEXAI_AVAILABLE = False
+if not VERTEXAI_AVAILABLE:
     log.warning("vertexai not installed. Run: pip install google-cloud-aiplatform")
 
 import config
@@ -57,6 +42,7 @@ def _get_embedding_function():
     """Dùng sentence-transformers local (không cần API key, miễn phí)."""
     if not CHROMADB_AVAILABLE:
         return None
+    from chromadb.utils import embedding_functions
     return embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="paraphrase-multilingual-MiniLM-L12-v2"  # hỗ trợ tiếng Việt
     )
@@ -106,6 +92,7 @@ async def init_vector_db() -> bool:
     chroma_db_path = Path(config.CHROMA_DB_PATH)
     chroma_db_path.mkdir(parents=True, exist_ok=True)
 
+    import chromadb
     _chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
     ef = _get_embedding_function()
 
@@ -289,11 +276,14 @@ Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ 
                     log.warning("Vertex AI ADC not found — falling back to GEMINI_API_KEY")
 
             if _use_vertex:
+                import vertexai
+                from vertexai.generative_models import GenerativeModel as VertexGenerativeModel
                 vertexai.init(project=config.GCP_PROJECT_ID, location=getattr(config, "GCP_LOCATION", "us-central1"))
                 g_model = VertexGenerativeModel(model_name)
                 response = g_model.generate_content(prompt)
                 advice = response.text
             elif has_genai:
+                import google.generativeai as genai
                 genai.configure(api_key=config.GEMINI_API_KEY)
                 g_model = genai.GenerativeModel(model_name)
                 response = g_model.generate_content(prompt)
@@ -304,6 +294,7 @@ Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ 
             log.info(f"RAG: Gemini generated advice for {symbol} ({action})")
             return advice
         else:
+            import anthropic
             client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
             message = client.messages.create(
                 model="claude-sonnet-4-5",

@@ -28,10 +28,15 @@ import binance_client as binance_module
 
 
 # ── Fix Windows cp1252 UnicodeEncodeError for emoji in log messages ──────────
+# Guard: Only replace stdout/stderr when NOT running under pytest capture.
+# pytest replaces sys.stdout with an internal capture object that has no .buffer,
+# so checking for 'buffer' is the safe sentinel. Direct replacement would
+# destroy pytest's capture file handle and cause ValueError on teardown.
 import sys, io
-if sys.stdout and hasattr(sys.stdout, 'buffer'):
+_is_pytest = "pytest" in sys.modules
+if not _is_pytest and sys.stdout and hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if sys.stderr and hasattr(sys.stderr, 'buffer'):
+if not _is_pytest and sys.stderr and hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Setup logging — StreamHandler explicitly UTF-8 to avoid cp1252 crash on Windows
@@ -392,12 +397,18 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     # Xac thuc bao mat
+    # BUG-06 fix: Use .get() instead of .pop() — do NOT mutate payload before the
+    # empty-payload check below. Removing the only key ("secret") would leave
+    # payload={} and trigger a misleading 400 Empty payload instead of a
+    # proper 400 for missing signal fields.
     secret = (
         request.headers.get("X-TV-Secret")
         or request.query_params.get("secret")
-        or payload.pop("secret", None)
+        or payload.get("secret", None)
         or ""
     )
+    # Strip secret from payload after auth so it isn't stored in DB
+    payload.pop("secret", None)
 
     # Allow dashboard users (authenticated via DASHBOARD_TOKEN) to bypass webhook secret
     dashboard_auth = request.headers.get("Authorization", "")
@@ -414,11 +425,13 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     if not payload:
         raise HTTPException(status_code=400, detail="Empty payload")
 
-    action = payload.get("action", "").lower()
+    action = (payload.get("action") or payload.get("side", "")).lower()
     symbol = payload.get("symbol", "")
     price = payload.get("price", "")
     ts = payload.get("time", "")
     quote_qty = payload.get("quoteQty", payload.get("size", 10))
+    if not quote_qty:
+        quote_qty = 10
     interval = str(payload.get("interval", "")).strip().lower()
     
     sl_str = payload.get("sl", "")
@@ -432,7 +445,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     # Luu signal vao database
     try:
-        price_float = float(price) if price else None
+        price_float = float(str(price).replace(',', '')) if price else None
     except (ValueError, TypeError):
         price_float = None
 
@@ -605,10 +618,10 @@ async def process_alert_stealth_capture(
             log.warning(f"Failed to persist stealth capture to DB: {db_err}")
 
         # Parse SL & TP bằng Regex
-        sl_match = re.search(r"Stop\s*Loss:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
-        tp_match = re.search(r"Take\s*Profit:.*?(\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
-        sl_val = sl_match.group(1) if sl_match else ""
-        tp_val = tp_match.group(1) if tp_match else ""
+        sl_match = re.search(r"Stop\s*Loss:.*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
+        tp_match = re.search(r"Take\s*Profit:.*?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)", analysis_text, re.IGNORECASE)
+        sl_val = sl_match.group(1).replace(",", "") if sl_match else ""
+        tp_val = tp_match.group(1).replace(",", "") if tp_match else ""
 
         # ── Format & Send Telegram (photo + caption) ─────────────────────
         formatted_vision = vision_module.format_vision_telegram(result)
@@ -660,17 +673,17 @@ async def execute_trade_and_notify(
     """Smart order execution: MARKET entry + OCO exit with risk management."""
     client = binance_module.get_client()
     try:
-        entry_price = float(price) if price else 0.0
+        entry_price = float(str(price).replace(',', '')) if price else 0.0
     except (ValueError, TypeError):
         entry_price = 0.0
 
     try:
-        sl_price = float(sl) if sl else None
+        sl_price = float(str(sl).replace(',', '')) if sl else None
     except (ValueError, TypeError):
         sl_price = None
 
     try:
-        tp_price = float(tp) if tp else None
+        tp_price = float(str(tp).replace(',', '')) if tp else None
     except (ValueError, TypeError):
         tp_price = None
 
