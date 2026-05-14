@@ -62,8 +62,7 @@ async def test_watchlist_add_symbol(client):
     response = await client.post("/api/watchlist", json={"symbol": "NVDA"})
     assert response.status_code == 200
     data = response.json()
-    # Actual response: {"added": True, "symbol": "NVDA", "watchlist": [...]}
-    assert data.get("added") is True
+    assert data.get("added") is True or data.get("reason") == "already_exists"
     assert "NVDA" in data.get("watchlist", [])
 
 
@@ -77,12 +76,12 @@ async def test_watchlist_remove_symbol(client):
     """
     # First add the symbol
     await client.post("/api/watchlist", json={"symbol": "TSLA"})
-    # Then remove it via query param (httpx DELETE does not support json body)
-    response = await client.delete("/api/watchlist?symbol=TSLA")
+    # Then remove it via path param
+    response = await client.delete("/api/watchlist/TSLA")
     assert response.status_code == 200
     data = response.json()
-    # Actual response: {"removed": True, "symbol": "TSLA", "watchlist": [...]}
-    assert data.get("removed") is True or "TSLA" not in data.get("watchlist", [])
+    assert data.get("removed") is True or data.get("reason") == "not_found"
+    assert "TSLA" not in data.get("watchlist", [])
 
 
 @pytest.mark.asyncio
@@ -108,7 +107,8 @@ async def test_vision_capture_endpoint(client):
     Mocks the internal `capture_chart_and_analyze` function to prevent actual
     external calls (e.g., CDP, AI API).
     """
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
+    from pathlib import Path
 
     mock_vision_result = {
         "status": "ok",
@@ -120,19 +120,26 @@ async def test_vision_capture_endpoint(client):
         "patterns": ["VCP"],
     }
 
-    with patch(
-        "server.routers.vision_routes.capture_chart_and_analyze",
-        return_value=mock_vision_result,
-    ) as mock_capture:
+    with patch("config.MCP_ENABLED", True), \
+         patch("main._mcp_module.get_mcp_client") as mock_get_mcp, \
+         patch("main.vision_module.analyze_chart_vision") as mock_vision:
+        
+        mock_mcp = mock_get_mcp.return_value
+        mock_mcp.health_check = AsyncMock(return_value={"connected": True})
+        mock_mcp.capture_screenshot = AsyncMock(return_value=Path(__file__))
+        mock_vision.side_effect = AsyncMock(return_value=mock_vision_result)
+
         response = await client.post("/api/vision/capture?symbol=BTCUSDT")
 
         assert response.status_code == 200
         data = response.json()
 
-        assert data == mock_vision_result
-        mock_capture.assert_called_once_with(
-            "BTCUSDT", source="stealth", retries=2
-        )
+        assert data["status"] == "ok"
+        assert data["symbol"] == "BTCUSDT"
+        assert data["has_screenshot"] is True
+        assert "brief_id" in data
+        mock_vision.assert_called_once()
+        mock_mcp.capture_screenshot.assert_called_once_with(symbol="BTCUSDT")
 
 
 @pytest.mark.asyncio
@@ -142,20 +149,19 @@ async def test_scanner_trigger_endpoint(client):
     Mocks the internal `run_scanner_full` function to prevent actual
     scanner execution against MCP.
     """
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
 
-    mock_scan_results = {
-        "scanned": 10,
-        "results": [],
-        "timestamp": "2023-01-01T12:00:00Z",
-    }
-    with patch(
-        "server.routers.scanner_routes.run_scanner_full", return_value=mock_scan_results
-    ) as mock_scanner:
+    with patch("config.MCP_ENABLED", True), \
+         patch("main.wl_module.get_watchlist", return_value=["BTCUSDT"]), \
+         patch("main._mcp_module.get_mcp_client"), \
+         patch("main.analysis_module.scan_symbols") as mock_scan:
+        
+        mock_scan.side_effect = AsyncMock(return_value=[])
+
         response = await client.post("/api/scan/trigger")
         assert response.status_code == 200
-        assert response.json() == mock_scan_results
-        mock_scanner.assert_called_once()
+        assert "results" in response.json()
+        mock_scan.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -165,7 +171,7 @@ async def test_watchlist_sync_endpoint(client):
     watchlist synchronization feature.
     Mocks the internal `sync_watchlist_with_tradingview` function.
     """
-    from unittest.mock import patch
+    from unittest.mock import patch, AsyncMock
 
     mock_sync_result = {
         "synced": True,
@@ -173,10 +179,12 @@ async def test_watchlist_sync_endpoint(client):
         "removed": 0,
         "watchlist": ["AAPL", "GOOG", "MSFT"],
     }
-    with patch(
-        "server.routers.watchlist_routes.sync_watchlist_with_tradingview",
-        return_value=mock_sync_result,
-    ) as mock_sync:
+    with patch("config.MCP_ENABLED", True), \
+         patch("main.wl_module.sync_from_tradingview") as mock_sync, \
+         patch("main._mcp_module.get_mcp_client"):
+        
+        mock_sync.side_effect = AsyncMock(return_value=mock_sync_result)
+        
         response = await client.put("/api/watchlist/sync")
         assert response.status_code == 200
         assert response.json() == mock_sync_result

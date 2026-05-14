@@ -125,11 +125,13 @@ async def generate_morning_brief() -> Optional[dict]:
         top = top_candidates[0]
         logger.info(f"[Brief] Capturing screenshot for {top.symbol}")
         try:
+            import re
+            safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', top.symbol)
             screenshot_path = await mcp.capture_screenshot(
                 symbol=top.symbol,
                 timeframe="D",
                 region="chart",
-                save_path=Path(__file__).parent / "screenshots" / f"brief_{top.symbol}_{timestamp.strftime('%Y%m%d')}.png"
+                save_path=Path(__file__).parent / "screenshots" / f"brief_{safe_symbol}_{timestamp.strftime('%Y%m%d')}.png"
             )
         except Exception as e:
             logger.warning(f"[Brief] Screenshot failed: {e}")

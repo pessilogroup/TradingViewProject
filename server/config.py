@@ -24,10 +24,19 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
 BINANCE_DRY_RUN    = os.getenv("BINANCE_DRY_RUN", "true").lower() == "true"
 
+# TVP-006: Safety override for DRY_RUN
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+if ENVIRONMENT == "production" and not BINANCE_DRY_RUN:
+    if os.getenv("FORCE_LIVE_TRADING", "false").lower() != "true":
+        import logging
+        logging.getLogger(__name__).warning("PRODUCTION TRADING ENABLED: Forcing BINANCE_DRY_RUN=True. Set FORCE_LIVE_TRADING=true to override.")
+        BINANCE_DRY_RUN = True
+
 # Risk Management (Minervini SEPA rules)
 RISK_PER_TRADE     = float(os.getenv("RISK_PER_TRADE", "0.02"))     # 2% per trade
 STOP_LOSS_PCT      = float(os.getenv("STOP_LOSS_PCT", "0.08"))      # 8% SL
 TAKE_PROFIT_PCT    = float(os.getenv("TAKE_PROFIT_PCT", "0.20"))    # 20% TP → R:R ≥ 2.5
+MAX_QUOTE_QTY      = float(os.getenv("MAX_QUOTE_QTY", "1000"))      # Max trade size limit
 
 # Notifications
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

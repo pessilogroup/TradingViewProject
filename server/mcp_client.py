@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Tuple
+import os
 
 import config
 
@@ -68,7 +69,7 @@ class MCPClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(_MCP_DIR),
-                env={**__import__("os").environ, "TV_CDP_PORT": str(self.cdp_port)}
+                env={**os.environ, "TV_CDP_PORT": str(self.cdp_port)}
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
@@ -236,7 +237,9 @@ class MCPClient:
                 raw = await self._run("screenshot", timeout=20)
 
             if save_path is None:
-                save_path = Path(__file__).parent / "screenshots" / f"{symbol}_{timeframe}.png"
+                import re
+                safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+                save_path = Path(__file__).parent / "screenshots" / f"{safe_symbol}_{timeframe}.png"
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
             raw_path: Optional[Path] = None

@@ -57,8 +57,10 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 # ── Stealth Capture Cooldown ──
+import time
 LAST_CAPTURE_TIME = {}
 CAPTURE_COOLDOWN_SEC = 300  # Giới hạn 5 phút mỗi mã (chống spam Webhook)
+_WEBHOOK_RATE_LIMITS = {}
 # ═══ LIFESPAN (startup/shutdown) ═════════════════════════════
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -430,8 +432,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     price = payload.get("price", "")
     ts = payload.get("time", "")
     quote_qty = payload.get("quoteQty", payload.get("size", 10))
-    if not quote_qty:
-        quote_qty = 10
     interval = str(payload.get("interval", "")).strip().lower()
     
     sl_str = payload.get("sl", "")
@@ -443,22 +443,40 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     if forwarded:
         source_ip = forwarded.split(",")[0].strip()
 
-    # Luu signal vao database
+    # TVP-004: Basic Rate Limiting
+    now = time.time()
+    count, first_req = _WEBHOOK_RATE_LIMITS.get(source_ip, (0, now))
+    if now - first_req < 60:
+        if count >= 15:
+            log.warning(f"Rate limit exceeded for {source_ip}")
+            raise HTTPException(status_code=429, detail="Too Many Requests")
+        _WEBHOOK_RATE_LIMITS[source_ip] = (count + 1, first_req)
+    else:
+        _WEBHOOK_RATE_LIMITS[source_ip] = (1, now)
+
+    # TVP-001 & TVP-002: Safe parsing and Max limits
     try:
         price_float = float(str(price).replace(',', '')) if price else None
     except (ValueError, TypeError):
         price_float = None
 
+    try:
+        quote_qty_val = float(quote_qty) if quote_qty else 10.0
+        quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
+    except (ValueError, TypeError):
+        quote_qty_val = 10.0
+
+    # Luu signal vao database
     signal_id = await database.insert_signal(
         symbol=symbol,
         action=action,
         price=price_float,
-        quote_qty=float(quote_qty) if quote_qty else None,
+        quote_qty=quote_qty_val,
         source_ip=source_ip,
         payload=payload,
     )
 
-    log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty}  time={ts}")
+    log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty_val}  time={ts}")
 
     # ── RAG Analysis (chạy song song với trade execution) ─────────────
     rag_advice = ""
@@ -492,7 +510,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
                 signal_id=signal_id,
                 symbol=symbol,
                 price=price,
-                quote_qty=quote_qty,
+                quote_qty=quote_qty_val,
                 rag_advice=rag_advice
             )
             return {"received": True, "signal_id": signal_id, "status": "stealth_capture_async"}
@@ -520,7 +538,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             action=action,
             symbol=symbol,
             price=price,
-            quote_qty=quote_qty,
+            quote_qty=quote_qty_val,
             sl=sl_str,
             tp=tp_str,
             rag_advice=rag_advice,
@@ -573,7 +591,8 @@ async def process_alert_stealth_capture(
         # ── Screenshot với tên file cụ thể để truy vết ──────────────────
         from datetime import datetime as _dt
         ts_str = _dt.now().strftime("%Y%m%d_%H%M%S")
-        save_path = Path(__file__).parent / "screenshots" / f"stealth_{symbol}_{ts_str}.png"
+        safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+        save_path = Path(__file__).parent / "screenshots" / f"stealth_{safe_symbol}_{ts_str}.png"
 
         screenshot_path = await mcp.capture_screenshot(
             symbol="active",
@@ -752,11 +771,16 @@ async def execute_trade_and_notify(
         error_msg = str(e)
         log.error(f"Trade Execution Failed: {error_msg}")
 
+        try:
+            req_qty = float(quote_qty) if quote_qty else 0.0
+        except (ValueError, TypeError):
+            req_qty = 0.0
+
         await database.insert_trade(
             signal_id=signal_id,
             symbol=symbol,
             side=action.upper(),
-            requested_qty=float(quote_qty) if quote_qty else 0,
+            requested_qty=req_qty,
             error_message=error_msg,
             status="FAILED",
             combined_score=combined_score,

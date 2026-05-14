@@ -8,7 +8,7 @@ param (
 
 # Đọc Secret từ file .env (nếu có), hoặc dùng mặc định
 $EnvPath = Join-Path -Path $PSScriptRoot -ChildPath ".env"
-$Secret = "7086c59c523e87c90f9d56db63a66fd9045cb081264afe65c4ce8c37cff89104"
+$Secret = "change_me_in_dotenv"
 
 if (Test-Path $EnvPath) {
     $EnvContent = Get-Content $EnvPath

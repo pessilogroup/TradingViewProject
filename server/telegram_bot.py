@@ -350,11 +350,13 @@ async def cmd_vision(update, context):
                 health = await mcp.health_check()
                 if health.get("connected"):
                     from datetime import datetime as dt
+                    import re
+                    safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
                     screenshot_path = await mcp.capture_screenshot(
                         symbol=symbol,
                         timeframe="D",
                         region="chart",
-                        save_path=screenshots_dir / f"vision_{symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"
+                        save_path=screenshots_dir / f"vision_{safe_symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"
                     )
             except Exception as e:
                 log.warning(f"Vision screenshot capture failed: {e}")
@@ -619,7 +621,7 @@ def start_bot():
 
     import config
     if not config.TELEGRAM_BOT_TOKEN:
-        log.warning("TELEGRAM_BOT_TOKEN not set — Telegram Bot disabled")
+        log.warning("Telegram bot token not set — Telegram Bot disabled")
         return
 
     try:
