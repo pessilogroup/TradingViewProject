@@ -1705,6 +1705,11 @@ def get_approval_timeout_mgr() -> Optional[ApprovalTimeoutManager]:
     return _approval_timeout_mgr
 
 
+def get_application():
+    """Get the PTB Application singleton (P9 — used by claude_cli to register commands)."""
+    return _bot_app
+
+
 # ── P9-B1: Daily Report Auto-Send Scheduler ───────────────────────────
 
 async def _report_auto_send_loop() -> None:
