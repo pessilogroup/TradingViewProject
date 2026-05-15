@@ -83,7 +83,7 @@ async def test_quick_order_dry_run_circuit_breaker(client):
         assert res.status_code == 200
         data = res.json()
         assert data["received"] is True
-        assert data["status"] == "processing_async"  # Phase 4: rejection is async via SignalProcessor
+        assert data["status"] == "dispatched"  # Phase 5: gateway uniformly returns dispatched
     finally:
         config.BINANCE_DRY_RUN = original_dry_run
 
@@ -114,6 +114,6 @@ async def test_quick_order_dry_run_valid_interval(client):
         assert res.status_code == 200
         data = res.json()
         assert data["received"] is True
-        assert data["status"] == "processing_async"
+        assert data["status"] == "dispatched"
     finally:
         config.BINANCE_DRY_RUN = original_dry_run

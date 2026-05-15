@@ -22,7 +22,7 @@ async def test_get_system_status(client):
 @pytest.mark.asyncio
 async def test_trigger_brief_post(client):
     """Ensures the Morning Brief trigger endpoint is functional."""
-    with patch("server.main.brief_module.generate_morning_brief"):
+    with patch("main.brief_module.generate_morning_brief"):
         response = await client.post("/api/brief/trigger")
         # Endpoint should accept the trigger (200 OK or 202 Accepted)
         assert response.status_code in (200, 202)

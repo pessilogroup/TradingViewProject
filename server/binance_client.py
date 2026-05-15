@@ -19,65 +19,7 @@ import config
 log = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════
-# DATA CLASSES
-# ═══════════════════════════════════════════════════════════════
-
-@dataclass
-class RiskParams:
-    """Computed SL/TP levels and position sizing."""
-    entry_price: float
-    stop_loss_price: float
-    take_profit_price: float
-    stop_loss_pct: float
-    take_profit_pct: float
-    risk_reward_ratio: float
-    quantity: float           # base asset qty
-    cost: float               # quote asset cost
-    risk_amount: float        # $ at risk
-    account_balance: float
-    position_pct: float       # % of account
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "entry_price": round(self.entry_price, 8),
-            "stop_loss_price": round(self.stop_loss_price, 8),
-            "take_profit_price": round(self.take_profit_price, 8),
-            "stop_loss_pct": round(self.stop_loss_pct * 100, 2),
-            "take_profit_pct": round(self.take_profit_pct * 100, 2),
-            "risk_reward_ratio": round(self.risk_reward_ratio, 2),
-            "quantity": round(self.quantity, 8),
-            "cost": round(self.cost, 2),
-            "risk_amount": round(self.risk_amount, 2),
-            "account_balance": round(self.account_balance, 2),
-            "position_pct": round(self.position_pct * 100, 2),
-        }
-
-
-@dataclass
-class OrderResult:
-    """Unified result for smart order execution."""
-    success: bool
-    dry_run: bool
-    side: str
-    symbol: str
-    entry_order: Dict[str, Any] = field(default_factory=dict)
-    oco_order: Optional[Dict[str, Any]] = None
-    risk: Optional[RiskParams] = None
-    error: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        d = {
-            "success": self.success,
-            "dry_run": self.dry_run,
-            "side": self.side,
-            "symbol": self.symbol,
-            "entry_order": self.entry_order,
-            "oco_order": self.oco_order,
-            "risk": self.risk.to_dict() if self.risk else None,
-            "error": self.error,
-        }
-        return d
+from exchanges.base import RiskParams, OrderResult
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -459,53 +401,6 @@ class BinanceClient:
                 error=str(e),
             )
 
-
-# ═══════════════════════════════════════════════════════════════
-# TELEGRAM FORMATTING
-# ═══════════════════════════════════════════════════════════════
-
-def format_order_telegram(result: OrderResult) -> str:
-    """Format OrderResult for Telegram notification."""
-    if not result.success:
-        return (
-            f"❌ **ORDER FAILED** — {result.symbol}\n"
-            f"- Side: `{result.side}`\n"
-            f"- Error: `{result.error}`\n"
-            f"- Dry-Run: {'Yes' if result.dry_run else 'No'}"
-        )
-
-    tag = " [DRY-RUN]" if result.dry_run else ""
-    r = result.risk
-
-    # Entry info
-    entry = result.entry_order
-    order_id = entry.get("orderId", "N/A")
-    exec_qty = entry.get("executedQty", "0")
-    exec_cost = entry.get("cummulativeQuoteQty", "0")
-
-    # OCO info
-    oco_id = "N/A"
-    if result.oco_order:
-        oco_id = result.oco_order.get("orderListId", "N/A")
-
-    msg = (
-        f"✅ **SMART ORDER** — {result.symbol}{tag}\n\n"
-        f"📊 **Entry: MARKET {result.side}**\n"
-        f"- Fill Price: `${r.entry_price:,.2f}`\n"
-        f"- Quantity: `{exec_qty}`\n"
-        f"- Cost: `${float(exec_cost):,.2f}`\n"
-        f"- Order ID: `{order_id}`\n\n"
-        f"🛡️ **Risk Management:**\n"
-        f"- Stop-Loss: `${r.stop_loss_price:,.2f}` ({r.stop_loss_pct * 100:.1f}%)\n"
-        f"- Take-Profit: `${r.take_profit_price:,.2f}` (+{r.take_profit_pct * 100:.1f}%)\n"
-        f"- R:R Ratio: `{r.risk_reward_ratio:.2f}`\n"
-        f"- OCO ID: `{oco_id}`\n\n"
-        f"💰 **Position Sizing:**\n"
-        f"- Account: `${r.account_balance:,.2f}`\n"
-        f"- Risk: `{r.stop_loss_pct * 100:.1f}%` ($`{r.risk_amount:,.2f}`)\n"
-        f"- Position: `${r.cost:,.2f}` ({r.position_pct * 100:.1f}% account)"
-    )
-    return msg
 
 
 # ═══════════════════════════════════════════════════════════════

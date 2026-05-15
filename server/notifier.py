@@ -1,8 +1,42 @@
 import logging
 import aiohttp
 import config
+import re
 
 log = logging.getLogger(__name__)
+
+def sanitize_for_telegram_html(text: str) -> str:
+    """
+    Converts Gemini-style Markdown to Telegram-compatible HTML.
+    Handles bold, italic, monospace, headings, and basic escaping.
+    """
+    if not text:
+        return ""
+        
+    # 1. Escape HTML special chars first
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    # 2. Convert Bold: **text** -> <b>text</b>
+    text = re.compile(r'\*\*(.*?)\*\*').sub(r'<b>\1</b>', text)
+    
+    # 3. Convert Italic: *text* -> <i>text</i>
+    # Note: Using a more restrictive regex for italics to avoid catching lone asterisks or sub-parts of words
+    text = re.compile(r'(?<!\w)\*(?!\s)(.*?)(?<!\s)\*(?!\w)').sub(r'<i>\1</i>', text)
+    
+    # 4. Convert Code Blocks: ```code``` -> <pre>code</pre>
+    # Note: Telegram HTML uses <pre><code>...</code></pre> for full blocks
+    text = re.compile(r'```(?:[a-zA-Z]+\n)?(.*?)```', re.DOTALL).sub(r'<pre>\1</pre>', text)
+    
+    # 5. Convert Monospace: `text` -> <code>text</code>
+    text = re.compile(r'`([^`]+)`').sub(r'<code>\1</code>', text)
+    
+    # 6. Convert Headings: # Heading -> <b>Heading</b>
+    text = re.compile(r'^#+\s+(.*)$', re.MULTILINE).sub(r'<b>\1</b>', text)
+    
+    # 7. Convert Lists: * item or - item -> • item
+    text = re.compile(r'^[*-]\s+', re.MULTILINE).sub(r'• ', text)
+    
+    return text
 
 async def send_telegram_alert(message: str):
     """Broadcast tin nhắn tới tất cả chat_id trong TELEGRAM_CHAT_IDS (CSV)."""
@@ -10,12 +44,14 @@ async def send_telegram_alert(message: str):
         return
 
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    html_message = sanitize_for_telegram_html(message)
+    
     import socket
     conn = aiohttp.TCPConnector(family=socket.AF_INET)
     try:
         async with aiohttp.ClientSession(connector=conn) as session:
             for chat_id in config.TELEGRAM_CHAT_IDS:
-                payload = {"chat_id": chat_id, "text": message}
+                payload = {"chat_id": chat_id, "text": html_message, "parse_mode": "HTML"}
                 try:
                     async with session.post(url, json=payload) as response:
                         if response.status != 200:
@@ -85,14 +121,16 @@ def send_telegram_photo(photo_path, caption: str = ""):
     if not photo_path.exists():
         log.warning(f"Photo not found: {photo_path}")
         return
+        
+    html_caption = sanitize_for_telegram_html(caption)
 
     for chat_id in config.TELEGRAM_CHAT_IDS:
         try:
             with open(photo_path, "rb") as photo_file:
                 data = {
                     "chat_id": chat_id,
-                    "caption": caption[:1024],  # Telegram caption limit
-                    "parse_mode": "Markdown",
+                    "caption": html_caption[:1024],  # Telegram caption limit
+                    "parse_mode": "HTML",
                 }
                 files = {"photo": (photo_path.name, photo_file, "image/png")}
                 response = requests.post(url, data=data, files=files, timeout=30)

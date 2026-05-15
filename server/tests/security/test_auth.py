@@ -59,7 +59,7 @@ async def test_dashboard_auth_with_token_required(client):
     original_token = config.DASHBOARD_TOKEN
     try:
         config.DASHBOARD_TOKEN = "secure-test-token"
-        response = await client.get("/api/system/status")
+        response = await client.get("/api/trades")
         assert response.status_code == 401
         assert response.json().get("error") == "Invalid or missing token"
     finally:

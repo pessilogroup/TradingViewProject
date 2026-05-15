@@ -81,6 +81,13 @@ async def lifespan(app: FastAPI):
         f"across {_event_bus.metrics['registered_topics']} topics."
     )
 
+    # ── Sprint 7.2: Multi-Exchange Initialization ─────────────────────────────
+    from exchanges.registry import init_registry
+    from exchanges.health_monitor import start_health_monitor
+    init_registry()
+    start_health_monitor()
+    log.info("Exchange Registry initialized and Health Monitor started.")
+
     # ── RAG ───────────────────────────────────────────────────
     if config.RAG_ENABLED:
         log.info("RAG: Khởi tạo Vector DB từ Minervini Knowledge Base...")
@@ -121,6 +128,8 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──────────────────────────────────────────────
     tg_bot_module.stop_bot()
     scheduler_module.stop_scheduler()
+    from exchanges.health_monitor import stop_health_monitor
+    stop_health_monitor()
     log.info("Server shutting down.")
 
 
@@ -161,7 +170,7 @@ async def dashboard_auth_middleware(request: Request, call_next):
     """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
     path = request.url.path
     # Skip auth for: webhook, health check, static files, dashboard HTML, root, screenshot images
-    skip_paths = ("/webhook", "/tv_health_check", "/health", "/static", "/dashboard", "/")
+    skip_paths = ("/webhook", "/tv_health_check", "/health", "/api/system/status", "/static", "/dashboard", "/")
     if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static") \
             or path.startswith("/api/vision/screenshot/"):
         return await call_next(request)

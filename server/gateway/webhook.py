@@ -23,12 +23,10 @@ import logging
 import time
 import secrets
 
-from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Request, HTTPException
 
 import config
 import database
-import notifier
-import rag
 
 from core.event_bus import bus as _event_bus
 from core.events import SignalReceived
@@ -43,7 +41,7 @@ _WEBHOOK_RATE_LIMITS: dict = {}
 
 # ═══ WEBHOOK ENDPOINT ═════════════════════════════════════════════════════════
 @router.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
+async def webhook(request: Request):
     try:
         payload = await request.json()
     except Exception:
@@ -129,77 +127,27 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty_val}  time={ts}")
 
-    # ── RAG Analysis (chạy song song với trade execution) ─────────────
-    rag_advice = ""
-    if config.RAG_ENABLED and rag._collection is not None:
-        try:
-            query = rag.build_rag_query(symbol, action, payload)
-            chunks = rag.query_knowledge(query, n_results=config.RAG_TOP_K)
-            if chunks:
-                rag_advice = await rag.generate_trading_advice(
-                    symbol=symbol,
-                    action=action,
-                    price=price,
-                    payload=payload,
-                    rag_chunks=chunks,
-                )
-        except Exception as e:
-            log.error(f"RAG analysis error in webhook: {e}")
-            rag_advice = ""
+    # ── RAG Analysis (chuyển sang AIAnalyzer) ─────────────
+    # WebhookGateway không gọi RAG đồng bộ để đảm bảo tốc độ phản hồi < 100ms
 
     # ══════════════════════════════════════════════════════════════════════
     # EventBus Dispatch
-    # SignalReceived → SignalProcessor → (SignalValidated → TradeEngine)
-    #                                    (AlertTriggered → AIAnalyzer)
-    #                                    (SignalRejected → NotificationHub)
+    # Gateway chỉ làm nhiệm vụ phát (emit) sự kiện, mọi business logic xử lý
+    # action, config, và fallback đều được đẩy xuống downstream.
     # ══════════════════════════════════════════════════════════════════════
 
-    if action == "alert" and config.MCP_ENABLED:
-        # Alert pathway — AIAnalyzer handles cooldown, capture, Vision AI
-        await _event_bus.emit_background(SignalReceived(
-            signal_id=signal_id,
-            symbol=symbol,
-            action=action,
-            price=price_float,
-            quote_qty=quote_qty_val,
-            interval=interval,
-            sl=sl_str,
-            tp=tp_str,
-            source_ip=source_ip,
-            rag_advice=rag_advice,
-        ))
-        return {"received": True, "signal_id": signal_id, "status": "stealth_capture_async"}
+    await _event_bus.emit_background(SignalReceived(
+        signal_id=signal_id,
+        symbol=symbol,
+        action=action,
+        price=price_float,
+        quote_qty=quote_qty_val,
+        interval=interval,
+        sl=sl_str,
+        tp=tp_str,
+        source_ip=source_ip,
+        payload=payload,
+        exchange=payload.get("exchange", config.DEFAULT_EXCHANGE),
+    ))
 
-    if (config.BINANCE_API_KEY or config.BINANCE_DRY_RUN) and action in ("buy", "sell"):
-        # Trade pathway — SignalProcessor validates, TradeEngine executes
-        await _event_bus.emit_background(SignalReceived(
-            signal_id=signal_id,
-            symbol=symbol,
-            action=action,
-            price=price_float,
-            quote_qty=quote_qty_val,
-            interval=interval,
-            sl=sl_str,
-            tp=tp_str,
-            source_ip=source_ip,
-            rag_advice=rag_advice,
-        ))
-        return {"received": True, "signal_id": signal_id, "status": "processing_async"}
-
-    # ── Fallback: signal-only (no trade, no alert) ────────────────────
-    await database.update_signal_status(signal_id, 1)
-
-    msg = (
-        f"📡 **Tín hiệu TradingView**\n"
-        f"- Mã: `{symbol}`\n"
-        f"- Hành động: `{action.upper()}`\n"
-        f"- Giá: `{price}`\n"
-        f"- Signal ID: `#{signal_id}`"
-    )
-
-    if rag_advice:
-        msg += f"\n\n🧠 **Phân tích Minervini AI:**\n{rag_advice}"
-
-    background_tasks.add_task(notifier.notify_all, msg)
-
-    return {"received": True, "signal_id": signal_id, "order": None, "rag_enabled": bool(rag_advice)}
+    return {"received": True, "signal_id": signal_id, "status": "dispatched"}

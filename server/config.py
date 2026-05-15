@@ -24,6 +24,17 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
 BINANCE_DRY_RUN    = os.getenv("BINANCE_DRY_RUN", "true").lower() == "true"
 
+# Bybit (Sprint 7.2)
+BYBIT_API_KEY      = os.getenv("BYBIT_API_KEY", "")
+BYBIT_API_SECRET   = os.getenv("BYBIT_API_SECRET", "")
+BYBIT_TESTNET      = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
+BYBIT_DRY_RUN      = os.getenv("BYBIT_DRY_RUN", "true").lower() == "true"
+
+# Multi-Exchange Routing
+DEFAULT_EXCHANGE   = os.getenv("DEFAULT_EXCHANGE", "binance")
+STRATEGY_EXCHANGE_MAP = os.getenv("STRATEGY_EXCHANGE_MAP", "{}")  # JSON string e.g. '{"strategy_1": {"exchange": "bybit", "fallback": "binance"}}'
+EXCHANGE_HEALTH_INTERVAL = int(os.getenv("EXCHANGE_HEALTH_INTERVAL", "60"))
+
 # TVP-006: Safety override for DRY_RUN
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
 if ENVIRONMENT == "production" and not BINANCE_DRY_RUN:
@@ -62,7 +73,7 @@ ENABLE_IP_WHITELIST = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true
 # Đường dẫn tới thư mục chứa các file chunk Markdown của Minervini
 KNOWLEDGE_DIR = os.getenv(
     "KNOWLEDGE_DIR",
-    str(Path(__file__).parent.parent / "docs" / "knowledge" / "trading_wizard" / "chunks")
+    str((Path(__file__).resolve().parent.parent / "docs" / "knowledge" / "trading_wizard" / "chunks").absolute())
 )
 
 # Đường dẫn lưu ChromaDB vector database (persistent trên disk)
@@ -116,6 +127,17 @@ WATCHLIST_DEFAULT = [
 # ── P7: Telegram Bot Interactive ─────────────────────────────────────────────
 # Bật/tắt interactive Telegram bot (polling mode, chạy song song với FastAPI)
 TELEGRAM_BOT_ENABLED = os.getenv("TELEGRAM_BOT_ENABLED", "false").lower() == "true"
+
+# ── P8: Telegram Bot Enhancements ────────────────────────────────────────────
+# REQ2: PositionMonitor poll interval (seconds)
+POSITION_POLL_INTERVAL = int(os.getenv("POSITION_POLL_INTERVAL", "30"))
+
+# REQ7: ApprovalTimeoutManager timeout (minutes)
+APPROVAL_TIMEOUT_MINUTES = int(os.getenv("APPROVAL_TIMEOUT_MINUTES", "5"))
+
+# REQ8: Daily report auto-send at end-of-day
+REPORT_AUTO_SEND = os.getenv("REPORT_AUTO_SEND", "false").lower() == "true"
+REPORT_SEND_TIME = os.getenv("REPORT_SEND_TIME", "22:00")  # HH:MM, ICT (UTC+7)
 
 # ── P7.6: Dashboard Auth ──────────────────────────────────────────────────
 # Simple bearer token for dashboard API. Set in .env to protect endpoints.
