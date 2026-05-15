@@ -64,6 +64,81 @@ def _parse_chunk_metadata(content: str, filename: str) -> dict:
     return meta
 
 
+_cli_semaphore: Optional[object] = None
+
+
+def _get_cli_semaphore():
+    """Lazy-init Semaphore (cần event loop để khởi tạo)."""
+    global _cli_semaphore
+    if _cli_semaphore is None:
+        import asyncio
+        n = getattr(config, "CLAUDE_CLI_MAX_PARALLEL", 2)
+        _cli_semaphore = asyncio.Semaphore(max(1, n))
+    return _cli_semaphore
+
+
+class ClaudeCLIError(Exception):
+    """Raised khi CLI fail — cho phép caller fallback sang SDK."""
+
+
+async def _call_claude_cli(prompt: str, image_path: Optional[str] = None) -> str:
+    """Gọi `claude -p` headless qua subscription OAuth (không cần API key).
+
+    Args:
+        prompt: Nội dung prompt. Nếu có image_path, prompt nên reference image đó.
+        image_path: Đường dẫn tuyệt đối tới ảnh (PNG/JPG). Khi set, CLI được cấp
+            quyền Read + --add-dir tới thư mục chứa ảnh.
+
+    Raises:
+        ClaudeCLIError: khi binary không tồn tại, timeout, hoặc returncode != 0.
+            Caller có thể bắt để fallback sang SDK.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+
+    claude_path = getattr(config, "CLAUDE_CLI_PATH", "claude")
+    timeout = getattr(config, "CLAUDE_CLI_TIMEOUT", 60)
+    model = getattr(config, "CLAUDE_CLI_MODEL", "")
+
+    args = [claude_path, "-p", "--output-format", "text"]
+    if model:
+        args += ["--model", model]
+
+    if image_path:
+        img = _Path(image_path).resolve()
+        args += [
+            "--add-dir", str(img.parent),
+            "--allowedTools", "Read",
+            "--dangerously-skip-permissions",
+        ]
+
+    sem = _get_cli_semaphore()
+    async with sem:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise ClaudeCLIError(f"Không tìm thấy Claude CLI tại '{claude_path}'")
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode("utf-8")), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise ClaudeCLIError(f"Claude CLI timeout sau {timeout}s")
+
+    if proc.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace")[:300]
+        raise ClaudeCLIError(f"Claude CLI rc={proc.returncode}: {err}")
+
+    return stdout.decode("utf-8", errors="replace").strip()
+
+
 async def init_vector_db() -> bool:
     """
     Khởi tạo ChromaDB và embed tất cả Markdown chunks vào Vector DB.
@@ -205,7 +280,9 @@ async def generate_trading_advice(
     """
     provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
 
-    if provider == "gemini":
+    if provider == "claude_cli":
+        pass  # không cần check key, sẽ verify binary khi gọi
+    elif provider == "gemini":
         has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
         has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
         if not (has_vertex or has_genai):
@@ -263,6 +340,23 @@ Dựa trên tín hiệu trên và quy tắc của Minervini trong Knowledge Base
 Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ đọc trên Telegram."""
 
     try:
+        if provider == "claude_cli":
+            try:
+                advice = await _call_claude_cli(prompt)
+                log.info(f"RAG: Claude CLI generated advice for {symbol} ({action})")
+                return advice
+            except ClaudeCLIError as e:
+                log.warning(f"RAG: Claude CLI fail ({e}). Fallback?")
+                if (
+                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
+                    and ANTHROPIC_AVAILABLE
+                    and getattr(config, "ANTHROPIC_API_KEY", None)
+                ):
+                    log.info("RAG: Fallback sang Anthropic SDK.")
+                    # Rơi xuống nhánh else dưới
+                else:
+                    return f"⚠️ Claude CLI lỗi: {e}"
+                provider = "anthropic"  # ép xuống nhánh SDK
         if provider == "gemini":
             model_name = "gemini-2.5-flash"
             

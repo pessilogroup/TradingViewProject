@@ -170,6 +170,8 @@ async def analyze_chart_vision(
         if not (has_vertex or has_genai):
             result["error"] = "Gemini API not available or configured (need GCP_PROJECT_ID or GEMINI_API_KEY)"
             return result
+    elif provider == "claude_cli":
+        pass  # CLI verify khi gọi, không cần API key
     else:
         if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
             result["error"] = "Anthropic API not available or configured"
@@ -259,7 +261,31 @@ async def analyze_chart_vision(
                             continue
                     raise  # Reraise nếu không phải lỗi rate limit hoặc đã thử tối đa
 
-        else:
+        elif provider == "claude_cli":
+            try:
+                import rag as _rag
+                cli_prompt = (
+                    f"{VISION_SYSTEM_PROMPT}\n\n"
+                    f"Đọc và phân tích biểu đồ tại đường dẫn sau:\n"
+                    f"{image_path.resolve()}\n\n"
+                    f"{user_prompt}"
+                )
+                analysis_text = await _rag._call_claude_cli(
+                    cli_prompt, image_path=str(image_path.resolve())
+                )
+            except Exception as cli_err:
+                if (
+                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
+                    and ANTHROPIC_AVAILABLE
+                    and getattr(config, "ANTHROPIC_API_KEY", None)
+                ):
+                    log.warning(f"Vision: Claude CLI fail ({cli_err}). Fallback SDK.")
+                    provider = "anthropic"  # rơi xuống nhánh dưới qua re-check
+                else:
+                    result["error"] = f"Claude CLI error: {cli_err}"
+                    return result
+
+        if provider != "claude_cli" and provider != "gemini":
             # Encode image for Anthropic
             image_data = _encode_image(image_path)
             if not image_data:

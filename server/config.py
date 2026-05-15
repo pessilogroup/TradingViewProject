@@ -85,8 +85,16 @@ CHROMA_DB_PATH = os.getenv(
 # Anthropic (Claude) API Key — dùng cho bước Generation trong RAG
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# AI Provider: "anthropic" hoặc "gemini"
+# AI Provider: "anthropic" | "gemini" | "claude_cli"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
+
+# Claude Code CLI (dùng subscription OAuth, không cần API key)
+CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
+CLAUDE_CLI_MODEL = os.getenv("CLAUDE_CLI_MODEL", "")
+CLAUDE_CLI_TIMEOUT = int(os.getenv("CLAUDE_CLI_TIMEOUT", "60"))
+CLAUDE_CLI_MAX_PARALLEL = int(os.getenv("CLAUDE_CLI_MAX_PARALLEL", "2"))
+# Fallback sang Anthropic SDK nếu CLI lỗi và có ANTHROPIC_API_KEY
+CLAUDE_CLI_FALLBACK_SDK = os.getenv("CLAUDE_CLI_FALLBACK_SDK", "true").lower() == "true"
 
 # Gemini API Key (Fallback if not using Vertex AI)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
