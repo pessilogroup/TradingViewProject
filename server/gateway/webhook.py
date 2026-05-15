@@ -88,11 +88,11 @@ async def webhook(request: Request):
     sl_str = payload.get("sl", "")
     tp_str = payload.get("tp", "")
 
-    # Source IP
+    # Source IP — SEC-001 fix: use rightmost XFF hop (set by trusted proxy, not spoofable)
     source_ip = request.client.host
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        source_ip = forwarded.split(",")[0].strip()
+        source_ip = forwarded.split(",")[-1].strip()
 
     # TVP-004: Basic Rate Limiting
     now = time.time()

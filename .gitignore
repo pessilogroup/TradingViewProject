@@ -1,7 +1,8 @@
 # Environment & secrets
 server/.env
 *.env
-!.env.production
+# SEC-004 fix: .env.production must NOT be tracked — use .env.production.template instead
+# !.env.production  ← REMOVED: was re-including production env file in git
 !.env.example
 !server/.env.example
 

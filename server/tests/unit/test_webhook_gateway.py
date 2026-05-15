@@ -342,7 +342,12 @@ async def test_quote_qty_defaults_to_10_on_invalid():
 
 @pytest.mark.asyncio
 async def test_ip_extracted_from_x_forwarded_for():
-    """Source IP should be extracted from X-Forwarded-For (first hop)."""
+    """SEC-001 fix: Source IP must be taken from the RIGHTMOST hop in X-Forwarded-For.
+
+    The rightmost entry is appended by the trusted reverse proxy and cannot be
+    spoofed by the client. The leftmost entry (203.0.113.5) is client-provided
+    and untrusted. The rightmost entry (10.0.0.1) is what our proxy recorded.
+    """
     from gateway.webhook import webhook, _WEBHOOK_RATE_LIMITS
     _WEBHOOK_RATE_LIMITS.clear()
     captured_args = {}
@@ -364,11 +369,14 @@ async def test_ip_extracted_from_x_forwarded_for():
 
         req = _make_request(
             payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"},
+            # 203.0.113.5 = attacker-controlled first hop (untrusted)
+            # 10.0.0.1    = proxy-appended rightmost hop (authoritative)
             headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"},
             client_host="10.0.0.1",
         )
         await webhook(req)
-        assert captured_args["source_ip"] == "203.0.113.5"
+        # SEC-001: Must resolve to rightmost (proxy-set) hop, NOT the spoofable first hop
+        assert captured_args["source_ip"] == "10.0.0.1"
 
 
 # ═══════════════════════════════════════════════════════════════

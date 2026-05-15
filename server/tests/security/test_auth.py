@@ -55,13 +55,16 @@ async def test_dashboard_auth_with_token_required(client):
     """
     When DASHBOARD_TOKEN is set, /api/* endpoints require Bearer token auth.
     Requests without a valid token should be rejected with 401.
+
+    SEC-005: Only Authorization header is accepted (no ?token= query param).
     """
     original_token = config.DASHBOARD_TOKEN
     try:
         config.DASHBOARD_TOKEN = "secure-test-token"
         response = await client.get("/api/trades")
         assert response.status_code == 401
-        assert response.json().get("error") == "Invalid or missing token"
+        # SEC-005: updated error message reflects header-only auth requirement
+        assert response.json().get("error") == "Invalid or missing Authorization header"
     finally:
         # Always restore to avoid polluting other tests
         config.DASHBOARD_TOKEN = original_token

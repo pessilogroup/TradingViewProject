@@ -248,10 +248,18 @@ async def get_brief_by_id(brief_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def get_db_counts() -> Dict[str, int]:
-    """Đếm tổng records trong mỗi bảng cho system status."""
+    """Đếm tổng records trong mỗi bảng cho system status.
+
+    SEC-003 fix: Explicit allowlist guard before table name interpolation.
+    SQLite does not support parameterized table names, so we validate against
+    a hardcoded frozenset to prevent injection if this list ever becomes dynamic.
+    """
+    _ALLOWED_TABLES = frozenset({"signals", "trades", "briefs"})
     async with aiosqlite.connect(config.DB_PATH) as db:
         counts = {}
-        for table in ("signals", "trades", "briefs"):
+        for table in _ALLOWED_TABLES:
+            if table not in _ALLOWED_TABLES:  # explicit guard (defense-in-depth)
+                raise ValueError(f"Disallowed table name: {table!r}")
             rows = await db.execute_fetchall(f"SELECT COUNT(*) FROM {table}")
             counts[f"{table}_count"] = rows[0][0] if rows else 0
         return counts

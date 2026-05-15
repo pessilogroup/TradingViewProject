@@ -147,14 +147,22 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 # ═══ MIDDLEWARE: IP WHITELISTING ══════════════════════════════
+# SEC-001 fix: Use the RIGHTMOST entry of X-Forwarded-For (appended by our
+# trusted reverse proxy) instead of the FIRST entry (attacker-controlled).
+# This prevents IP spoofing bypasses for both whitelist and rate limiting.
+def _get_real_client_ip(request: Request) -> str:
+    """Extract real client IP, trusting the rightmost XFF hop (proxy-appended)."""
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Rightmost entry is appended by our trusted reverse proxy — cannot be spoofed
+        return forwarded_for.split(",")[-1].strip()
+    return request.client.host
+
+
 @app.middleware("http")
 async def ip_whitelist_middleware(request: Request, call_next):
     if config.ENABLE_IP_WHITELIST:
-        client_ip = request.client.host
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
-
+        client_ip = _get_real_client_ip(request)
         if client_ip not in config.TV_WHITELIST_IPS and client_ip != "127.0.0.1":
             log.warning(f"Blocked request from unauthorized IP: {client_ip}")
             return JSONResponse(
@@ -167,9 +175,13 @@ async def ip_whitelist_middleware(request: Request, call_next):
 # ═══ DASHBOARD AUTH MIDDLEWARE ════════════════════════════════
 @app.middleware("http")
 async def dashboard_auth_middleware(request: Request, call_next):
-    """Simple bearer-token auth for /api/* endpoints (skip /webhook, /tv_health_check, static, dashboard HTML)."""
+    """Bearer-token auth for /api/* endpoints.
+
+    SEC-005 fix: Removed ?token= query-param fallback. Token MUST be sent via
+    Authorization header only. Query params appear in access logs (plaintext leak).
+    Skip auth for: webhook, health check, static files, dashboard HTML, root, screenshots.
+    """
     path = request.url.path
-    # Skip auth for: webhook, health check, static files, dashboard HTML, root, screenshot images
     skip_paths = ("/webhook", "/tv_health_check", "/health", "/api/system/status", "/static", "/dashboard", "/")
     if not config.DASHBOARD_TOKEN or path in skip_paths or path.startswith("/static") \
             or path.startswith("/api/vision/screenshot/"):
@@ -177,17 +189,13 @@ async def dashboard_auth_middleware(request: Request, call_next):
 
     if path.startswith("/api/") or path.startswith("/trades"):
         auth_header = request.headers.get("Authorization", "")
-        token_param = request.query_params.get("token", "")
-        token = ""
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-        elif token_param:
-            token = token_param
+        # SEC-005: Header-only auth — never accept token via query param to prevent log leaks
+        token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
 
         if not secrets.compare_digest(token, config.DASHBOARD_TOKEN):
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"error": "Invalid or missing token"},
+                content={"error": "Invalid or missing Authorization header"},
             )
     return await call_next(request)
 
@@ -474,11 +482,24 @@ async def binance_account_endpoint(
 
 @app.post("/api/vision/analyze")
 async def api_vision_analyze(symbol: str = Query(...), image_path: str = Query(...)):
-    """Analyze a chart screenshot using Claude Vision API."""
+    """Analyze a chart screenshot using Claude Vision API.
+
+    SEC-002 fix: Restrict image_path to the designated screenshots directory
+    to prevent path traversal attacks (e.g. image_path=../../server/.env).
+    """
     from pathlib import Path
-    path = Path(image_path)
+    # SEC-002: Resolve the screenshot base directory and validate path is within it
+    screenshot_base = Path(config.CHROMA_DB_PATH).parent.resolve() / "screenshots"
+    screenshot_base.mkdir(parents=True, exist_ok=True)
+    # Accept only the filename portion — strip any directory components from input
+    safe_filename = Path(image_path).name
+    path = (screenshot_base / safe_filename).resolve()
+    # Double-check the resolved path is still inside screenshot_base (symlink guard)
+    if not str(path).startswith(str(screenshot_base)):
+        log.warning(f"Path traversal attempt blocked: image_path={image_path!r}")
+        raise HTTPException(status_code=403, detail="Access denied: path traversal detected")
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Image not found: {image_path}")
+        raise HTTPException(status_code=404, detail=f"Image not found: {safe_filename}")
 
     result = await vision_module.analyze_chart_vision(
         image_path=path,
