@@ -26,6 +26,14 @@ import telegram_bot as tg_bot_module
 import vision as vision_module
 import binance_client as binance_module
 
+# ── P9: Claude CLI package ────────────────────────────────────────────────────
+from claude_cli import CliInfrastructure, ClaudeService
+import claude_cli.telegram_commands as _claude_tg
+import claude_cli.event_handler as _claude_eh
+
+# Module-level singleton — shared between lifespan and REST endpoints
+_claude_service: Optional[ClaudeService] = None
+
 # ── Phase 4: EventBus imports ────────────────────────────────────────────────
 from core.event_bus import bus as _event_bus
 from core.events import SignalReceived
@@ -136,6 +144,36 @@ async def lifespan(app: FastAPI):
         log.info("Telegram Bot: ✅ Interactive bot started (polling mode).")
     else:
         log.info("Telegram Bot: TẮT (TELEGRAM_BOT_ENABLED=false).")
+
+    # ── Claude CLI (P9) ──────────────────────────────────────────────────────
+    global _claude_service
+    if config.CLAUDE_CLI_ENABLED:
+        _cli = CliInfrastructure()
+        cli_ok = await _cli.check_availability()
+        if not cli_ok:
+            log.warning(
+                "Claude CLI: Binary not found or not responding. "
+                "CLI calls will fail; SDK fallback active if ANTHROPIC_API_KEY is set."
+            )
+        _claude_service = ClaudeService(_cli)
+        await _claude_service.initialize()
+        log.info("Claude CLI: ✅ ClaudeService initialized.")
+
+        # Register EventBus handler only when AI_PROVIDER=claude_cli
+        if getattr(config, "AI_PROVIDER", "").lower() == "claude_cli":
+            _claude_eh.register_handler(_claude_service)
+            log.info("Claude CLI: EventBus handler registered for SignalValidated.")
+
+        # Register Telegram commands only when bot is running
+        if config.TELEGRAM_BOT_ENABLED:
+            _app = tg_bot_module.get_application()
+            if _app is not None:
+                _claude_tg.register_commands(_app, _claude_service)
+                log.info("Claude CLI: Telegram commands /claude /analyze /claude_reset /claude_status registered.")
+            else:
+                log.warning("Claude CLI: Telegram application not available — commands not registered.")
+    else:
+        log.info("Claude CLI: TẮT (CLAUDE_CLI_ENABLED=false). Property 8 — no subprocess, no handlers.")
 
     yield
 
