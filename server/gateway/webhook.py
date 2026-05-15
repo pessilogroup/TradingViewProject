@@ -39,11 +39,15 @@ router = APIRouter()
 _WEBHOOK_RATE_LIMITS: dict = {}
 
 
+from data.tv_models import TradingViewAlertPayload
+
 # ═══ WEBHOOK ENDPOINT ═════════════════════════════════════════════════════════
 @router.post("/webhook")
 async def webhook(request: Request):
     try:
         payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Payload must be a JSON object")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
@@ -78,15 +82,27 @@ async def webhook(request: Request):
     if not payload:
         raise HTTPException(status_code=400, detail="Empty payload")
 
-    action = (payload.get("action") or payload.get("side", "")).lower()
-    symbol = payload.get("symbol", "")
-    price = payload.get("price", "")
-    ts = payload.get("time", "")
-    quote_qty = payload.get("quoteQty", payload.get("size", 10))
-    interval = str(payload.get("interval", "")).strip().lower()
+    # Parse with Pydantic for validation and structured access
+    try:
+        tv_alert = TradingViewAlertPayload.model_validate(payload)
+    except Exception as e:
+        log.warning(f"Pydantic validation error: {e}")
+        # Fallback to empty model to not break completely
+        tv_alert = TradingViewAlertPayload()
 
-    sl_str = payload.get("sl", "")
-    tp_str = payload.get("tp", "")
+    action = (tv_alert.action or "").lower()
+    symbol = tv_alert.symbol or ""
+    price = tv_alert.price
+    ts = tv_alert.time or ""
+    quote_qty = tv_alert.quoteQty
+    interval = str(tv_alert.interval or "").strip().lower()
+
+    sl_str = tv_alert.sl or ""
+    tp_str = tv_alert.tp or ""
+
+    # Keep default exchange handling from payload
+    exchange = tv_alert.exchange or config.DEFAULT_EXCHANGE
+    payload["exchange"] = exchange
 
     # Source IP — SEC-001 fix: use rightmost XFF hop (set by trusted proxy, not spoofable)
     source_ip = request.client.host
