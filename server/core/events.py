@@ -131,6 +131,14 @@ class TradeFailed(Event):
 
 
 @dataclass(frozen=True)
+class TradeApprovalTimeout(Event):
+    """Emitted by NotificationHub or ApprovalTimeoutManager when an interactive request expires."""
+    signal_id: int = 0
+    symbol: str = ""
+    reason: str = "Timeout exceeded (5 mins)"
+
+
+@dataclass(frozen=True)
 class PositionClosed(Event):
     """Emitted by PositionMonitor when SL/TP fill is detected on an exchange.
 
@@ -154,12 +162,13 @@ class PositionClosed(Event):
 
 @dataclass(frozen=True)
 class AlertTriggered(Event):
-    """Emitted by WebhookGateway when action='alert' and MCP is enabled."""
+    """Emitted by SignalProcessor when action='alert' (stealth capture path)."""
     signal_id: int = 0
     symbol: str = ""
     price: str = ""
     quote_qty: float = 10.0
     rag_advice: str = ""
+    exchange: str = "binance"
 
 
 @dataclass(frozen=True)

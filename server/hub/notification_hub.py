@@ -1,21 +1,40 @@
 """
-NotificationHub — Centralized notification subscriber for rejected signals.
+NotificationHub — Centralized notification and approval gate (v6.0).
 
-Listens to: SignalRejected
-Emits: (none — terminal subscriber)
+Listens to:
+  - SignalRejected      → Notify trader of rejection reason.
+  - AnalysisComplete    → Confidence gate: auto-approve, human gate, or auto-reject.
+  - TradeExecuted       → Notify trader of successful execution + P&L data.
+  - TradeFailed         → Notify trader of execution failure.
+  - PositionClosed      → Notify trader of SL/TP hit with P&L.
+  - TradeApprovalTimeout → Cleanup stale interactive requests.
 
-Design Invariants:
-- Phase 4 scope: Only handles SignalRejected notifications.
-  TradeEngine and AIAnalyzer keep inline notification (Phase 3).
-- Phase 5 will migrate ALL notification calls here.
-- Uses set_bus() pattern for test isolation.
+Emits:
+  - TradeApproved       → When confidence >= 8 (auto) or human clicks Approve.
+  - SignalRejected      → When confidence < 5 (auto-reject).
+
+Design Invariants (v6.0 INV-5/6):
+  - Confidence >= 8: Auto-approve → emit TradeApproved immediately.
+  - Confidence 5-7: Human gate → send interactive Telegram keyboard.
+  - Confidence < 5: Auto-reject → send rejection notification.
+  - R:R enforcement is the USER's decision (not auto-rejected by AIAnalyzer).
+  - Uses set_bus() pattern for test isolation.
 """
 import logging
+from pathlib import Path
 
 import notifier
 
 from core.event_bus import bus as _default_bus
-from core.events import SignalRejected, AnalysisComplete, TradeApproved
+from core.events import (
+    SignalRejected,
+    AnalysisComplete,
+    TradeApproved,
+    TradeExecuted,
+    TradeFailed,
+    PositionClosed,
+    TradeApprovalTimeout,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +54,24 @@ def get_bus():
 
 
 # ═══════════════════════════════════════════════════════════════
-# EVENT HANDLERS
+# PENDING TRADES STATE (in-memory for interactive approvals)
+# ═══════════════════════════════════════════════════════════════
+
+PENDING_TRADES = {}
+
+
+def get_pending_trade(signal_id: int):
+    """Retrieve a pending trade event by signal_id."""
+    return PENDING_TRADES.get(signal_id)
+
+
+def remove_pending_trade(signal_id: int):
+    """Remove a pending trade from the store."""
+    return PENDING_TRADES.pop(signal_id, None)
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: SignalRejected → Rejection Notification
 # ═══════════════════════════════════════════════════════════════
 
 @_default_bus.on(SignalRejected)
@@ -46,10 +82,13 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
     Rejection reasons:
     - duplicate_signal: Same (symbol, action) within 60s dedup window.
     - invalid_timeframe: Interval not in {60, 1h, 60m}.
+    - low_confidence: AI confidence < 5 (auto-reject by gate).
     """
     reason_map = {
         "duplicate_signal": "Tín hiệu trùng lặp (dedup 60s)",
         "invalid_timeframe": f"Khung thời gian không hợp lệ: `{event.interval}`",
+        "unknown_action": f"Hành động không xác định: `{event.action}`",
+        "low_confidence": "Điểm AI quá thấp (< 5/10) — tự động từ chối",
     }
 
     reason_text = reason_map.get(event.reason, event.reason)
@@ -74,20 +113,38 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# INTERACTIVE GATE (AnalysisComplete -> TradeApproved)
+# HANDLER: AnalysisComplete → Confidence Gate (INV-5/6)
 # ═══════════════════════════════════════════════════════════════
-
-PENDING_TRADES = {}
 
 @_default_bus.on(AnalysisComplete)
 async def process_analysis_complete(event: AnalysisComplete) -> None:
     """
-    Evaluate AI analysis results.
-    If 'All Green', automatically approve the trade.
-    If 'interactive_required', pause and send an interactive Telegram message to Human.
+    v6.0 Confidence Gate (INV-5/6):
+
+    - Confidence >= 8: Auto-approve → emit TradeApproved immediately.
+    - Confidence 5-7: Human gate → send interactive Telegram message.
+    - Confidence < 5: Auto-reject → send rejection notification.
+
+    R:R and risk data are passed through for the user to evaluate.
+    The AIAnalyzer does NOT reject based on R:R — user decides (per user directive).
     """
-    if event.should_trade and not event.interactive_required:
-        log.info(f"NotificationHub: Auto-approving trade for #{event.signal_id} {event.symbol}")
+    confidence = event.confidence
+    exchange = getattr(event, 'exchange', 'binance')
+
+    # ── Tier 1: Auto-Approve (confidence >= 8) ───────────────
+    if confidence >= 8:
+        log.info(
+            f"NotificationHub: ✅ Auto-approving trade for #{event.signal_id} {event.symbol} "
+            f"(confidence={confidence}/10)"
+        )
+        await notifier.notify_all(
+            f"🟢 **AUTO-APPROVE** — `{event.symbol}` trên `{exchange.upper()}`\n"
+            f"- Điểm AI: `{confidence}/10`\n"
+            f"- Hành động: `{event.action.upper()}`\n"
+            f"- Giá: `{event.price or 'Market'}`\n"
+            f"- SL: `{event.sl or 'N/A'}` | TP: `{event.tp or 'N/A'}`\n\n"
+            f"🤖 Tự động gửi lệnh..."
+        )
         await _bus.emit(TradeApproved(
             signal_id=event.signal_id,
             symbol=event.symbol,
@@ -96,29 +153,37 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
             quote_qty=event.quote_qty,
             sl=event.sl,
             tp=event.tp,
+            exchange=exchange,
             approved_by="AI (Auto-Green)",
-            analysis_text=event.analysis_text
+            analysis_text=event.analysis_text,
         ))
-    elif event.interactive_required or not event.should_trade:
-        # If should_trade=False but we still want to give human a chance, or if interactive_required
-        log.info(f"NotificationHub: Interactive approval required for #{event.signal_id} {event.symbol}")
+        return
+
+    # ── Tier 2: Human Gate (confidence 5-7) ──────────────────
+    if 5 <= confidence <= 7:
+        log.info(
+            f"NotificationHub: ⚠️ Interactive approval required for #{event.signal_id} {event.symbol} "
+            f"(confidence={confidence}/10)"
+        )
         PENDING_TRADES[event.signal_id] = event
-        
+
         msg = (
             f"⚠️ **CẦN DUYỆT LỆNH (Interactive Gate)**\n"
-            f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
+            f"- Sàn: `{exchange.upper()}`\n"
             f"- Mã: `{event.symbol}`\n"
             f"- Hành động: `{event.action.upper()}`\n"
             f"- Giá: `{event.price or 'Market'}`\n"
-            f"- Điểm AI: `{event.confidence}/10`\n\n"
-            f"🧠 **Khuyến nghị AI:**\n{event.analysis_text}"
+            f"- Điểm AI: `{confidence}/10`\n"
+            f"- SL: `{event.sl or 'N/A'}` | TP: `{event.tp or 'N/A'}`\n"
+            f"- Score: `{event.combined_score or 'N/A'}`\n\n"
+            f"🧠 **Khuyến nghị AI:**\n{event.analysis_text[:800]}"
         )
-        
+
         try:
             import telegram_bot
             sent_pairs = await telegram_bot.send_interactive_trade_approval(
                 signal_id=event.signal_id,
-                message=msg
+                message=msg,
             )
             if not sent_pairs:
                 # Fallback to normal notify if bot not running
@@ -132,5 +197,148 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
         except Exception as e:
             log.error(f"NotificationHub: Failed to trigger interactive message: {e}")
             await notifier.notify_all(msg + f"\n\n*(Lỗi tương tác: {e})*")
+        return
+
+    # ── Tier 3: Auto-Reject (confidence < 5) ─────────────────
+    log.info(
+        f"NotificationHub: 🔴 Auto-rejecting trade for #{event.signal_id} {event.symbol} "
+        f"(confidence={confidence}/10)"
+    )
+    # BUG-01 fix: Emit SignalRejected to honour the event contract.
+    # Previously only notifier.notify_all() was called, silently breaking
+    # any downstream audit/telemetry handlers subscribed to SignalRejected.
+    await _bus.emit(SignalRejected(
+        signal_id=event.signal_id,
+        symbol=event.symbol,
+        action=event.action,
+        reason="low_confidence",
+        exchange=exchange,
+    ))
+    await notifier.notify_all(
+        f"🔴 **TỰ ĐỘNG TỪ CHỐI** — `{event.symbol}` trên `{exchange.upper()}`\n"
+        f"- Điểm AI: `{confidence}/10` (< 5 — quá thấp)\n"
+        f"- Hành động: `{event.action.upper()}`\n\n"
+        f"🧠 **Phân tích AI:**\n{event.analysis_text[:500]}"
+    )
 
 
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: TradeExecuted → Execution Confirmation
+# ═══════════════════════════════════════════════════════════════
+
+@_default_bus.on(TradeExecuted)
+async def notify_trade_executed(event: TradeExecuted) -> None:
+    """
+    v6.0: Centralized execution notification.
+    TradeEngine emits TradeExecuted → NotificationHub formats and sends.
+    """
+    exchange = getattr(event, 'exchange', 'binance')
+    order_type = event.order_type or "MARKET"
+
+    msg = (
+        f"✅ **Đã Đặt Lệnh {exchange.title()}**\n"
+        f"- Mã: `{event.symbol}`\n"
+        f"- Lệnh: `{event.side} {order_type}`\n"
+        f"- Số lượng: `{event.executed_qty}` (Value: `~{event.quote_qty}$`)\n"
+        f"- Giá khớp: `{event.executed_price:.4f}`\n"
+    )
+    if event.stop_loss_price:
+        msg += f"- Cắt lỗ (SL): `{event.stop_loss_price}`\n"
+    if event.take_profit_price:
+        msg += f"- Chốt lời (TP): `{event.take_profit_price}`\n"
+    if order_type == "DRY_RUN":
+        msg += "\n⚠️ `CHẾ ĐỘ DRY_RUN — KHÔNG KHỚP LỆNH THỰC TẾ`"
+
+    if event.rag_advice:
+        msg += f"\n\n🧠 **Phân tích AI:**\n{event.rag_advice[:500]}"
+
+    log.info(f"NotificationHub: Trade executed #{event.trade_id} on {exchange}")
+    await notifier.notify_all(msg)
+
+    # Send screenshot if available
+    if event.telegram_message:
+        log.debug(f"NotificationHub: Trade #{event.trade_id} inline message already sent by engine.")
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: TradeFailed → Failure Alert
+# ═══════════════════════════════════════════════════════════════
+
+@_default_bus.on(TradeFailed)
+async def notify_trade_failed(event: TradeFailed) -> None:
+    """
+    v6.0: Centralized failure notification.
+    TradeEngine emits TradeFailed → NotificationHub formats and sends.
+    """
+    exchange = getattr(event, 'exchange', 'binance')
+
+    msg = (
+        f"❌ **Lỗi Đặt Lệnh {exchange.title()}**\n"
+        f"- Mã: `{event.symbol}`\n"
+        f"- Lệnh: `{event.side}`\n"
+        f"- Chi tiết lỗi: `{event.error}`\n"
+        f"- Signal ID: `#{event.signal_id}`"
+    )
+
+    log.info(f"NotificationHub: Trade failed for #{event.signal_id} on {exchange}")
+    await notifier.notify_all(msg)
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: PositionClosed → P&L Notification
+# ═══════════════════════════════════════════════════════════════
+
+@_default_bus.on(PositionClosed)
+async def notify_position_closed(event: PositionClosed) -> None:
+    """
+    REQ2: P&L Notification on SL/TP Hit.
+    PositionMonitor emits PositionClosed → NotificationHub sends P&L.
+    """
+    exchange = getattr(event, 'exchange', 'binance')
+    pnl_emoji = "🟢" if event.pnl >= 0 else "🔴"
+    exit_reason_map = {
+        "STOP_LOSS": "🛑 Cắt lỗ (Stop Loss)",
+        "TAKE_PROFIT": "🎯 Chốt lời (Take Profit)",
+        "MANUAL": "✋ Đóng thủ công",
+    }
+    exit_text = exit_reason_map.get(event.exit_reason, event.exit_reason)
+
+    msg = (
+        f"{pnl_emoji} **Đóng Vị Thế — {exit_text}**\n"
+        f"- Sàn: `{exchange.upper()}`\n"
+        f"- Mã: `{event.symbol}`\n"
+        f"- Vào lệnh: `{event.entry_price}`\n"
+        f"- Thoát lệnh: `{event.exit_price}`\n"
+        f"- Số lượng: `{event.quantity}`\n"
+        f"- P&L: `{event.pnl:+.4f}` ({event.pnl_pct:+.2f}%)\n"
+    )
+
+    log.info(
+        f"NotificationHub: Position closed {event.symbol} on {exchange} — "
+        f"P&L: {event.pnl:+.4f} ({event.exit_reason})"
+    )
+    await notifier.notify_all(msg)
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: TradeApprovalTimeout → Cleanup Stale Requests
+# ═══════════════════════════════════════════════════════════════
+
+@_default_bus.on(TradeApprovalTimeout)
+async def handle_approval_timeout(event: TradeApprovalTimeout) -> None:
+    """
+    v6.0: Garbage collection for stale interactive approval requests.
+    Removes from PENDING_TRADES and notifies the user.
+    """
+    pending = remove_pending_trade(event.signal_id)
+    if pending:
+        log.info(f"NotificationHub: Approval timeout for #{event.signal_id} {event.symbol}")
+        await notifier.notify_all(
+            f"⏰ **Hết thời gian duyệt lệnh**\n"
+            f"- Mã: `{event.symbol}`\n"
+            f"- Signal ID: `#{event.signal_id}`\n"
+            f"- Lý do: {event.reason}\n\n"
+            f"Lệnh đã bị hủy tự động."
+        )
+    else:
+        log.debug(f"NotificationHub: Timeout for #{event.signal_id} but no pending trade found (already processed).")

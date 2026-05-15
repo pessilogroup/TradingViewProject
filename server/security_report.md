@@ -1,153 +1,75 @@
-# 🛡️ Mini-MDASH Security Report
+# Mini-MDASH Security Report
 
-**Target**: `C:\Users\pesil\working\mj_trading\TradingViewProject\server`
-**Timestamp**: 2026-05-14T21:43:39.940449+00:00
-**Files Scanned**: 21
+**Target**: `server/` (project root scan: `python -m security.cli scan --target .` from `server` directory)  
+**Timestamp**: 2026-05-15 (see `security_report.json` for exact ISO time)  
+**Files scanned**: 45  
 
-## Summary
+## Summary (latest JSON)
 
-| Severity | Count |
-|----------|-------|
-| 🔴 Critical | **4** |
-| 🟠 High | **4** |
-| 🟡 Medium | **6** |
-| 🟢 Low | **1** |
-| ℹ️ Info | **0** |
-| **Total** | **15** |
+| Severity  | Count |
+|-----------|-------|
+| Critical  | 0     |
+| High      | 0     |
+| Medium    | 1     |
+| Low       | 1     |
+| **Total** | **2** |
 
-**Scanners**: secret-detector, tvp-trading-rules, static-analysis
+**Scanners used (this run)**: `tvp-trading-rules` only produced findings; static, dependency, and secret scanners ran with zero additional findings in the committed report artifact.
 
-> **VERDICT: 🔴 CRITICAL — Immediate action required**
-
-## Findings
-
-### 🔴 CRITICAL
-
-#### [TVP-002] Uncapped trade size from webhook payload
-- **File**: `TradingViewProject/server/main.py` (line 432)
-- **Confidence**: 90%
-- **CWE**: [CWE-770](https://cwe.mitre.org/data/definitions/770.html)
-- **Description**: quoteQty is extracted from webhook payload without a maximum cap. An attacker who compromises the webhook secret could submit a trade with quoteQty=999999, draining the Binance account.
-- **Evidence**: `quote_qty = payload.get('quoteQty', ...)`
-- **Fix**: Add MAX_QUOTE_QTY config (e.g., 100 USDT) and clamp: quote_qty = min(float(quote_qty), config.MAX_QUOTE_QTY)
-
-#### [SEC-001] Potential Telegram Bot Token in .env
-- **File**: `TradingViewProject/server/.env` (line 41)
-- **Confidence**: 75%
-- **CWE**: [CWE-798](https://cwe.mitre.org/data/definitions/798.html)
-- **Description**: Detected what appears to be a Telegram Bot Token in configuration file.
-- **Evidence**: `TELEGRAM_BOT_TOKEN=8602739357:AAGMPw6IXR... (value redacted)`
-- **Fix**: Move to a secrets manager or ensure this file is in .gitignore. Never commit real credentials to version control.
-
-#### [SEC-001] Potential API key in .env
-- **File**: `TradingViewProject/server/.env` (line 69)
-- **Confidence**: 75%
-- **CWE**: [CWE-798](https://cwe.mitre.org/data/definitions/798.html)
-- **Description**: Detected what appears to be a API key in configuration file.
-- **Evidence**: `GEMINI_API_KEY=AIzaSyDXtytTwJ5InxL6dOaSq... (value redacted)`
-- **Fix**: Move to a secrets manager or ensure this file is in .gitignore. Never commit real credentials to version control.
-
-#### [SEC-001] Potential Telegram Bot Token in .env
-- **File**: `mj_trading/TradingViewProject/.env` (line 41)
-- **Confidence**: 75%
-- **CWE**: [CWE-798](https://cwe.mitre.org/data/definitions/798.html)
-- **Description**: Detected what appears to be a Telegram Bot Token in configuration file.
-- **Evidence**: `TELEGRAM_BOT_TOKEN=8602739357:AAGMPw6IXR... (value redacted)`
-- **Fix**: Move to a secrets manager or ensure this file is in .gitignore. Never commit real credentials to version control.
-
-### 🟠 HIGH
-
-#### [TVP-001] Unsafe price/qty parsing without try/except
-- **File**: `TradingViewProject/server/main.py` (line 456)
-- **Confidence**: 80%
-- **CWE**: [CWE-20](https://cwe.mitre.org/data/definitions/20.html)
-- **Description**: float() called on user-controlled variable 'quote_qty' without try/except guard. A non-numeric webhook payload will crash the handler.
-- **Evidence**: `quote_qty=float(quote_qty) if quote_qty else None,`
-- **Fix**: Wrap in try/except (ValueError, TypeError) with safe default.
-
-#### [TVP-001] Unsafe price/qty parsing without try/except
-- **File**: `TradingViewProject/server/main.py` (line 759)
-- **Confidence**: 80%
-- **CWE**: [CWE-20](https://cwe.mitre.org/data/definitions/20.html)
-- **Description**: float() called on user-controlled variable 'quote_qty' without try/except guard. A non-numeric webhook payload will crash the handler.
-- **Evidence**: `requested_qty=float(quote_qty) if quote_qty else 0,`
-- **Fix**: Wrap in try/except (ValueError, TypeError) with safe default.
-
-#### [TVP-007] Telegram bot token potentially exposed in error output
-- **File**: `TradingViewProject/server/telegram_bot.py` (line 622)
-- **Confidence**: 70%
-- **CWE**: [CWE-532](https://cwe.mitre.org/data/definitions/532.html)
-- **Description**: Telegram bot token referenced in logging/error handling code. If the token value is interpolated into the message, it will appear in trades.log and could be exfiltrated.
-- **Evidence**: `log.warning("TELEGRAM_BOT_TOKEN not set — Telegram Bot disabled")`
-- **Fix**: Never log token values. Log only 'token_present=True/False'.
-
-#### [SEC-001] Potential Hardcoded secret/password in simulate_webhook.ps1
-- **File**: `TradingViewProject/server/simulate_webhook.ps1` (line 11)
-- **Confidence**: 75%
-- **CWE**: [CWE-798](https://cwe.mitre.org/data/definitions/798.html)
-- **Description**: Detected what appears to be a Hardcoded secret/password in configuration file.
-- **Evidence**: `$Secret = "7086c59c523e87c90f9d56db63a66... (value redacted)`
-- **Fix**: Move to a secrets manager or ensure this file is in .gitignore. Never commit real credentials to version control.
-
-### 🟡 MEDIUM
-
-#### [TVP-005] Potential path traversal in screenshot save path
-- **File**: `TradingViewProject/server/brief.py` (line 132)
-- **Confidence**: 60%
-- **CWE**: [CWE-22](https://cwe.mitre.org/data/definitions/22.html)
-- **Description**: File save path may incorporate user-controlled data (symbol from webhook). A crafted symbol like '../../etc/passwd' could write outside the screenshots dir.
-- **Evidence**: `save_path=Path(__file__).parent / "screenshots" / f"brief_{top.symbol}_{timestamp.strftime('%Y%m%d')`
-- **Fix**: Sanitize symbol name: symbol = re.sub(r'[^A-Za-z0-9]', '', symbol)
-
-#### [TVP-004] No rate limiting on API endpoints
-- **File**: `TradingViewProject/server/main.py` (line 169)
-- **Confidence**: 95%
-- **CWE**: [CWE-770](https://cwe.mitre.org/data/definitions/770.html)
-- **Description**: Found 28 API endpoints with no rate limiting middleware. An attacker can flood /webhook with thousands of requests to exhaust Binance API quota or trigger unwanted trades.
-- **Evidence**: `Endpoints: GET /health, GET /dashboard, GET /, GET /tv_health_check, GET /api/mcp/status`
-- **Fix**: Add slowapi or custom rate limiter middleware (e.g., 10 req/min on /webhook).
-
-#### [TVP-005] Potential path traversal in screenshot save path
-- **File**: `TradingViewProject/server/main.py` (line 576)
-- **Confidence**: 60%
-- **CWE**: [CWE-22](https://cwe.mitre.org/data/definitions/22.html)
-- **Description**: File save path may incorporate user-controlled data (symbol from webhook). A crafted symbol like '../../etc/passwd' could write outside the screenshots dir.
-- **Evidence**: `save_path = Path(__file__).parent / "screenshots" / f"stealth_{symbol}_{ts_str}.png"`
-- **Fix**: Sanitize symbol name: symbol = re.sub(r'[^A-Za-z0-9]', '', symbol)
-
-#### [TVP-005] Potential path traversal in screenshot save path
-- **File**: `TradingViewProject/server/mcp_client.py` (line 239)
-- **Confidence**: 60%
-- **CWE**: [CWE-22](https://cwe.mitre.org/data/definitions/22.html)
-- **Description**: File save path may incorporate user-controlled data (symbol from webhook). A crafted symbol like '../../etc/passwd' could write outside the screenshots dir.
-- **Evidence**: `save_path = Path(__file__).parent / "screenshots" / f"{symbol}_{timeframe}.png"`
-- **Fix**: Sanitize symbol name: symbol = re.sub(r'[^A-Za-z0-9]', '', symbol)
-
-#### [TVP-005] Potential path traversal in screenshot save path
-- **File**: `TradingViewProject/server/telegram_bot.py` (line 357)
-- **Confidence**: 60%
-- **CWE**: [CWE-22](https://cwe.mitre.org/data/definitions/22.html)
-- **Description**: File save path may incorporate user-controlled data (symbol from webhook). A crafted symbol like '../../etc/passwd' could write outside the screenshots dir.
-- **Evidence**: `save_path=screenshots_dir / f"vision_{symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"`
-- **Fix**: Sanitize symbol name: symbol = re.sub(r'[^A-Za-z0-9]', '', symbol)
-
-#### [STA-001] Dynamic import — potential code injection
-- **File**: `TradingViewProject/server/mcp_client.py` (line 71)
-- **Confidence**: 90%
-- **CWE**: [CWE-502](https://cwe.mitre.org/data/definitions/502.html)
-- **Description**: Call to __import__() detected. This can execute arbitrary code.
-- **Evidence**: `__import__(...) at line 71`
-- **Fix**: Remove __import__() or use a safe alternative.
-
-### 🟢 LOW
-
-#### [TVP-006] DRY_RUN mode overridable via environment variable
-- **File**: `TradingViewProject/server/config.py` (line 25)
-- **Confidence**: 50%
-- **CWE**: [CWE-1188](https://cwe.mitre.org/data/definitions/1188.html)
-- **Description**: BINANCE_DRY_RUN is loaded from environment at startup. If .env file is writable or env can be injected, an attacker could disable dry-run mode and execute real trades.
-- **Evidence**: `BINANCE_DRY_RUN    = os.getenv("BINANCE_DRY_RUN", "true").lower() == "true"`
-- **Fix**: Add runtime validation: if production, force DRY_RUN=true unless explicit unlock.
+**Verdict**: No critical or high findings from the trading-rules scan. Address medium/low or accept documented risk.
 
 ---
-*Generated by Mini-MDASH Security Harness v1.0 — 2026-05-14T21:43:39.940449+00:00*
+
+## Current findings (machine-readable copy)
+
+Full payload: [security_report.json](security_report.json).
+
+### TVP-004 — Medium — No global rate limiting on API endpoints
+
+- **File**: [main.py](main.py) (first registered route line ~196)
+- **Description**: FastAPI routes defined on `app` in `main.py` have no app-wide rate limiter (e.g. slowapi). Authenticated or expensive routes could be abused for DoS or quota burn.
+- **Mitigation already in place**: `POST /webhook` is rate-limited per source IP (15/min) in [gateway/webhook.py](gateway/webhook.py) (`_WEBHOOK_RATE_LIMITS`, HTTP 429).
+- **Remediation**: Add per-route or global limits for `/api/*`, `/trades`, etc.
+
+### TVP-006 — Low — DRY_RUN from environment
+
+- **File**: [config.py](config.py)
+- **Description**: `BINANCE_DRY_RUN` comes from env; combined with `ENVIRONMENT` / `FORCE_LIVE_TRADING` there is already a production guard — residual risk is host compromise of `.env` or process env.
+- **Remediation**: Keep secrets on host out of SCM; optional stricter policy (e.g. refuse live without explicit operator flag).
+
+---
+
+## Triage: superseded or clarified items (older report cycles)
+
+These appeared in historical `security_report.json` / harness output before the webhook moved to `gateway/webhook.py` and parsers were hardened.
+
+| ID / theme | Prior claim | Status | Evidence |
+|------------|-------------|--------|----------|
+| TVP-002 | Uncapped `quoteQty` on webhook | **Mitigated** | [gateway/webhook.py](gateway/webhook.py): `quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)` after safe float parse; [config.py](config.py) `MAX_QUOTE_QTY`. |
+| TVP-001 | Unsafe `float()` on webhook fields | **Mitigated** | Same file: try/except for `price` and `quote_qty` with safe defaults. |
+| TVP-004 (old text) | “Flood `/webhook`” with no RL | **Clarified** | Webhook RL lives in gateway module; remaining gap is **other** routes in `main.py`. |
+| TVP-005 | Path traversal in screenshot paths | **Mitigated / false positive** | [brief.py](brief.py), [telegram_bot.py](telegram_bot.py), [analyzer/ai_analyzer.py](analyzer/ai_analyzer.py): `safe_symbol` via `re.sub` before filename; scanner updated to skip lines containing `safe_symbol`. |
+| SEC-001 | Secrets in `.env` / scripts | **Operational** | Keep `.env` and local scripts out of git; rotate if ever committed. Re-run secret scanner on CI with a clean tree. |
+| TVP-007 | Telegram token in logs | **Low / wording** | Code references the **name** `TELEGRAM_BOT_TOKEN` in a static message, not the secret value; optional copy change to “Telegram credentials not configured”. |
+
+---
+
+## Manual review (2026-05-15)
+
+1. **Webhook HMAC-style compare**: [gateway/webhook.py](gateway/webhook.py) uses `secrets.compare_digest(str(secret), str(config.WEBHOOK_SECRET))` for non-dashboard callers (dashboard still uses Bearer `DASHBOARD_TOKEN` bypass by design).
+2. **Dashboard bypass**: Valid `Authorization: Bearer <DASHBOARD_TOKEN>` skips webhook secret — treat `DASHBOARD_TOKEN` like a root credential; HTTPS and rotation required.
+3. **Default `WEBHOOK_SECRET`**: [config.py](config.py) default `change_me_in_dotenv` must be overridden in production.
+4. **`X-Forwarded-For`**: [main.py](main.py) and webhook use first forwarded hop for IP-derived limits/whitelist — only safe behind a trusted reverse proxy.
+5. **SQL**: Grep of [telegram_bot.py](telegram_bot.py) found no `execute(f"...")` patterns; keep new queries parameterized.
+6. **MCP subprocess**: [mcp_client.py](mcp_client.py) uses `asyncio.create_subprocess_exec` without shell; CLI args include symbol/timeframe from callers — acceptable today; consider strict allowlist if inputs widen.
+
+---
+
+## Regression checks
+
+- `python -m pytest tests/security/ tests/integration/test_webhook.py` — all passed after webhook digest change.
+- Re-run harness: `python -m security.cli scan --target . --format json --output security_report.json`
+
+---
+
+*Generated / refreshed as part of the security bug finding plan. Mini-MDASH harness: [security/harness.py](security/harness.py).*

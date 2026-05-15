@@ -1,10 +1,14 @@
 """
-Unit tests for AIAnalyzer component (Phase 3).
+Unit tests for AIAnalyzer component (v6.0).
 
 Tests verify:
 - Cooldown rejects duplicate captures within the window.
 - AlertTriggered emission from SignalProcessor for alert actions.
+- High-confidence signal emits AnalysisComplete with correct flags.
 - set_bus() pattern works for test isolation.
+
+v6.0: AIAnalyzer no longer imports notifier — all notifications
+      are delegated to NotificationHub via events.
 """
 import pytest
 from unittest.mock import AsyncMock, patch
@@ -39,18 +43,19 @@ async def test_cooldown_rejects_duplicate():
         # Simulate a recent capture (within cooldown window)
         LAST_CAPTURE_TIME["BTCUSDT"] = time.time()
 
-        with patch("analyzer.ai_analyzer.notifier") as mock_notifier:
-            mock_notifier.notify_all = AsyncMock()
+        # v6.0: process_alert re-emits as SignalValidated.
+        # The cooldown check happens in process_validated_signal.
+        # We test by directly calling process_validated_signal with an alert action.
+        from analyzer.ai_analyzer import process_validated_signal
 
-            event = AlertTriggered(
-                signal_id=200, symbol="BTCUSDT", price="68000", quote_qty=50.0,
-            )
-            await process_alert(event)
+        event = SignalValidated(
+            signal_id=200, symbol="BTCUSDT", action="alert",
+            price=68000.0, quote_qty=50.0,
+        )
+        await process_validated_signal(event)
 
-            # Should NOT have emitted any events (cooldown active)
-            assert len(events_emitted) == 0
-            # Notifier should NOT have been called (cooldown = silent skip)
-            mock_notifier.notify_all.assert_not_awaited()
+        # Should NOT have emitted any events (cooldown active)
+        assert len(events_emitted) == 0
     finally:
         from core.event_bus import bus as default_bus
         set_bus(default_bus)
@@ -90,8 +95,12 @@ async def test_signal_processor_emits_alert_triggered():
 
 @pytest.mark.asyncio
 async def test_high_confidence_triggers_trade():
-    """When AIAnalyzer emits AnalysisComplete with confidence >= 7,
-    it should also emit SignalValidated for TradeEngine."""
+    """When AIAnalyzer emits AnalysisComplete with high vision confidence,
+    the confidence value and trade flags should be set correctly.
+
+    v6.0: Vision confidence is used directly (1-10 scale).
+    A vision confidence of 9 → should_trade=True, interactive_required=False.
+    """
     from analyzer.ai_analyzer import process_validated_signal, set_bus, reset_capture_state
     from pathlib import Path
 
@@ -108,21 +117,21 @@ async def test_high_confidence_triggers_trade():
     try:
         mock_vision_result = {
             "symbol": "BTCUSDT",
-            "analysis": "Strong setup. Stop Loss: 65,000. Take Profit: 75,000. Score 8/10.",
-            "confidence": 4,
+            "analysis": "Strong setup. Stop Loss: 65,000. Take Profit: 75,000. Score 9/10.",
+            "confidence": 9,
             "patterns": ["VCP", "Stage 2"],
-            "combined_score": "8.0/10",
+            "combined_score": "9.0/10",
             "error": None,
         }
 
         with patch("analyzer.ai_analyzer.config") as mock_config, \
-             patch("analyzer.ai_analyzer.notifier") as mock_notifier, \
              patch("analyzer.ai_analyzer.database") as mock_db, \
              patch("analyzer.ai_analyzer.get_mcp_client") as mock_mcp_factory, \
              patch("analyzer.ai_analyzer.vision_module") as mock_vision:
 
             # Config
             mock_config.MCP_ENABLED = True
+            mock_config.RAG_ENABLED = False
 
             # MCP
             mock_mcp = AsyncMock()
@@ -136,10 +145,8 @@ async def test_high_confidence_triggers_trade():
             mock_vision.analyze_chart_vision = AsyncMock(return_value=mock_vision_result)
             mock_vision.format_vision_telegram.return_value = "Vision text"
 
-            # DB & Notifier
+            # DB
             mock_db.insert_brief = AsyncMock(return_value=1)
-            mock_notifier.notify_all = AsyncMock()
-            mock_notifier.send_telegram_photo = lambda *a, **kw: None
 
             event = SignalValidated(
                 signal_id=202, symbol="BTCUSDT", action="buy", price=68000.0, quote_qty=50.0,
@@ -148,8 +155,10 @@ async def test_high_confidence_triggers_trade():
 
             # Should emit AnalysisComplete
             assert len(analysis_events) == 1
-            assert analysis_events[0].confidence == 8
+            # v6.0: confidence is vision value directly (9)
+            assert analysis_events[0].confidence == 9
             assert analysis_events[0].should_trade is True
+            assert analysis_events[0].interactive_required is False
 
             # Cleanup
             mock_screenshot_path.unlink(missing_ok=True)

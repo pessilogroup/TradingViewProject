@@ -202,11 +202,12 @@ async def generate_morning_brief() -> Optional[dict]:
                 "timestamp": timestamp.isoformat(),
             }
 
-            ai_analysis = await asyncio.to_thread(
-                generate_trading_advice,
-                signal=signal_data,
-                chunks=chunks,
-                context_type="morning_brief"
+            ai_analysis = await generate_trading_advice(
+                symbol="WATCHLIST",
+                action="brief",
+                price="N/A",
+                payload=signal_data,
+                rag_chunks=chunks,
             )
         except Exception as e:
             logger.warning(f"[Brief] AI analysis failed: {e}")

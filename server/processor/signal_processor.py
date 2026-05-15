@@ -43,7 +43,9 @@ DEDUP_TTL_SEC = 60  # Ignore identical signals within 60s
 
 def _is_duplicate(symbol: str, action: str) -> bool:
     """Check if this signal is a duplicate within the TTL window."""
-    key = (symbol.upper(), action.lower())
+    # BUG-04 fix: normalize both symbol AND action to upper/lower consistently
+    # Using (upper, lower) to match how the key is built throughout the module
+    key = (symbol.strip().upper(), action.strip().lower())
     now = time.time()
     last_seen = _dedup_cache.get(key, 0)
     if now - last_seen < DEDUP_TTL_SEC:
@@ -87,9 +89,12 @@ async def process_signal(event: SignalReceived) -> None:
             price=str(event.price) if event.price else "",
             quote_qty=event.quote_qty,
             rag_advice=event.rag_advice,
+            exchange=getattr(event, "exchange", "binance") or "binance",
         ))
         return
 
+    # BUG-04 fix: normalize action before passing to _is_duplicate so key is consistent
+    action = action.strip().lower()
     # ── Dedup Check ──────────────────────────────────────────
     if _is_duplicate(event.symbol, action):
         log.warning(f"SignalProcessor: Duplicate signal rejected — {action} {event.symbol}")

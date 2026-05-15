@@ -49,6 +49,9 @@ class EventBus:
             "events_emitted": 0,
             "handler_errors": 0,
         }
+        # BUG-06 fix: Hold strong references to background tasks to prevent
+        # CPython GC from collecting them before completion.
+        self._background_tasks: set = set()
 
     def on(self, event_type: Type[Event]):
         """
@@ -105,8 +108,13 @@ class EventBus:
         """
         Fire-and-forget: schedule event dispatch as a background asyncio task.
         Useful when the caller should not wait for handlers to complete.
+
+        BUG-06 fix: Task reference is stored in _background_tasks to prevent
+        premature garbage collection. The reference is cleaned up on completion.
         """
-        asyncio.create_task(self.emit(event))
+        task = asyncio.create_task(self.emit(event))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def handler_count(self, event_type: Type[Event] = None) -> int:
         """Return number of registered handlers (total or per event type)."""

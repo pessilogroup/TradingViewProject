@@ -87,6 +87,11 @@ def send_telegram_message(message: str):
     """
     Synchronous wrapper cho Telegram message.
     Dùng bởi brief.py qua asyncio.to_thread().
+
+    BUG-07 fix: When called from a thread while the main event loop is running,
+    we must schedule the coroutine ON the existing loop via run_coroutine_threadsafe,
+    NOT by creating a second nested loop via asyncio.run (which raises
+    'This event loop is already running' on Python 3.10+).
     """
     import asyncio
     try:
@@ -95,11 +100,9 @@ def send_telegram_message(message: str):
         loop = None
 
     if loop and loop.is_running():
-        # Already in async context — schedule as coroutine
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, send_telegram_alert(message))
-            future.result(timeout=30)
+        # Schedule on the existing loop and block until done
+        future = asyncio.run_coroutine_threadsafe(send_telegram_alert(message), loop)
+        future.result(timeout=30)
     else:
         asyncio.run(send_telegram_alert(message))
 

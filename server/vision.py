@@ -35,7 +35,6 @@ log = logging.getLogger(__name__)
 ANTHROPIC_AVAILABLE = True
 VERTEXAI_AVAILABLE = True
 GENAI_AVAILABLE = True
-PIL_AVAILABLE = True
 
 import config
 
@@ -224,15 +223,24 @@ async def analyze_chart_vision(
                         analysis_text = response.text
                         break
                     elif has_genai:
-                        import google.generativeai as genai
-                        genai.configure(api_key=config.GEMINI_API_KEY)
-                        g_model = genai.GenerativeModel(model_name, system_instruction=VISION_SYSTEM_PROMPT)
-                        if not PIL_AVAILABLE:
-                            result["error"] = "Pillow library is required for google.generativeai image processing."
-                            return result
-                        from PIL import Image
-                        img = Image.open(image_path)
-                        response = g_model.generate_content([user_prompt, img])
+                        from google import genai
+                        from google.genai import types as genai_types
+                        client = genai.Client(api_key=config.GEMINI_API_KEY)
+                        image_bytes = image_path.read_bytes()
+                        mime_type = _get_media_type(image_path)
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                user_prompt,
+                                genai_types.Part.from_bytes(
+                                    data=image_bytes,
+                                    mime_type=mime_type,
+                                ),
+                            ],
+                            config=genai_types.GenerateContentConfig(
+                                system_instruction=VISION_SYSTEM_PROMPT,
+                            ),
+                        )
                         analysis_text = response.text
                         break
                     else:

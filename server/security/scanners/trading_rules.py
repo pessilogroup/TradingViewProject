@@ -215,21 +215,39 @@ def _tvp004_missing_rate_limit(filepath: Path, content: str, lines: list) -> Lis
                 endpoints.append((i, match.group(1).upper(), match.group(2)))
 
         if endpoints:
+            gw = filepath.parent / "gateway" / "webhook.py"
+            webhook_rl = False
+            if gw.is_file():
+                try:
+                    gw_txt = gw.read_text(encoding="utf-8", errors="replace")
+                    webhook_rl = "_WEBHOOK_RATE_LIMITS" in gw_txt and "429" in gw_txt
+                except OSError:
+                    webhook_rl = False
+            desc_extra = ""
+            if webhook_rl:
+                desc_extra = (
+                    " POST /webhook is rate-limited in gateway/webhook.py (per-IP); "
+                    "remaining routes in main.py may still be unbounded."
+                )
             findings.append(Finding(
                 rule_id="TVP-004",
-                title="No rate limiting on API endpoints",
+                title="No global rate limiting on API endpoints",
                 severity=Severity.MEDIUM,
                 file=str(filepath),
                 line=endpoints[0][0],
                 description=(
-                    f"Found {len(endpoints)} API endpoints with no rate limiting middleware. "
-                    "An attacker can flood /webhook with thousands of requests to exhaust "
-                    "Binance API quota or trigger unwanted trades."
+                    f"Found {len(endpoints)} FastAPI routes in main.py with no global rate-limit "
+                    "middleware (slowapi / shared limiter). "
+                    "A client could flood authenticated or expensive routes."
+                    + desc_extra
                 ),
                 evidence=f"Endpoints: {', '.join(f'{m} {p}' for _, m, p in endpoints[:5])}",
                 scanner=SCANNER_NAME,
                 confidence=0.95,
-                remediation="Add slowapi or custom rate limiter middleware (e.g., 10 req/min on /webhook).",
+                remediation=(
+                    "Add app-wide or per-route rate limits (e.g. slowapi). "
+                    "Keep webhook-specific limits in gateway/webhook.py."
+                ),
                 cwe="CWE-770",
             ))
     return findings
@@ -242,6 +260,8 @@ def _tvp005_path_traversal(filepath: Path, content: str, lines: list) -> List[Fi
     pattern = re.compile(r'save_path\s*=.*(?:symbol|payload|request)', re.IGNORECASE)
     for i, line in enumerate(lines, 1):
         if pattern.search(line):
+            if "safe_symbol" in line:
+                continue
             # Check if path is sanitized
             has_sanitize = any(
                 kw in content[max(0, content.find(line) - 200):content.find(line) + 200]

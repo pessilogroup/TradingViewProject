@@ -1,14 +1,17 @@
 """
 AIAnalyzer — Stealth Capture + Vision AI + RAG analysis pipeline.
 
-Listens to: AlertTriggered
-Emits: AnalysisComplete, SignalValidated (when confidence >= 7)
+Listens to: AlertTriggered, SignalValidated
+Emits: AnalysisComplete
 
-Design Invariants:
+Design Invariants (v6.0):
 - Owns LAST_CAPTURE_TIME state (architecture spec: AIAnalyzer owns last_capture_time).
-- Hybrid Transitional: writes to DB directly AND emits events.
-- Calls notifier directly (temporary — Phase 4 → NotificationHub).
-- If confidence >= 7, emits SignalValidated → TradeEngine picks up.
+- Does NOT call notifier directly — all notifications go through NotificationHub via events.
+- Confidence scoring: Vision (1-10) + RAG modifiers → final confidence 1-10.
+- R:R enforcement is delegated to the user (Human Gate). AIAnalyzer always passes
+  SL/TP/risk data through to AnalysisComplete for the user to decide.
+- The confidence gate thresholds (>=8 auto, 5-7 human, <5 reject) are enforced
+  by NotificationHub, NOT here. AIAnalyzer only computes the score.
 """
 import logging
 import re
@@ -18,7 +21,6 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 import config
-import notifier
 import database
 import vision as vision_module
 from mcp_client import get_mcp_client
@@ -57,14 +59,14 @@ def reset_capture_state() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# EVENT HANDLER
+# EVENT HANDLER: AlertTriggered → route to unified pipeline
 # ═══════════════════════════════════════════════════════════════
 
 @_default_bus.on(AlertTriggered)
 async def process_alert(event: AlertTriggered) -> None:
     """
     Handle stealth capture workflow for 'alert' actions.
-    Just emit SignalValidated so the unified pipeline handles it.
+    Re-emit as SignalValidated so the unified pipeline handles it.
     """
     log.info(f"AIAnalyzer: Stealth capture alert for {event.symbol} — routing to unified pipeline")
     await _bus.emit(SignalValidated(
@@ -75,25 +77,32 @@ async def process_alert(event: AlertTriggered) -> None:
         quote_qty=event.quote_qty,
         sl="",
         tp="",
-        exchange=getattr(event, 'exchange', 'binance'),
+        exchange=getattr(event, "exchange", None) or "binance",
     ))
 
+
+# ═══════════════════════════════════════════════════════════════
+# EVENT HANDLER: SignalValidated → Unified AI Analysis Pipeline
+# ═══════════════════════════════════════════════════════════════
 
 @_default_bus.on(SignalValidated)
 async def process_validated_signal(event: SignalValidated) -> None:
     """
     Unified AI Analysis Pipeline (Vision + RAG).
     1. Capture screenshot via MCP.
-    2. Run Vision AI analysis.
-    3. Run RAG Analysis asynchronously.
-    4. Combine scores to determine if Human interaction is needed.
-    5. Emit AnalysisComplete.
+    2. Run Vision AI analysis → confidence 1-10.
+    3. Run RAG Analysis → modifier on confidence.
+    4. Compute final confidence score.
+    5. Emit AnalysisComplete (NotificationHub decides the gate).
+
+    v6.0: AIAnalyzer does NOT enforce confidence thresholds.
+    That responsibility belongs to NotificationHub (INV-5/6).
     """
     log.info(f"AIAnalyzer: Processing validated signal #{event.signal_id} for {event.symbol} (Action: {event.action})")
-    
+
     symbol = event.symbol
     now = datetime.now(timezone.utc).timestamp()
-    
+
     # ── Cooldown check (only for 'alert' actions) ────────────
     if event.action == "alert":
         last_time = LAST_CAPTURE_TIME.get(symbol, 0)
@@ -101,21 +110,18 @@ async def process_validated_signal(event: SignalValidated) -> None:
             log.warning(f"AIAnalyzer: Cooldown active for {symbol}. Skipping capture.")
             return
         LAST_CAPTURE_TIME[symbol] = now
-    
-    await notifier.notify_all(f"🤖 **AI Analysis:** Đang chụp ảnh và phân tích `{symbol}`...")
 
     screenshot_path = ""
     vision_result = {}
     analysis_text = ""
-    confidence = 10
-    should_trade = True
-    interactive_required = False
+    confidence = 5  # v6.0: Neutral default — forces human gate unless Vision raises it
+    combined_score_str: Optional[str] = None
 
+    # ── Step 1: Screenshot + Vision AI ───────────────────────
     try:
         mcp = get_mcp_client()
         health = await mcp.health_check()
         if health.get("connected"):
-            # ── Screenshot ───────────────────────────────────────
             ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
             save_path = Path(__file__).parent.parent / "screenshots" / f"stealth_{safe_symbol}_{ts_str}.png"
@@ -130,28 +136,32 @@ async def process_validated_signal(event: SignalValidated) -> None:
             )
 
             if screenshot_path and Path(screenshot_path).exists():
-                # ── Vision AI Analysis ───────────────────────────────
                 vision_result = await vision_module.analyze_chart_vision(
                     image_path=Path(screenshot_path),
                     symbol=symbol,
                 )
-                
+
                 if not vision_result.get("error"):
                     analysis_text += "👁️ **VISION AI:**\n" + vision_result.get("analysis", "") + "\n\n"
-                    vision_conf = vision_result.get("confidence", 5)
-                    # Adjust confidence based on vision
-                    confidence = min(confidence, vision_conf * 2) # scale 1-5 to 1-10
+                    # v6.0: Use vision confidence directly (1-10 scale)
+                    confidence = vision_result.get("confidence", 5)
                 else:
                     analysis_text += f"❌ Vision Error: {vision_result['error']}\n\n"
+                    confidence = 3  # Error → low confidence
         else:
             log.warning("AIAnalyzer: MCP not connected, skipping Vision AI.")
             analysis_text += "⚠️ TradingView MCP chưa kết nối. Bỏ qua phân tích hình ảnh.\n\n"
-            
+
     except Exception as e:
         log.error(f"AIAnalyzer: Vision capture failed: {e}")
         analysis_text += f"❌ Lỗi chụp ảnh: {e}\n\n"
+        confidence = 3  # Error → low confidence
+        # BUG-02 fix: enforce cooldown even on error to prevent retry storms
+        if event.action == "alert":
+            LAST_CAPTURE_TIME[symbol] = now
 
-    # ── RAG Analysis ─────────────────────────────────────────
+    # ── Step 2: RAG Analysis ─────────────────────────────────
+    rag_advice = ""
     if config.RAG_ENABLED:
         try:
             import rag
@@ -168,20 +178,24 @@ async def process_validated_signal(event: SignalValidated) -> None:
                         rag_chunks=chunks,
                     )
                     analysis_text += "📚 **RAG KNOWLEDGE:**\n" + rag_advice
-                    
+
+                    # v6.0: RAG can penalize confidence for warnings
                     advice_upper = rag_advice.upper()
-                    if "CẢNH BÁO" in advice_upper or "WARNING" in advice_upper or "YẾU" in advice_upper or "CHỜ THÊM XÁC NHẬN" in advice_upper:
-                        confidence -= 3
+                    if any(kw in advice_upper for kw in ("CẢNH BÁO", "WARNING", "YẾU", "CHỜ THÊM XÁC NHẬN")):
+                        confidence = max(1, confidence - 2)
         except Exception as e:
             log.error(f"AIAnalyzer: RAG analysis error: {e}")
             analysis_text += f"Lỗi RAG: {e}"
 
-    # ── Final Verdict ────────────────────────────────────────
-    if confidence < 7:
-        should_trade = False
-        interactive_required = True
+    # ── Step 3: Compute final verdict flags ──────────────────
+    # v6.0 INV-5/6: Threshold enforcement is in NotificationHub.
+    # AIAnalyzer only computes and passes the confidence score.
+    should_trade = confidence >= 8
+    interactive_required = 5 <= confidence <= 7
 
-    # ── Persist to DB ────────────────────────────────────────
+    combined_score_str = f"{confidence}/10"
+
+    # ── Step 4: Persist to DB (Hybrid — direct write) ────────
     try:
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         await database.insert_brief(
@@ -196,19 +210,7 @@ async def process_validated_signal(event: SignalValidated) -> None:
     except Exception as db_err:
         log.warning(f"AIAnalyzer: Failed to persist capture to DB: {db_err}")
 
-    # ── Telegram photo + caption ─────────────────────────────
-    if screenshot_path and Path(screenshot_path).exists():
-        formatted_vision = vision_module.format_vision_telegram(vision_result) if vision_result else "No Vision Data"
-        caption = f"🥷 **AI ANALYSIS** — `{symbol}`\n\n{analysis_text[:800]}...\n\nScore: {confidence}/10"
-        try:
-            from notifier import send_telegram_photo as _send_photo
-            import asyncio
-            await asyncio.to_thread(_send_photo, Path(screenshot_path), caption=caption[:1024])
-        except Exception as tg_err:
-            log.warning(f"AIAnalyzer: Photo send failed: {tg_err}")
-            await notifier.notify_all(caption)
-
-    # ── Parse SL & TP ────────────────────────────────────────
+    # ── Step 5: Parse SL & TP from AI analysis text ──────────
     sl_val = event.sl
     tp_val = event.tp
     if not sl_val or not tp_val:
@@ -217,7 +219,11 @@ async def process_validated_signal(event: SignalValidated) -> None:
         if sl_match and not sl_val: sl_val = sl_match.group(1).replace(",", "")
         if tp_match and not tp_val: tp_val = tp_match.group(1).replace(",", "")
 
-    # Emit AnalysisComplete
+    # ── Step 6: Emit AnalysisComplete → NotificationHub ──────
+    log.info(
+        f"AIAnalyzer: Analysis complete for #{event.signal_id} {symbol} — "
+        f"confidence={confidence}/10, should_trade={should_trade}, interactive={interactive_required}"
+    )
     await _bus.emit(AnalysisComplete(
         signal_id=event.signal_id,
         symbol=event.symbol,
@@ -232,6 +238,6 @@ async def process_validated_signal(event: SignalValidated) -> None:
         should_trade=should_trade,
         interactive_required=interactive_required,
         vision_result=vision_result,
+        combined_score=combined_score_str,
         exchange=getattr(event, 'exchange', 'binance'),
     ))
-

@@ -1,11 +1,14 @@
 """
-Unit tests for TradeEngine component (Phase 3).
+Unit tests for TradeEngine component (v6.0).
 
 Tests verify:
 - Successful trade emits TradeExecuted event.
 - Failed trade emits TradeFailed event.
 - Non-trade actions (e.g., 'alert') are skipped.
 - set_bus() pattern works for test isolation.
+
+v6.0: TradeEngine no longer imports notifier — all notifications
+      are delegated to NotificationHub via TradeExecuted/TradeFailed events.
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 
 from core.event_bus import EventBus
-from core.events import SignalValidated, TradeExecuted, TradeFailed
+from core.events import TradeApproved, TradeExecuted, TradeFailed
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -84,8 +87,7 @@ async def test_successful_trade_emits_executed():
 
     try:
         with patch("exchanges.router.get_router") as mock_get_router, \
-             patch("engine.trade_engine.database") as mock_db, \
-             patch("engine.trade_engine.notifier") as mock_notifier:
+             patch("engine.trade_engine.database") as mock_db:
 
             mock_router = MagicMock()
             mock_router.resolve_exchange.return_value = mock_client
@@ -94,11 +96,12 @@ async def test_successful_trade_emits_executed():
             mock_db.insert_trade = AsyncMock(return_value=1)
             mock_db.update_trade_oco = AsyncMock()
             mock_db.update_signal_status = AsyncMock()
-            mock_notifier.notify_all = AsyncMock()
 
-            event = SignalValidated(
+            # v6.0: TradeEngine subscribes to TradeApproved, not SignalValidated
+            event = TradeApproved(
                 signal_id=100, symbol="BTCUSDT", action="buy",
                 price=68000.0, quote_qty=50.0, sl="66000", tp="72000",
+                approved_by="AI (Auto-Green)", analysis_text="Strong setup",
             )
             await execute_trade(event)
 
@@ -107,7 +110,6 @@ async def test_successful_trade_emits_executed():
             mock_db.insert_trade.assert_awaited_once()
             mock_db.update_trade_oco.assert_awaited_once()
             mock_db.update_signal_status.assert_awaited_once_with(100, 1)
-            mock_notifier.notify_all.assert_awaited_once()
 
             # Verify TradeExecuted event emitted
             assert len(executed_events) == 1
@@ -138,19 +140,19 @@ async def test_failed_trade_emits_failed():
 
     try:
         with patch("exchanges.router.get_router") as mock_get_router, \
-             patch("engine.trade_engine.database") as mock_db, \
-             patch("engine.trade_engine.notifier") as mock_notifier:
+             patch("engine.trade_engine.database") as mock_db:
 
             mock_router = MagicMock()
             mock_router.resolve_exchange.return_value = mock_client
             mock_get_router.return_value = mock_router
             mock_db.insert_trade = AsyncMock(return_value=2)
             mock_db.update_signal_status = AsyncMock()
-            mock_notifier.notify_all = AsyncMock()
 
-            event = SignalValidated(
+            # v6.0: TradeEngine subscribes to TradeApproved, not SignalValidated
+            event = TradeApproved(
                 signal_id=101, symbol="ETHUSDT", action="buy",
                 price=3500.0, quote_qty=50.0,
+                approved_by="Human", analysis_text="",
             )
             await execute_trade(event)
 
@@ -187,9 +189,11 @@ async def test_non_trade_action_skipped():
         events_emitted.append(event)
 
     try:
-        event = SignalValidated(
+        # v6.0: TradeApproved with alert action should be skipped
+        event = TradeApproved(
             signal_id=102, symbol="BTCUSDT", action="alert",
             price=68000.0, quote_qty=50.0,
+            approved_by="AI", analysis_text="",
         )
         await execute_trade(event)
 

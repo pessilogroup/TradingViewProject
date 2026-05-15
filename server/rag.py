@@ -19,7 +19,7 @@ import importlib.util
 
 CHROMADB_AVAILABLE = importlib.util.find_spec("chromadb") is not None
 ANTHROPIC_AVAILABLE = importlib.util.find_spec("anthropic") is not None
-GENAI_AVAILABLE = importlib.util.find_spec("google.generativeai") is not None
+GENAI_AVAILABLE = importlib.util.find_spec("google.genai") is not None
 VERTEXAI_AVAILABLE = importlib.util.find_spec("vertexai") is not None
 
 if not CHROMADB_AVAILABLE:
@@ -27,7 +27,7 @@ if not CHROMADB_AVAILABLE:
 if not ANTHROPIC_AVAILABLE:
     log.warning("anthropic not installed. Run: pip install anthropic")
 if not GENAI_AVAILABLE:
-    log.warning("google-generativeai not installed. Run: pip install google-generativeai")
+    log.warning("google-genai not installed. Run: pip install google-genai")
 if not VERTEXAI_AVAILABLE:
     log.warning("vertexai not installed. Run: pip install google-cloud-aiplatform")
 
@@ -283,10 +283,12 @@ Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ 
                 response = g_model.generate_content(prompt)
                 advice = response.text
             elif has_genai:
-                import google.generativeai as genai
-                genai.configure(api_key=config.GEMINI_API_KEY)
-                g_model = genai.GenerativeModel(model_name)
-                response = g_model.generate_content(prompt)
+                from google import genai
+                client = genai.Client(api_key=config.GEMINI_API_KEY)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
                 advice = response.text
             else:
                 return "⚠️ RAG Analysis không khả dụng (thiếu Gemini auth)."
