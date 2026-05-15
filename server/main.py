@@ -26,8 +26,8 @@ import telegram_bot as tg_bot_module
 import vision as vision_module
 import binance_client as binance_module
 
-# ── P9: Claude CLI package ────────────────────────────────────────────────────
-from claude_cli import CliInfrastructure, ClaudeService
+# ── P9: Claude SDK package ────────────────────────────────────────────────────
+from claude_cli import SdkClient, ClaudeService
 import claude_cli.telegram_commands as _claude_tg
 import claude_cli.event_handler as _claude_eh
 
@@ -145,35 +145,35 @@ async def lifespan(app: FastAPI):
     else:
         log.info("Telegram Bot: TẮT (TELEGRAM_BOT_ENABLED=false).")
 
-    # ── Claude CLI (P9) ──────────────────────────────────────────────────────
+    # ── Claude SDK (P9) ──────────────────────────────────────────────────────
     global _claude_service
     if config.CLAUDE_CLI_ENABLED:
-        _cli = CliInfrastructure()
-        cli_ok = await _cli.check_availability()
-        if not cli_ok:
+        _sdk = SdkClient()
+        sdk_ok = await _sdk.check_availability()
+        if not sdk_ok:
             log.warning(
-                "Claude CLI: Binary not found or not responding. "
-                "CLI calls will fail; SDK fallback active if ANTHROPIC_API_KEY is set."
+                "Claude SDK: ANTHROPIC_API_KEY not configured or anthropic package missing. "
+                "SDK calls will fail."
             )
-        _claude_service = ClaudeService(_cli)
+        _claude_service = ClaudeService(_sdk)
         await _claude_service.initialize()
-        log.info("Claude CLI: ✅ ClaudeService initialized.")
+        log.info("Claude SDK: ✅ ClaudeService initialized (SDK-Headless mode).")
 
         # Register EventBus handler only when AI_PROVIDER=claude_cli
         if getattr(config, "AI_PROVIDER", "").lower() == "claude_cli":
             _claude_eh.register_handler(_claude_service)
-            log.info("Claude CLI: EventBus handler registered for SignalValidated.")
+            log.info("Claude SDK: EventBus handler registered for SignalValidated.")
 
         # Register Telegram commands only when bot is running
         if config.TELEGRAM_BOT_ENABLED:
             _app = tg_bot_module.get_application()
             if _app is not None:
                 _claude_tg.register_commands(_app, _claude_service)
-                log.info("Claude CLI: Telegram commands /claude /analyze /claude_reset /claude_status registered.")
+                log.info("Claude SDK: Telegram commands /claude /analyze /claude_reset /claude_status registered.")
             else:
-                log.warning("Claude CLI: Telegram application not available — commands not registered.")
+                log.warning("Claude SDK: Telegram application not available — commands not registered.")
     else:
-        log.info("Claude CLI: TẮT (CLAUDE_CLI_ENABLED=false). Property 8 — no subprocess, no handlers.")
+        log.info("Claude SDK: TẮT (CLAUDE_CLI_ENABLED=false). Property 8 — no SDK, no handlers.")
 
     yield
 

@@ -1,7 +1,12 @@
 """
 infrastructure.py — CliInfrastructure: async subprocess wrapper for Claude CLI.
 
-Responsibilities (Infrastructure Layer invariants):
+⚠️ DEPRECATED (2025-05): Superseded by sdk_client.SdkClient (In-Process SDK).
+This module is retained ONLY for backward compatibility. New code should
+import and use SdkClient from sdk_client.py instead. This module will be
+removed in a future cleanup PR.
+
+Original responsibilities (Infrastructure Layer invariants):
 - Single point of subprocess creation (asyncio.create_subprocess_exec only).
 - Owns rate limiting (sliding 60-second window).
 - Owns availability state (set once at startup via check_availability).

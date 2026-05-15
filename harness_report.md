@@ -1,10 +1,10 @@
 # AQH Verification Report
 
-- **Time**: Fri, 15 May 2026 09:51:40 +07
+- **Time**: Sat, 16 May 2026 01:54:02 +07
 ## KG CONTEXT: LEAF
 - **Blast Radius**: 0 dependents, 0 callers
 
-- **Mode**: STRICT (Muscle Gate)
+- **Mode**: PREVIEW (Performal)
 
 ### 🟢 Build Gate: PASSED
 

@@ -1,47 +1,58 @@
 """
 tests/unit/test_claude_service.py
-Unit tests for claude_cli.ClaudeService.
+Unit tests for claude_cli.ClaudeService + ContextManager + SdkClient.
 
 Tests cover:
-  - analyze(): CLI success path (source="claude_cli")
-  - analyze(): CLI fail → SDK fallback (source="anthropic_api")
-  - analyze(): Both fail → error AnalysisResponse
+  - analyze(): SDK success path (source="anthropic_api")
+  - analyze(): SDK error → AnalysisResponse with error field
+  - analyze(): SDK unavailable → immediate error response
   - _assemble_prompt(): sections present in correct order
-  - Context accumulation (turns added per-symbol)
-  - FIFO depth pruning (oldest entries removed)
-  - Token budget pruning
-  - reset_context() per-symbol vs global
-  - get_context_stats() field accuracy
-  - _parse_confidence() regex patterns
+  - ContextManager: turns added per-symbol
+  - ContextManager: FIFO depth pruning (oldest entries removed)
+  - ContextManager: Token budget pruning
+  - ContextManager: reset per-symbol vs global
+  - ContextManager: get_stats() field accuracy
+  - ClaudeService._parse_confidence() regex patterns
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from claude_cli.infrastructure import CliInfrastructure, CliResult
-from claude_cli.service import ClaudeService, AnalysisRequest, AnalysisResponse, ContextEntry
+from claude_cli.sdk_client import SdkClient
+from claude_cli.service import ClaudeService, ContextManager, AnalysisRequest, AnalysisResponse, ContextEntry
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────────
 
-def _make_cli(success: bool = True, text: str = "analysis ok [Confidence: 7/10]") -> MagicMock:
-    cli = AsyncMock(spec=CliInfrastructure)
-    cli.available = success
-    cli.invoke = AsyncMock(return_value=CliResult(
-        success=success,
-        stdout=text if success else "",
-        stderr="" if success else "CLI error",
-        exit_code=0 if success else 1,
-        duration_seconds=0.1,
-    ))
-    return cli
+def _make_sdk(
+    available: bool = True,
+    response_text: str = "analysis ok [Confidence: 7/10]",
+    error: str = "",
+) -> MagicMock:
+    """Create a mock SdkClient."""
+    sdk = MagicMock(spec=SdkClient)
+    sdk.available = available
+    if error:
+        sdk.invoke = AsyncMock(return_value=AnalysisResponse(
+            text=f"⚠️ {error}",
+            confidence=0,
+            source="none",
+            error=error,
+        ))
+    else:
+        sdk.invoke = AsyncMock(return_value=AnalysisResponse(
+            text=response_text,
+            confidence=5,  # default; service will re-parse
+            source="anthropic_api",
+            duration_seconds=0.1,
+        ))
+    return sdk
 
 
-def _make_service(cli=None, depth: int = 3, max_tokens: int = 1000) -> ClaudeService:
-    if cli is None:
-        cli = _make_cli()
-    svc = ClaudeService(cli)
-    svc._context_depth = depth
-    svc._max_context_tokens = max_tokens
+def _make_service(sdk=None, depth: int = 3, max_tokens: int = 1000) -> ClaudeService:
+    if sdk is None:
+        sdk = _make_sdk()
+    ctx = ContextManager(context_depth=depth, max_context_tokens=max_tokens)
+    svc = ClaudeService(sdk, ctx)
     svc._initialized = True  # skip RAG init
     return svc
 
@@ -53,57 +64,42 @@ def _req(query: str = "analyse AAPL", symbol: str = "AAPL", include_rag: bool = 
 # ── analyze: success ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_analyze_cli_success_returns_source_cli():
+async def test_analyze_sdk_success_returns_source_api():
     svc = _make_service()
     resp: AnalysisResponse = await svc.analyze(_req())
-    assert resp.source == "claude_cli"
+    assert resp.source == "anthropic_api"
     assert resp.text == "analysis ok [Confidence: 7/10]"
     assert resp.confidence == 7
     assert resp.error == ""
 
 
 @pytest.mark.asyncio
-async def test_analyze_cli_success_updates_context():
+async def test_analyze_sdk_success_updates_context():
     svc = _make_service()
     await svc.analyze(_req(symbol="BTCUSDT"))
-    ctx = svc._contexts.get("BTCUSDT", [])
-    assert len(ctx) == 2  # user + assistant
-    assert ctx[0].role == "user"
-    assert ctx[1].role == "assistant"
+    history = svc._ctx.get_history("BTCUSDT")
+    assert len(history) == 2  # user + assistant
+    assert history[0].role == "user"
+    assert history[1].role == "assistant"
 
 
-# ── analyze: fallback ───────────────────────────────────────────────────────────
+# ── analyze: error ──────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_analyze_cli_fail_triggers_sdk_fallback():
-    cli = _make_cli(success=False)
-    svc = _make_service(cli=cli)
-    svc._max_context_tokens = 99999
-
-    fake_resp = AnalysisResponse(text="fallback ok [Confidence: 6/10]", source="anthropic_api", confidence=6)
-    with patch.object(svc, "_fallback_to_api", AsyncMock(return_value=fake_resp)):
-        resp = await svc.analyze(_req())
-
-    assert resp.source == "anthropic_api"
-    assert resp.text == "fallback ok [Confidence: 6/10]"
+async def test_analyze_sdk_error_returns_error_response():
+    sdk = _make_sdk(error="Rate limit exceeded")
+    svc = _make_service(sdk=sdk)
+    resp = await svc.analyze(_req())
+    assert resp.source == "none"
+    assert resp.confidence == 0
+    assert "Rate limit" in resp.error
 
 
 @pytest.mark.asyncio
-async def test_analyze_both_fail_returns_error_response():
-    cli = _make_cli(success=False)
-    svc = _make_service(cli=cli)
-
-    error_resp = AnalysisResponse(
-        text="⚠️ AI không khả dụng",
-        confidence=0,
-        source="none",
-        error="both failed",
-    )
-    with patch.object(svc, "_fallback_to_api", AsyncMock(return_value=error_resp)):
-        # disable SDK fallback
-        with patch("claude_cli.service.ANTHROPIC_AVAILABLE", False):
-            resp = await svc.analyze(_req())
-
+async def test_analyze_sdk_unavailable_returns_error():
+    sdk = _make_sdk(available=False, error="SDK not available")
+    svc = _make_service(sdk=sdk)
+    resp = await svc.analyze(_req())
     assert resp.source == "none"
     assert resp.confidence == 0
 
@@ -116,7 +112,7 @@ async def test_context_depth_pruning_fifo():
     svc = _make_service(depth=2)  # max entries = 2*2 = 4
     for i in range(3):
         await svc.analyze(_req(query=f"query {i}", symbol="TSLA"))
-    ctx = svc._contexts["TSLA"]
+    ctx = svc._ctx.get_history("TSLA")
     assert len(ctx) <= 4, f"Expected ≤4 entries, got {len(ctx)}"
     # Oldest entries should be gone, newest preserved
     assert ctx[-1].role == "assistant"
@@ -129,26 +125,26 @@ async def test_context_token_budget_pruning():
     svc = _make_service(depth=10, max_tokens=50)
     for i in range(5):
         await svc.analyze(_req(query=f"q{i}", symbol="NVDA"))
-    ctx = svc._contexts.get("NVDA", [])
+    ctx = svc._ctx.get_history("NVDA")
     total_tokens = sum(e.estimated_tokens for e in ctx)
     assert total_tokens <= 50, f"Token budget exceeded: {total_tokens}"
 
 
 def test_reset_context_per_symbol():
-    svc = _make_service()
-    svc._contexts["AAPL"] = [MagicMock()]
-    svc._contexts["MSFT"] = [MagicMock()]
-    svc.reset_context("AAPL")
-    assert "AAPL" not in svc._contexts
-    assert "MSFT" in svc._contexts  # untouched
+    ctx = ContextManager()
+    ctx.update("AAPL", "q1", "a1")
+    ctx.update("MSFT", "q2", "a2")
+    ctx.reset("AAPL")
+    assert len(ctx.get_history("AAPL")) == 0
+    assert len(ctx.get_history("MSFT")) == 2  # untouched
 
 
 def test_reset_context_global():
-    svc = _make_service()
-    svc._contexts["AAPL"] = [MagicMock()]
-    svc._contexts["MSFT"] = [MagicMock()]
-    svc.reset_context("")
-    assert svc._contexts == {}
+    ctx = ContextManager()
+    ctx.update("AAPL", "q1", "a1")
+    ctx.update("MSFT", "q2", "a2")
+    ctx.reset("")
+    assert ctx.get_stats()["total_turns"] == 0
 
 
 # ── get_context_stats ───────────────────────────────────────────────────────────
@@ -177,8 +173,7 @@ async def test_get_context_stats_fields():
     ("[Confidence: 0/10]", 1),   # floor at 1
 ])
 def test_parse_confidence(text, expected):
-    svc = _make_service()
-    assert svc._parse_confidence(text) == expected
+    assert ClaudeService._parse_confidence(text) == expected
 
 
 # ── _assemble_prompt ────────────────────────────────────────────────────────────
@@ -202,10 +197,7 @@ async def test_assemble_prompt_contains_query():
 @pytest.mark.asyncio
 async def test_assemble_prompt_includes_history():
     svc = _make_service()
-    svc._contexts["AAPL"] = [
-        ContextEntry(role="user", content="prior question", timestamp=0.0, estimated_tokens=5),
-        ContextEntry(role="assistant", content="prior answer", timestamp=0.0, estimated_tokens=10),
-    ]
+    svc._ctx.update("AAPL", "prior question", "prior answer")
     req = _req(symbol="AAPL", include_rag=False)
     prompt = await svc._assemble_prompt(req)
     assert "prior question" in prompt or "prior answer" in prompt

@@ -88,16 +88,16 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # AI Provider: "anthropic" | "gemini" | "claude_cli"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
 
-# ── Claude CLI Integration ────────────────────────────────────────────────
-# Enable/disable entire Claude CLI subsystem (infrastructure + commands + event handler)
+# ── Claude SDK Integration (P9) ───────────────────────────────────────────
+# Enable/disable entire Claude SDK subsystem (SdkClient + commands + event handler)
 CLAUDE_CLI_ENABLED = os.getenv("CLAUDE_CLI_ENABLED", "false").lower() == "true"
-# Path to the claude binary (must be in PATH or absolute)
+# [DEPRECATED] Path to CLI binary — no longer used (SDK is in-process, no binary needed)
 CLAUDE_CLI_PATH = os.getenv("CLAUDE_CLI_PATH", "claude")
-# Model override, e.g. "claude-opus-4-5" — empty = CLI default
+# Model override, e.g. "claude-opus-4-5" — empty = default ("claude-sonnet-4-5")
 CLAUDE_CLI_MODEL = os.getenv("CLAUDE_CLI_MODEL", "")
-# Hard subprocess timeout in seconds
+# httpx timeout for SDK calls in seconds
 CLAUDE_CLI_TIMEOUT = int(os.getenv("CLAUDE_CLI_TIMEOUT", "120"))
-# Max concurrent subprocess calls (semaphore)
+# Max concurrent SDK calls (asyncio.Semaphore)
 CLAUDE_CLI_MAX_PARALLEL = int(os.getenv("CLAUDE_CLI_MAX_PARALLEL", "2"))
 # Sliding-window rate limit: max requests per 60 s
 CLAUDE_CLI_RATE_LIMIT = int(os.getenv("CLAUDE_CLI_RATE_LIMIT", "10"))
@@ -105,7 +105,7 @@ CLAUDE_CLI_RATE_LIMIT = int(os.getenv("CLAUDE_CLI_RATE_LIMIT", "10"))
 CLAUDE_CONTEXT_DEPTH = int(os.getenv("CLAUDE_CONTEXT_DEPTH", "5"))
 # Rough upper bound on context token budget (chars/4 approximation)
 CLAUDE_MAX_CONTEXT_TOKENS = int(os.getenv("CLAUDE_MAX_CONTEXT_TOKENS", "50000"))
-# Fallback sang Anthropic SDK nếu CLI lỗi và có ANTHROPIC_API_KEY
+# [DEPRECATED] Fallback flag — no-op (SDK is the only path; kept for backward compat)
 CLAUDE_CLI_FALLBACK_SDK = os.getenv("CLAUDE_CLI_FALLBACK_SDK", "true").lower() == "true"
 
 # Gemini API Key (Fallback if not using Vertex AI)

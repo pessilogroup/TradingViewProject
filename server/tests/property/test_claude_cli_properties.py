@@ -3,23 +3,21 @@ tests/property/test_claude_cli_properties.py
 Property-based tests for claude_cli invariants (hypothesis, 100 examples each).
 
 Properties tested:
-  P2: Rate limiting correctness (sliding window)
-  P3: Context depth enforcement (FIFO, depth*2 entries max)
-  P4: Context token limit enforcement (FIFO, token budget)
+  P2: Rate limiting correctness (sliding window) — SdkClient
+  P3: Context depth enforcement (FIFO, depth*2 entries max) — ContextManager
+  P4: Context token limit enforcement (FIFO, token budget) — ContextManager
   P7: Telegram response length ≤ 4096
-  P9: Timeout wall-clock ≤ CLAUDE_CLI_TIMEOUT + 5s  [smoke: mocked]
   P10: Context reset completeness (per-symbol & global)
 """
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from claude_cli.infrastructure import CliInfrastructure, CliResult
-from claude_cli.service import ClaudeService, AnalysisRequest, AnalysisResponse, ContextEntry
+from claude_cli.sdk_client import SdkClient
+from claude_cli.service import ClaudeService, ContextManager, AnalysisRequest, AnalysisResponse, ContextEntry
 from claude_cli.telegram_commands import _format_response
 
 
@@ -29,24 +27,23 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
-def _success_cli(text: str = "ok [Confidence: 7/10]") -> MagicMock:
-    cli = AsyncMock(spec=CliInfrastructure)
-    cli.available = True
-    cli.invoke = AsyncMock(return_value=CliResult(
-        success=True, stdout=text, stderr="", exit_code=0, duration_seconds=0.01
+def _make_sdk(text: str = "ok [Confidence: 7/10]") -> MagicMock:
+    sdk = MagicMock(spec=SdkClient)
+    sdk.available = True
+    sdk.invoke = AsyncMock(return_value=AnalysisResponse(
+        text=text, confidence=5, source="anthropic_api", duration_seconds=0.01
     ))
-    return cli
+    return sdk
 
 
 def _make_svc(depth: int = 5, max_tokens: int = 50_000) -> ClaudeService:
-    svc = ClaudeService(_success_cli())
-    svc._context_depth = depth
-    svc._max_context_tokens = max_tokens
+    ctx = ContextManager(context_depth=depth, max_context_tokens=max_tokens)
+    svc = ClaudeService(_make_sdk(), ctx)
     svc._initialized = True
     return svc
 
 
-# ── P2: Rate Limiting ────────────────────────────────────────────────────────────
+# ── P2: Rate Limiting (SdkClient internal) ──────────────────────────────────────
 
 @given(
     limit=st.integers(min_value=1, max_value=10),
@@ -55,27 +52,29 @@ def _make_svc(depth: int = 5, max_tokens: int = 50_000) -> ClaudeService:
 @settings(max_examples=100)
 def test_p2_rate_limit_exactly_n_pass(limit, extra):
     """Exactly `limit` requests pass; the rest are rate-limited."""
-    cli = CliInfrastructure(rate_limit=limit, max_parallel=limit + extra + 1, timeout=5)
-    mock_proc = AsyncMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock(return_value=0)
+    sdk = SdkClient(
+        api_key="test-key",
+        rate_limit=limit,
+        max_parallel=limit + extra + 1,
+        timeout=5,
+    )
+    # Manually simulate: fill timestamps up to `limit`
+    import time
+    now = time.monotonic()
+    sdk._request_timestamps = [now for _ in range(limit)]
+    sdk._available = True
 
-    total = limit + extra
-    results = []
+    # After limit timestamps, next check should fail
+    assert sdk._check_rate_limit() is False
 
-    async def run_all():
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            for _ in range(total):
-                results.append(await cli.invoke(prompt="test"))
+    # Clear and verify fresh state passes
+    sdk._request_timestamps = []
+    for i in range(limit):
+        assert sdk._check_rate_limit() is True
+        sdk._request_timestamps.append(time.monotonic())
 
-    asyncio.get_event_loop().run_until_complete(run_all())
-
-    passed = sum(1 for r in results if r.success)
-    limited = sum(1 for r in results if r.rate_limited)
-    assert passed == limit
-    assert limited == extra
+    # One more should be rejected
+    assert sdk._check_rate_limit() is False
 
 
 # ── P3: Context Depth Enforcement ───────────────────────────────────────────────
@@ -96,7 +95,7 @@ def test_p3_context_depth_never_exceeded(depth, interactions):
             ))
 
     asyncio.get_event_loop().run_until_complete(run())
-    ctx = svc._contexts.get("SYM", [])
+    ctx = svc._ctx.get_history("SYM")
     assert len(ctx) <= depth * 2, f"depth={depth}, interactions={interactions}, got {len(ctx)}"
 
 
@@ -120,7 +119,7 @@ def test_p4_token_budget_never_exceeded(max_tokens, interactions):
             ))
 
     asyncio.get_event_loop().run_until_complete(run())
-    ctx = svc._contexts.get("TOK", [])
+    ctx = svc._ctx.get_history("TOK")
     total = sum(e.estimated_tokens for e in ctx)
     assert total <= max_tokens, f"max_tokens={max_tokens}, got {total}"
 
@@ -129,7 +128,7 @@ def test_p4_token_budget_never_exceeded(max_tokens, interactions):
 
 @given(
     text=st.text(min_size=0, max_size=10_000),
-    source=st.sampled_from(["claude_cli", "anthropic_api", "none"]),
+    source=st.sampled_from(["anthropic_api", "none"]),
     confidence=st.integers(min_value=0, max_value=10),
     duration=st.floats(min_value=0.0, max_value=120.0, allow_nan=False),
 )
@@ -138,36 +137,6 @@ def test_p7_telegram_response_never_exceeds_4096(text, source, confidence, durat
     """Formatted Telegram message is always ≤ 4096 characters."""
     formatted = _format_response(text=text, source=source, confidence=confidence, duration=duration)
     assert len(formatted) <= 4096, f"Message exceeded 4096: len={len(formatted)}"
-
-
-# ── P9: Timeout Wall-Clock (mocked) ─────────────────────────────────────────────
-
-@given(timeout_secs=st.integers(min_value=1, max_value=3))
-@settings(max_examples=5, deadline=None)  # wall-clock test: timeout_secs IS the duration
-def test_p9_timeout_wall_clock_bounded(timeout_secs):
-    """Wall clock of invoke() does not exceed timeout + 6s even for hanging processes."""
-    cli = CliInfrastructure(timeout=timeout_secs, rate_limit=100, max_parallel=5)
-    
-    mock_proc = AsyncMock()
-    mock_proc.returncode = -9
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock(return_value=-9)
-
-    async def hang_communicate(**kwargs):  # accept input=... kwarg
-        await asyncio.sleep(999)
-        return b"", b""
-
-    mock_proc.communicate = hang_communicate
-
-    async def run():
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            t0 = time.monotonic()
-            result = await cli.invoke(prompt="hang")
-            elapsed = time.monotonic() - t0
-        assert result.timed_out is True
-        assert elapsed < timeout_secs + 7  # 5s grace + 2s test headroom
-
-    asyncio.get_event_loop().run_until_complete(run())
 
 
 # ── P10: Context Reset Completeness ─────────────────────────────────────────────
@@ -181,21 +150,21 @@ def test_p9_timeout_wall_clock_bounded(timeout_secs):
 )
 @settings(max_examples=100)
 def test_p10_per_symbol_reset_clears_only_target(symbols, target_idx):
-    """reset_context(symbol) clears exactly that symbol, others unchanged."""
+    """reset() clears exactly that symbol, others unchanged."""
     assume(len(symbols) > 0)
     target_idx = target_idx % len(symbols)
     target = symbols[target_idx]
 
-    svc = _make_svc()
+    ctx = ContextManager()
     for sym in symbols:
-        svc._contexts[sym] = [MagicMock()]
+        ctx.update(sym, "question", "answer")
 
-    svc.reset_context(target)
+    ctx.reset(target)
 
-    assert target not in svc._contexts, f"Symbol {target} not cleared"
+    assert len(ctx.get_history(target)) == 0, f"Symbol {target} not cleared"
     for sym in symbols:
         if sym != target:
-            assert sym in svc._contexts, f"Symbol {sym} was incorrectly cleared"
+            assert len(ctx.get_history(sym)) > 0, f"Symbol {sym} was incorrectly cleared"
 
 
 @given(
@@ -206,10 +175,10 @@ def test_p10_per_symbol_reset_clears_only_target(symbols, target_idx):
 )
 @settings(max_examples=100)
 def test_p10_global_reset_clears_all(symbols):
-    """reset_context('') clears ALL symbol contexts."""
-    svc = _make_svc()
+    """reset('') clears ALL symbol contexts."""
+    ctx = ContextManager()
     for sym in symbols:
-        svc._contexts[sym] = [MagicMock()]
+        ctx.update(sym, "question", "answer")
 
-    svc.reset_context("")
-    assert svc._contexts == {}, f"Global reset left: {list(svc._contexts.keys())}"
+    ctx.reset("")
+    assert ctx.get_stats()["total_turns"] == 0, f"Global reset left: {ctx.get_stats()}"

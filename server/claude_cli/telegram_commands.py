@@ -132,32 +132,27 @@ async def cmd_claude_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_claude_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/claude_status — Show CLI availability and current context stats."""
-    from .infrastructure import CliInfrastructure
-
-    cli_available = False
-    cli_stats: dict = {}
+    """/claude_status — Show SDK availability and current context stats."""
+    sdk_available = False
+    sdk_stats: dict = {}
 
     if _service:
-        # Access CLI stats via service's private ref (acceptable within package)
-        cli = getattr(_service, "_cli", None)
-        if isinstance(cli, CliInfrastructure):
-            cli_available = cli.available
-            cli_stats = cli.get_stats()
+        sdk = getattr(_service, "_sdk", None)
+        if sdk is not None:
+            sdk_available = sdk.available
+            sdk_stats = sdk.get_stats()
         ctx_stats = _service.get_context_stats()
     else:
         ctx_stats = {"total_symbols": 0, "total_turns": 0, "total_estimated_tokens": 0}
 
-    status_icon = "✅" if cli_available else "❌"
+    status_icon = "✅" if sdk_available else "❌"
     provider = getattr(config, "AI_PROVIDER", "anthropic")
-    fallback = getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
 
     lines = [
-        f"<b>🤖 Claude CLI Status</b>",
+        f"<b>🤖 Claude SDK Status</b>",
         f"",
-        f"CLI Binary: {status_icon} {'Available' if cli_available else 'Unavailable'}",
+        f"SDK Client: {status_icon} {'Available' if sdk_available else 'Unavailable'}",
         f"AI Provider: <code>{provider}</code>",
-        f"SDK Fallback: {'✅ Enabled' if fallback else '❌ Disabled'}",
         f"",
         f"<b>📊 Context Stats</b>",
         f"Active symbols: {ctx_stats.get('total_symbols', 0)}",
@@ -165,13 +160,14 @@ async def cmd_claude_status(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Est. tokens: {ctx_stats.get('total_estimated_tokens', 0):,}",
     ]
 
-    if cli_stats:
+    if sdk_stats:
         lines += [
             f"",
             f"<b>⚙️ Rate Limit</b>",
-            f"Requests in window: {cli_stats.get('requests_in_window', 0)}/{cli_stats.get('rate_limit', 10)}",
-            f"Timeout: {cli_stats.get('timeout_seconds', 120)}s",
-            f"Model: <code>{cli_stats.get('model', '(default)')}</code>",
+            f"Requests in window: {sdk_stats.get('requests_in_window', 0)}/{sdk_stats.get('rate_limit', 10)}",
+            f"Timeout: {sdk_stats.get('timeout_seconds', 120)}s",
+            f"Max parallel: {sdk_stats.get('max_parallel', 2)}",
+            f"Model: <code>{sdk_stats.get('model', '(default)')}</code>",
         ]
 
     # Per-symbol breakdown
@@ -219,7 +215,6 @@ def _format_response(text: str, source: str, confidence: int, duration: float) -
     Property 7: never exceeds 4096 characters.
     """
     source_label = {
-        "claude_cli": "🟢 Claude CLI",
         "anthropic_api": "🔵 Anthropic SDK",
         "none": "🔴 Unavailable",
     }.get(source, source)

@@ -1,23 +1,35 @@
 """
-claude_cli — Claude CLI integration package.
+claude_cli — Claude SDK integration package.
 
 Public API:
-    CliInfrastructure   — async subprocess wrapper (infrastructure layer)
-    ClaudeService       — context mgmt + fallback orchestration (service layer)
-    AnalysisRequest     — input dataclass for ClaudeService.analyze()
-    AnalysisResponse    — output dataclass from ClaudeService.analyze()
+    SdkClient          — async Anthropic SDK wrapper (core layer)
+    ClaudeService      — stateless analysis orchestrator (orchestration layer)
+    ContextManager     — per-symbol conversation context (core layer)
+    AnalysisRequest    — input dataclass for ClaudeService.analyze()
+    AnalysisResponse   — output dataclass from ClaudeService.analyze()
+
+Deprecated (kept for backward compat):
+    CliInfrastructure  — subprocess wrapper (superseded by SdkClient)
+    CliResult          — subprocess result (superseded by AnalysisResponse)
 
 Entry points (registered from main.py / telegram_bot.py):
-    telegram_commands.register_commands(application)
-    event_handler.register_handler()
+    telegram_commands.register_commands(application, claude_service)
+    event_handler.register_handler(claude_service)
 """
+from .sdk_client import SdkClient
+from .service import ClaudeService, ContextManager, AnalysisRequest, AnalysisResponse
+
+# Deprecated — kept for backward compatibility
 from .infrastructure import CliInfrastructure, CliResult
-from .service import ClaudeService, AnalysisRequest, AnalysisResponse
 
 __all__ = [
-    "CliInfrastructure",
-    "CliResult",
+    # New SDK-Headless API
+    "SdkClient",
     "ClaudeService",
+    "ContextManager",
     "AnalysisRequest",
     "AnalysisResponse",
+    # Deprecated
+    "CliInfrastructure",
+    "CliResult",
 ]

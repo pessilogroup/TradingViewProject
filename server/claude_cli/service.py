@@ -1,13 +1,17 @@
 """
-service.py — ClaudeService: business logic for Claude CLI integration.
+service.py — ClaudeService (AnalysisOrchestrator) + ContextManager.
 
-Responsibilities (Service Layer invariants):
-- Single owner of per-symbol conversation context (self._contexts).
-- Single decision-maker for CLI → API fallback.
-- Assembles prompts from system context, RAG chunks, and conversation history.
-- Owns context pruning (by depth and by token budget).
-- Never spawns subprocesses directly; calls CliInfrastructure.invoke().
-- Context state is ONLY mutated here; Interface layers are read-only consumers.
+Responsibilities:
+- ContextManager: Single owner of per-symbol conversation context, depth/token pruning,
+  and SEPA system prompt. All mutable context state lives here.
+- ClaudeService: Stateless orchestrator — assembles prompts from system context,
+  RAG chunks, and conversation history; delegates SDK calls to SdkClient;
+  parses responses. Named ClaudeService for backward API compatibility.
+
+Design invariants:
+- ClaudeService holds no state between requests — all state in SdkClient or ContextManager.
+- Context state is ONLY mutated through ContextManager; interface layers are read-only consumers.
+- Single response type: all paths produce AnalysisResponse (no CliResult).
 """
 from __future__ import annotations
 
@@ -16,11 +20,12 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import config
-from .infrastructure import CliInfrastructure, CliResult
+
+if TYPE_CHECKING:
+    from .sdk_client import SdkClient
 
 log = logging.getLogger(__name__)
 
@@ -38,18 +43,20 @@ class AnalysisRequest:
     price: Optional[float] = None
     trading_context: Optional[dict] = None  # positions, signals, watchlist
     include_rag_context: bool = True
-    image_path: Optional[str] = None
+    image_path: Optional[str] = None  # reserved for future vision integration
 
 
 @dataclass
 class AnalysisResponse:
-    """Output from ClaudeService."""
+    """Output from ClaudeService (single response type for all paths)."""
     text: str
     confidence: int = 5          # 1-10 scale
-    source: str = "claude_cli"   # "claude_cli" | "anthropic_api"
+    source: str = "anthropic_api"  # "anthropic_api" | "none"
     duration_seconds: float = 0.0
     context_tokens_used: int = 0
     error: str = ""
+    rate_limited: bool = False
+    timed_out: bool = False
 
 
 @dataclass
@@ -61,9 +68,8 @@ class ContextEntry:
     estimated_tokens: int
 
 
-# ─── Service class ─────────────────────────────────────────────────────────────
+# ─── SEPA System Prompt ────────────────────────────────────────────────────────
 
-# Minervini SEPA system prompt loaded once at startup
 _SEPA_SYSTEM_PROMPT_TEMPLATE = """Bạn là chuyên gia giao dịch theo phương pháp SEPA (Specific Entry Point Analysis) \
 của Mark Minervini. Nhiệm vụ của bạn là phân tích các tín hiệu giao dịch và đưa ra khuyến nghị \
 dựa trên nguyên tắc SEPA chính xác, ngắn gọn, và có thể hành động ngay.
@@ -80,42 +86,34 @@ Luôn kết thúc bằng mức confidence 1-10 theo format: [Confidence: X/10]
 """
 
 
-class ClaudeService:
-    """
-    Business logic layer for Claude CLI integration.
+# ─── ContextManager ───────────────────────────────────────────────────────────
 
-    Lifecycle:
-        svc = ClaudeService(cli)
-        await svc.initialize()   # called at app startup
-        response = await svc.analyze(request)
-        response = await svc.query("explain VCP", symbol="BTCUSDT")
+
+class ContextManager:
+    """Per-symbol conversation context with FIFO pruning.
+
+    Owns all mutable context state. The orchestrator reads/writes
+    through this interface but never holds context references directly.
 
     Property guarantees:
         Property 3: context depth ≤ CLAUDE_CONTEXT_DEPTH per symbol
         Property 4: context token total ≤ CLAUDE_MAX_CONTEXT_TOKENS per symbol
-        Property 5: fallback returns structurally identical AnalysisResponse
-        Property 10: reset_context() clears exactly what is requested
+        Property 10: reset() clears exactly what is requested
     """
 
-    def __init__(self, cli: CliInfrastructure):
-        self._cli = cli
+    def __init__(
+        self,
+        context_depth: int = 0,
+        max_context_tokens: int = 0,
+    ):
         self._contexts: dict[str, list[ContextEntry]] = {}
-        self._context_depth: int = getattr(config, "CLAUDE_CONTEXT_DEPTH", 5)
-        self._max_context_tokens: int = getattr(config, "CLAUDE_MAX_CONTEXT_TOKENS", 50_000)
+        self._context_depth: int = context_depth or getattr(config, "CLAUDE_CONTEXT_DEPTH", 5)
+        self._max_context_tokens: int = max_context_tokens or getattr(config, "CLAUDE_MAX_CONTEXT_TOKENS", 50_000)
         self._system_prompt: str = _SEPA_SYSTEM_PROMPT_TEMPLATE
-        self._initialized: bool = False
 
-    # ── Lifecycle ───────────────────────────────────────────────────────────────
-
-    async def initialize(self) -> None:
-        """
-        Load system prompt, optionally augmenting with top RAG chunks.
-        Called once during app startup via lifespan hook.
-        """
-        if self._initialized:
-            return
+    async def load_system_prompt(self) -> None:
+        """Enrich system prompt with top RAG chunks. Called at startup."""
         try:
-            # Try to pull top-K Minervini chunks to enrich the system prompt
             import rag
             chunks = rag.query_knowledge("SEPA Trend Template VCP pivot breakout", n_results=2)
             if chunks:
@@ -125,96 +123,58 @@ class ClaudeService:
                     + "\n\n## Tham khảo từ Minervini Knowledge Base:\n"
                     + extra
                 )
-                log.info(f"ClaudeService: system prompt enriched with {len(chunks)} RAG chunks")
+                log.info(f"ContextManager: system prompt enriched with {len(chunks)} RAG chunks")
         except Exception as exc:
-            log.warning(f"ClaudeService: RAG enrichment skipped: {exc}")
+            log.warning(f"ContextManager: RAG enrichment skipped: {exc}")
 
-        self._initialized = True
-        log.info("ClaudeService initialized.")
+    @property
+    def system_prompt(self) -> str:
+        """The current SEPA system prompt (possibly RAG-enriched)."""
+        return self._system_prompt
 
-    # ── Public API ──────────────────────────────────────────────────────────────
+    def get_history(self, symbol: str, max_turns: int = 0) -> list[ContextEntry]:
+        """Return conversation history for a symbol (most recent N turns)."""
+        key = symbol or "__global__"
+        entries = self._contexts.get(key, [])
+        if max_turns and max_turns > 0:
+            return entries[-max_turns:]
+        return list(entries)
 
-    async def analyze(self, request: AnalysisRequest) -> AnalysisResponse:
-        """
-        Main entry point for all structured trading analysis requests.
+    def update(self, symbol: str, query: str, response: str) -> None:
+        """Append user+assistant turn and prune."""
+        key = symbol or "__global__"
+        if key not in self._contexts:
+            self._contexts[key] = []
 
-        Steps:
-            1. Assemble prompt (system + RAG + context + query)
-            2. Try CLI invocation
-            3. On failure → fallback to Anthropic SDK (if configured)
-            4. Parse confidence from response text
-            5. Update per-symbol context
-            6. Return AnalysisResponse
-        """
-        t_start = time.monotonic()
-        prompt = await self._assemble_prompt(request)
-
-        # ── Attempt CLI ─────────────────────────────────────────────────
-        result: CliResult = await self._cli.invoke(
-            prompt=prompt,
-            system_prompt=self._system_prompt,
-            image_path=request.image_path,
-        )
-
-        if result.success:
-            text = result.stdout
-            confidence = self._parse_confidence(text)
-            ctx_tokens = self._total_context_tokens(request.symbol)
-            self._update_context(request.symbol, request.query, text)
-            return AnalysisResponse(
-                text=text,
-                confidence=confidence,
-                source="claude_cli",
-                duration_seconds=result.duration_seconds,
-                context_tokens_used=ctx_tokens,
-            )
-
-        # CLI failed — decide whether to fallback ───────────────────────
-        fallback_enabled = getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
-        has_api = ANTHROPIC_AVAILABLE and bool(getattr(config, "ANTHROPIC_API_KEY", ""))
-        if fallback_enabled and has_api:
-            log.info(f"ClaudeService: CLI fail ({result.stderr[:100]}), falling back to SDK")
-            resp = await self._fallback_to_api(prompt)
-            if resp.text:
-                self._update_context(request.symbol, request.query, resp.text)
-            resp.duration_seconds = time.monotonic() - t_start
-            return resp
-
-        # Both CLI and fallback unavailable ─────────────────────────────
-        err_msg = result.stderr or "Claude CLI failed and SDK fallback is disabled."
-        log.error(f"ClaudeService: all providers failed: {err_msg[:150]}")
-        return AnalysisResponse(
-            text=f"⚠️ Phân tích AI không khả dụng: {err_msg[:120]}",
-            confidence=0,
-            source="none",
-            duration_seconds=time.monotonic() - t_start,
-            error=err_msg,
-        )
-
-    async def query(self, query: str, symbol: str = "") -> AnalysisResponse:
-        """Simplified entry for ad-hoc queries without full trading context."""
-        return await self.analyze(AnalysisRequest(
-            query=query,
-            symbol=symbol,
-            include_rag_context=False,
+        self._contexts[key].append(ContextEntry(
+            role="user",
+            content=query,
+            timestamp=time.monotonic(),
+            estimated_tokens=self._estimate_tokens(query),
         ))
+        self._contexts[key].append(ContextEntry(
+            role="assistant",
+            content=response,
+            timestamp=time.monotonic(),
+            estimated_tokens=self._estimate_tokens(response),
+        ))
+        self._prune(key)
 
-    def reset_context(self, symbol: str = "") -> None:
-        """
-        Clear conversation context.
-        - symbol="": clears ALL symbols (Property 10 global reset).
-        - symbol="BTCUSDT": clears only that symbol.
+    def reset(self, symbol: str = "") -> None:
+        """Clear context for a symbol, or all if symbol is empty.
+
+        Property 10 guarantee.
         """
         if symbol:
             cleared = len(self._contexts.pop(symbol, []))
-            log.info(f"ClaudeService: context cleared for {symbol} ({cleared} turns)")
+            log.info(f"ContextManager: context cleared for {symbol} ({cleared} turns)")
         else:
             total = sum(len(v) for v in self._contexts.values())
             self._contexts.clear()
-            log.info(f"ClaudeService: ALL context cleared ({total} total turns)")
+            log.info(f"ContextManager: ALL context cleared ({total} total turns)")
 
-    def get_context_stats(self) -> dict:
-        """Return memory usage stats per symbol."""
+    def get_stats(self) -> dict:
+        """Return context usage stats per symbol."""
         stats: dict = {"symbols": {}}
         for sym, entries in self._contexts.items():
             total_tokens = sum(e.estimated_tokens for e in entries)
@@ -230,6 +190,122 @@ class ClaudeService:
             for e in entries
         )
         return stats
+
+    def total_tokens(self, symbol: str) -> int:
+        """Current estimated token count for a symbol."""
+        key = symbol or "__global__"
+        return sum(e.estimated_tokens for e in self._contexts.get(key, []))
+
+    def _prune(self, symbol: str) -> None:
+        """Remove oldest entries until both:
+          - len(entries) ≤ 2 × context_depth (turns = user+assistant pairs)
+          - total estimated tokens ≤ max_context_tokens
+
+        Property 3 & 4 guarantees.
+        """
+        entries = self._contexts.get(symbol, [])
+        max_turns = self._context_depth * 2
+
+        # Depth pruning
+        while len(entries) > max_turns:
+            entries.pop(0)
+
+        # Token budget pruning
+        while entries and sum(e.estimated_tokens for e in entries) > self._max_context_tokens:
+            entries.pop(0)
+
+        self._contexts[symbol] = entries
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimate: chars / 4 (conservative, skewed for mixed EN/VI)."""
+        return max(1, len(text) // 4)
+
+
+# ─── ClaudeService (AnalysisOrchestrator) ──────────────────────────────────────
+
+
+class ClaudeService:
+    """Stateless orchestrator for Claude SDK analysis.
+
+    Lifecycle:
+        svc = ClaudeService(sdk)
+        await svc.initialize()   # called at app startup
+        response = await svc.analyze(request)
+        response = await svc.query("explain VCP", symbol="BTCUSDT")
+
+    Named ClaudeService for backward API compatibility.
+    Functionally acts as the AnalysisOrchestrator defined in design.md.
+
+    Property guarantees:
+        Property 5: error responses have source="none" and confidence=0
+        Property 6: AnalysisComplete structural equivalence (via EventBusInterface)
+    """
+
+    def __init__(self, sdk: "SdkClient", ctx: Optional[ContextManager] = None):
+        self._sdk = sdk
+        self._ctx = ctx or ContextManager()
+        self._initialized: bool = False
+
+    # ── Lifecycle ───────────────────────────────────────────────────────────────
+
+    async def initialize(self) -> None:
+        """Load system prompt via ContextManager.
+        Called once during app startup via lifespan hook.
+        """
+        if self._initialized:
+            return
+        await self._ctx.load_system_prompt()
+        self._initialized = True
+        log.info("ClaudeService initialized (SDK-Headless mode).")
+
+    # ── Public API ──────────────────────────────────────────────────────────────
+
+    async def analyze(self, request: AnalysisRequest) -> AnalysisResponse:
+        """Main entry point for all structured trading analysis requests.
+
+        Steps:
+            1. Assemble prompt (system + RAG + context + query)
+            2. Call SdkClient.invoke()
+            3. Parse confidence from response text
+            4. Update per-symbol context via ContextManager
+            5. Return AnalysisResponse
+        """
+        t_start = time.monotonic()
+        prompt = await self._assemble_prompt(request)
+
+        # ── SDK call ─────────────────────────────────────────────────────
+        response = await self._sdk.invoke(
+            prompt=prompt,
+            system_prompt=self._ctx.system_prompt,
+        )
+
+        if response.source != "none":
+            # Success — parse confidence and update context
+            response.confidence = self._parse_confidence(response.text)
+            response.context_tokens_used = self._ctx.total_tokens(request.symbol)
+            self._ctx.update(request.symbol, request.query, response.text)
+        else:
+            # SDK error — ensure total duration is recorded
+            response.duration_seconds = time.monotonic() - t_start
+
+        return response
+
+    async def query(self, query: str, symbol: str = "") -> AnalysisResponse:
+        """Simplified entry for ad-hoc queries without full trading context."""
+        return await self.analyze(AnalysisRequest(
+            query=query,
+            symbol=symbol,
+            include_rag_context=False,
+        ))
+
+    def reset_context(self, symbol: str = "") -> None:
+        """Delegate to ContextManager.reset(). Property 10 guarantee."""
+        self._ctx.reset(symbol)
+
+    def get_context_stats(self) -> dict:
+        """Delegate to ContextManager.get_stats()."""
+        return self._ctx.get_stats()
 
     # ── Private helpers ─────────────────────────────────────────────────────────
 
@@ -271,10 +347,11 @@ class ClaudeService:
             parts.append("## Tín hiệu:\n" + " | ".join(meta))
 
         # Conversation history for this symbol
-        history = self._contexts.get(request.symbol or "__global__", [])
+        depth = getattr(self._ctx, "_context_depth", 5)
+        history = self._ctx.get_history(request.symbol or "__global__", max_turns=depth * 2)
         if history:
             hist_lines = []
-            for entry in history[-self._context_depth:]:
+            for entry in history:
                 tag = "User" if entry.role == "user" else "Claude"
                 hist_lines.append(f"[{tag}]: {entry.content[:400]}")
             parts.append("## Lịch sử hội thoại:\n" + "\n".join(hist_lines))
@@ -284,94 +361,9 @@ class ClaudeService:
 
         return "\n\n".join(parts)
 
-    async def _fallback_to_api(self, prompt: str) -> AnalysisResponse:
-        """
-        Use the anthropic Python SDK as fallback (Property 5: transparent source field).
-        """
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            t0 = time.monotonic()
-            message = client.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=512,
-                system=self._system_prompt,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = message.content[0].text
-            duration = time.monotonic() - t0
-            return AnalysisResponse(
-                text=text,
-                confidence=self._parse_confidence(text),
-                source="anthropic_api",
-                duration_seconds=duration,
-            )
-        except Exception as exc:
-            log.error(f"ClaudeService: SDK fallback also failed: {exc}")
-            return AnalysisResponse(
-                text=f"⚠️ AI không khả dụng (CLI + SDK đều lỗi): {str(exc)[:100]}",
-                confidence=0,
-                source="none",
-                error=str(exc),
-            )
-
-    def _update_context(self, symbol: str, query: str, response: str) -> None:
-        """Append a user+assistant turn to symbol context, then prune."""
-        key = symbol or "__global__"
-        if key not in self._contexts:
-            self._contexts[key] = []
-
-        self._contexts[key].append(ContextEntry(
-            role="user",
-            content=query,
-            timestamp=time.monotonic(),
-            estimated_tokens=self._estimate_tokens(query),
-        ))
-        self._contexts[key].append(ContextEntry(
-            role="assistant",
-            content=response,
-            timestamp=time.monotonic(),
-            estimated_tokens=self._estimate_tokens(response),
-        ))
-        self._prune_context(key)
-
-    def _prune_context(self, symbol: str) -> None:
-        """
-        Remove oldest entries until both:
-          - len(entries) ≤ 2 × CLAUDE_CONTEXT_DEPTH  (turns = user+assistant pairs)
-          - total estimated tokens ≤ CLAUDE_MAX_CONTEXT_TOKENS
-
-        Property 3 & 4 guarantees.
-        """
-        entries = self._contexts.get(symbol, [])
-        max_turns = self._context_depth * 2  # each depth unit = 1 user + 1 assistant
-
-        # Depth pruning
-        while len(entries) > max_turns:
-            entries.pop(0)
-
-        # Token budget pruning
-        while entries and self._total_context_tokens_for(entries) > self._max_context_tokens:
-            entries.pop(0)
-
-        self._contexts[symbol] = entries
-
-    def _total_context_tokens(self, symbol: str) -> int:
-        return self._total_context_tokens_for(self._contexts.get(symbol or "__global__", []))
-
-    @staticmethod
-    def _total_context_tokens_for(entries: list[ContextEntry]) -> int:
-        return sum(e.estimated_tokens for e in entries)
-
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        """Rough token estimate: chars / 4 (conservative, skewed for mixed EN/VI)."""
-        return max(1, len(text) // 4)
-
     @staticmethod
     def _parse_confidence(text: str) -> int:
-        """
-        Extract confidence from text matching patterns like:
+        """Extract confidence from text matching patterns like:
             [Confidence: 7/10]  or  Confidence: 8/10  or  độ tin cậy: 6
         Returns integer 1–10, defaults to 5 if not found.
         """
