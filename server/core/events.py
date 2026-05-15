@@ -208,3 +208,16 @@ class BriefCompleted(Event):
     symbols_scanned: int = 0
     success: bool = True
     screenshot_path: str = ""
+
+
+# ═══════════════════════════════════════════════════════════════
+# CAPTURE EVENTS (HookDispatcher → PythonCaptureClient)
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class CaptureTriggered(Event):
+    """Emitted by HookDispatcher when a capture is triggered."""
+    symbol: str = ""
+    trigger: str = ""      # "signal" | "schedule" | "command"
+    source_event_id: str = ""
+

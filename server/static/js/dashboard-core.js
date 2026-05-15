@@ -112,6 +112,7 @@ function switchTab(name) {
   if (name === 'indicators') loadIndicators();
   if (name === 'notifications') loadNotifications();
   if (name === 'analysis') loadBriefs();
+  if (name === 'trade-analysis') loadTradeAnalysis();
   if (name === 'status') loadSystemStatus();
   if (name === 'scanner') {} // load on button click
 }
@@ -199,33 +200,129 @@ async function loadEquityChart() {
   const ctx = document.getElementById('equityChart');
   if (!ctx) return;
   if (eqChart) eqChart.destroy();
+
+  // Gradient for equity line
+  const ctxDraw = ctx.getContext('2d');
+  const eqGrad = ctxDraw.createLinearGradient(0, 0, 0, 300);
+  eqGrad.addColorStop(0, 'rgba(108,99,255,0.25)');
+  eqGrad.addColorStop(1, 'rgba(108,99,255,0.02)');
+
+  // Gradient for drawdown area
+  const ddGrad = ctxDraw.createLinearGradient(0, 0, 0, 300);
+  ddGrad.addColorStop(0, 'rgba(255,77,109,0.03)');
+  ddGrad.addColorStop(1, 'rgba(255,77,109,0.2)');
+
   eqChart = new Chart(ctx, {
     type: 'line',
     data: {
       labels: data.labels.map((l, i) => i + 1),
-      datasets: [{
-        label: 'Cumulative P&L',
-        data: data.cumulative_pnl,
-        borderColor: '#6c63ff',
-        backgroundColor: 'rgba(108,99,255,0.08)',
-        fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
-      }]
+      datasets: [
+        {
+          label: 'Cumulative P&L',
+          data: data.cumulative_pnl,
+          borderColor: '#6c63ff',
+          backgroundColor: eqGrad,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: '#6c63ff',
+          borderWidth: 2.5,
+          yAxisID: 'y',
+          order: 1,
+        },
+        {
+          label: 'Drawdown %',
+          data: (data.drawdown_pct || []).map(v => -v),
+          borderColor: 'rgba(255,77,109,0.6)',
+          backgroundColor: ddGrad,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointHoverBackgroundColor: '#ff4d6d',
+          borderWidth: 1.5,
+          borderDash: [4, 3],
+          yAxisID: 'y1',
+          order: 2,
+        }
+      ]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false },
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: {
+            color: '#9ca3af',
+            font: { size: 11, family: "'Inter', sans-serif" },
+            boxWidth: 14,
+            padding: 16,
+            usePointStyle: true,
+          }
+        },
         tooltip: {
+          backgroundColor: 'rgba(17,19,24,0.95)',
+          borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1,
+          titleColor: '#e8eaf0',
+          bodyColor: '#9ca3af',
+          padding: 12,
           callbacks: {
-            label: (ctx) => {
-              const t = data.trades[ctx.dataIndex];
-              return t ? `${t.symbol} ${t.side}: ${t.pnl >= 0 ? '+' : ''}${t.pnl} → Cum: ${t.cumulative}` : '';
+            label: (tooltipCtx) => {
+              const idx = tooltipCtx.dataIndex;
+              if (tooltipCtx.datasetIndex === 0) {
+                const t = data.trades[idx];
+                return t ? `P&L: ${t.pnl >= 0 ? '+' : ''}${t.pnl} → Cum: ${t.cumulative}` : '';
+              } else {
+                const dd = data.drawdown_pct ? data.drawdown_pct[idx] : 0;
+                return `Drawdown: -${dd}%`;
+              }
+            },
+            title: (items) => {
+              const idx = items[0]?.dataIndex;
+              const t = data.trades[idx];
+              return t ? `${t.symbol} ${t.side} — #${idx + 1}` : `Trade #${idx + 1}`;
             }
           }
         }
       },
       scales: {
         x: { display: false },
-        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#6b7280', font: { size: 11 } } }
+        y: {
+          position: 'left',
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: '#6c63ff',
+            font: { size: 11 },
+            callback: v => v >= 0 ? `+${v}` : v,
+          },
+          title: {
+            display: true,
+            text: 'P&L (USDT)',
+            color: '#6c63ff',
+            font: { size: 10, weight: '500' },
+          }
+        },
+        y1: {
+          position: 'right',
+          grid: { drawOnChartArea: false },
+          ticks: {
+            color: '#ff4d6d',
+            font: { size: 10 },
+            callback: v => `${v}%`,
+          },
+          title: {
+            display: true,
+            text: 'Drawdown',
+            color: '#ff4d6d',
+            font: { size: 10, weight: '500' },
+          },
+          reverse: false,
+        }
       }
     }
   });

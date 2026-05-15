@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
+import aiosqlite
+
 import config
 import notifier
 import database
@@ -132,6 +134,31 @@ async def lifespan(app: FastAPI):
     else:
         log.info("MCP: Tính năng MCP đang TẮT (MCP_ENABLED=false).")
 
+    # ── Stealth Capture Daemon (P11) ──────────────────────────────────────────
+    if config.CAPTURE_DAEMON_ENABLED:
+        try:
+            from capture_daemon import DaemonLifecycleManager
+            from capture_hooks import HookDispatcher
+            from capture_client import PythonCaptureClient
+
+            daemon_mgr = DaemonLifecycleManager()
+            await daemon_mgr.start()
+
+            capture_client = PythonCaptureClient()
+            hook_dispatcher = HookDispatcher(capture_client)
+            hook_dispatcher.register_hooks(config.CAPTURE_HOOKS)
+
+            app.state.daemon_manager = daemon_mgr
+            app.state.capture_client = capture_client
+            app.state.hook_dispatcher = hook_dispatcher
+            log.info(f"Capture Daemon: ✅ Started (port {config.CAPTURE_DAEMON_PORT}, "
+                     f"hooks={config.CAPTURE_HOOKS})")
+        except Exception as daemon_err:
+            log.warning(f"Capture Daemon: ⚠️ Init failed ({daemon_err}). "
+                        "Falling back to subprocess mode.")
+    else:
+        log.info("Capture Daemon: TẮT (CAPTURE_DAEMON_ENABLED=false).")
+
     # ── Scheduler (P6) ────────────────────────────────────────
     if config.BRIEF_ENABLED:
         scheduler_module.start_scheduler()
@@ -178,6 +205,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ──────────────────────────────────────────────
+    # Stop Capture Daemon first (long-running child process)
+    if hasattr(app.state, 'daemon_manager'):
+        await app.state.daemon_manager.stop()
     tg_bot_module.stop_bot()
     scheduler_module.stop_scheduler()
     from exchanges.health_monitor import stop_health_monitor
@@ -289,6 +319,12 @@ async def health_check():
 async def dashboard():
     """Serve Performance Dashboard UI."""
     return FileResponse(str(STATIC_DIR / "dashboard.html"))
+
+
+@app.get("/daemon_dashboard")
+async def daemon_dashboard():
+    """Serve Capture Daemon Test Dashboard."""
+    return FileResponse(str(STATIC_DIR / "capture_dashboard.html"))
 
 
 @app.get("/")
@@ -500,6 +536,115 @@ async def get_equity_endpoint(
 ):
     """Tra ve equity curve data cho Chart.js."""
     return await database.get_equity_curve(symbol=symbol)
+
+
+# ═══ TRADE ANALYSIS ENDPOINT ═════════════════════════════════
+@app.get("/trades/analysis")
+async def get_trade_analysis_endpoint(
+    symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),
+    trade_status: Optional[str] = Query(None, alias="status", description="Filter theo status: FILLED, REJECTED, PENDING"),
+    from_date: Optional[str] = Query(None, description="ISO format: 2026-01-01"),
+    to_date: Optional[str] = Query(None, description="ISO format: 2026-12-31"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Trade analysis with advanced filtering — powers Trade Analysis tab."""
+    # Build filter conditions
+    conditions = []
+    params: list = []
+
+    if symbol:
+        conditions.append("t.symbol = ?")
+        params.append(symbol.upper())
+    if trade_status:
+        conditions.append("t.status = ?")
+        params.append(trade_status.upper())
+    if from_date:
+        conditions.append("t.created_at >= ?")
+        params.append(from_date)
+    if to_date:
+        conditions.append("t.created_at <= ?")
+        params.append(to_date)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Total count
+        row = await db.execute_fetchall(
+            f"SELECT COUNT(*) as cnt FROM trades t {where}", params
+        )
+        total = row[0][0] if row else 0
+
+        # Fetch trades
+        rows = await db.execute_fetchall(
+            f"""SELECT t.*, s.action as signal_action
+                FROM trades t
+                LEFT JOIN signals s ON s.id = t.signal_id
+                {where}
+                ORDER BY t.created_at DESC
+                LIMIT ? OFFSET ?""",
+            params + [min(limit, 500), offset],
+        )
+        trades = [dict(r) for r in rows]
+
+        # Compute analysis stats from FILLED trades in the filter set
+        filled_where = f"{where} AND" if where else "WHERE"
+        stats_rows = await db.execute_fetchall(
+            f"SELECT pnl, symbol FROM trades t {filled_where} t.status = 'FILLED' AND t.pnl IS NOT NULL",
+            params,
+        )
+        pnl_list = [r[0] for r in stats_rows]
+        symbol_set = list(set(r[1] for r in stats_rows))
+
+        wins = [p for p in pnl_list if p > 0]
+        losses = [p for p in pnl_list if p <= 0]
+
+        # Streak calculation
+        max_win_streak = 0
+        max_loss_streak = 0
+        cur_streak = 0
+        for p in pnl_list:
+            if p > 0:
+                if cur_streak > 0:
+                    cur_streak += 1
+                else:
+                    cur_streak = 1
+                max_win_streak = max(max_win_streak, cur_streak)
+            else:
+                if cur_streak < 0:
+                    cur_streak -= 1
+                else:
+                    cur_streak = -1
+                max_loss_streak = max(max_loss_streak, abs(cur_streak))
+
+        total_win = sum(wins) if wins else 0.0
+        total_loss = abs(sum(losses)) if losses else 0.0
+
+        stats = {
+            "total_trades": len(pnl_list),
+            "winning_trades": len(wins),
+            "losing_trades": len(losses),
+            "win_rate": round(len(wins) / len(pnl_list) * 100, 1) if pnl_list else 0.0,
+            "total_pnl": round(sum(pnl_list), 2) if pnl_list else 0.0,
+            "avg_win": round(total_win / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(-total_loss / len(losses), 2) if losses else 0.0,
+            "best_trade": round(max(pnl_list), 2) if pnl_list else 0.0,
+            "worst_trade": round(min(pnl_list), 2) if pnl_list else 0.0,
+            "profit_factor": round(total_win / total_loss, 2) if total_loss > 0 else 999.99,
+            "max_win_streak": max_win_streak,
+            "max_loss_streak": max_loss_streak,
+            "symbols_traded": symbol_set,
+        }
+
+    return {
+        "trades": trades,
+        "stats": stats,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 # ═══ BINANCE ACCOUNT ENDPOINT (Sprint 7.2) ═══════════════════

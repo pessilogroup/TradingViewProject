@@ -144,6 +144,16 @@ WATCHLIST_DEFAULT = [
     if s.strip()
 ]
 
+# ── P11: Stealth Capture Daemon ───────────────────────────────────────────────
+# Persistent Node.js daemon for high-performance chart captures via CDP
+CAPTURE_DAEMON_ENABLED = os.getenv("CAPTURE_DAEMON_ENABLED", str(MCP_ENABLED)).lower() == "true"
+CAPTURE_DAEMON_PORT = int(os.getenv("CAPTURE_DAEMON_PORT", 9333))
+CAPTURE_DAEMON_HOST = os.getenv("CAPTURE_DAEMON_HOST", "127.0.0.1")
+CAPTURE_HOOKS = [h.strip() for h in os.getenv("CAPTURE_HOOKS", "on_signal").split(",") if h.strip()]
+CAPTURE_SCHEDULE_CRON = os.getenv("CAPTURE_SCHEDULE_CRON", "*/15 9-16 * * 1-5")
+CAPTURE_BATCH_CONCURRENCY = int(os.getenv("CAPTURE_BATCH_CONCURRENCY", 1))
+CAPTURE_COOLDOWN_SEC = int(os.getenv("CAPTURE_COOLDOWN_SEC", "60"))
+
 # ── P7: Telegram Bot Interactive ─────────────────────────────────────────────
 # Bật/tắt interactive Telegram bot (polling mode, chạy song song với FastAPI)
 TELEGRAM_BOT_ENABLED = os.getenv("TELEGRAM_BOT_ENABLED", "false").lower() == "true"

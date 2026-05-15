@@ -135,6 +135,7 @@
     🔔 Thông Báo <span id="notifBadge" class="tab-badge">0</span>
   </button>
   <button class="tab-btn" data-tab="analysis" onclick="switchTab('analysis')">🧠 Phân Tích</button>
+  <button class="tab-btn" data-tab="trade-analysis" onclick="switchTab('trade-analysis')">📊 Analysis</button>
   <button class="tab-btn" data-tab="scanner" onclick="switchTab('scanner')">📋 Scanner</button>
   <button class="tab-btn" data-tab="status" onclick="switchTab('status')">⚡ System</button>
 </nav>
@@ -587,6 +588,132 @@
   </div>
 
 
+  <!-- ═══ TAB: TRADE ANALYSIS ═══ -->
+  <div id="tab-trade-analysis" class="tab-panel">
+
+    <!-- ── FILTER BAR ── -->
+    <div class="ta-filter-bar">
+      <div class="ta-filter-brand">
+        <span class="ta-icon-pulse">📊</span>
+        <div>
+          <div class="ta-brand-title">Trade Analysis</div>
+          <div class="ta-brand-sub">Advanced Filtering & Performance Breakdown</div>
+        </div>
+      </div>
+
+      <div class="ta-filters">
+        <div class="ta-filter-group">
+          <label class="ta-label">From</label>
+          <input type="date" id="taFromDate" class="form-input ta-date-input" title="Start date">
+        </div>
+        <div class="ta-filter-group">
+          <label class="ta-label">To</label>
+          <input type="date" id="taToDate" class="form-input ta-date-input" title="End date">
+        </div>
+        <div class="ta-filter-group">
+          <label class="ta-label">Symbol</label>
+          <select id="taSymbolFilter" class="form-input ta-select" title="Filter by symbol">
+            <option value="">All Symbols</option>
+          </select>
+        </div>
+        <div class="ta-filter-group">
+          <label class="ta-label">Status</label>
+          <div class="ta-status-pills">
+            <button class="ta-pill active" data-status="" onclick="setTAStatus('',this)">ALL</button>
+            <button class="ta-pill" data-status="FILLED" onclick="setTAStatus('FILLED',this)">FILLED</button>
+            <button class="ta-pill" data-status="REJECTED" onclick="setTAStatus('REJECTED',this)">REJECTED</button>
+            <button class="ta-pill" data-status="PENDING" onclick="setTAStatus('PENDING',this)">PENDING</button>
+          </div>
+        </div>
+        <button class="ta-apply-btn" onclick="loadTradeAnalysis()">
+          <span>🔍</span> Apply
+        </button>
+      </div>
+    </div>
+
+    <!-- ── KPI SUMMARY ── -->
+    <div class="ta-kpi-grid" id="taKpiGrid">
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">🎯</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiWinRate">—</div>
+          <div class="ta-kpi-label">Win Rate</div>
+        </div>
+      </div>
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">💰</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiPnl">—</div>
+          <div class="ta-kpi-label">Total P&L</div>
+        </div>
+      </div>
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">📊</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiTrades">—</div>
+          <div class="ta-kpi-label">Trades</div>
+        </div>
+      </div>
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">⚡</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiPF">—</div>
+          <div class="ta-kpi-label">Profit Factor</div>
+        </div>
+      </div>
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">🏆</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiStreak">—</div>
+          <div class="ta-kpi-label">Best Streak</div>
+        </div>
+      </div>
+      <div class="ta-kpi-card">
+        <div class="ta-kpi-icon">📈</div>
+        <div class="ta-kpi-body">
+          <div class="ta-kpi-val" id="taKpiAvgWin">—</div>
+          <div class="ta-kpi-label">Avg Win</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CHARTS ROW ── -->
+    <div class="ta-charts-row">
+      <section class="glass-section ta-chart-section">
+        <div class="section-title">📊 Win/Loss Distribution</div>
+        <div class="ta-chart-container"><canvas id="taWinLossChart"></canvas></div>
+      </section>
+      <section class="glass-section ta-chart-section">
+        <div class="section-title">💹 P&L per Trade</div>
+        <div class="ta-chart-container"><canvas id="taPnlChart"></canvas></div>
+      </section>
+    </div>
+
+    <!-- ── FILTERED TRADE TABLE ── -->
+    <section class="glass-section">
+      <div class="section-header">
+        <div class="section-title">📋 Filtered Trades</div>
+        <span id="taTradeCount" class="muted-label"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Time</th><th>Symbol</th><th>Side</th>
+              <th>Score</th><th>Qty</th><th>Price</th><th>P&L</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="taTradesBody">
+            <tr><td colspan="9"><div class="empty-state"><div class="icon">📊</div><h3>Apply filters to load</h3></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="taPagination" class="pagination"></div>
+    </section>
+
+  </div>
+
+
   <!-- ═══ TAB: SCANNER ═══ -->
   <div id="tab-scanner" class="tab-panel">
     <section class="glass-section">
@@ -619,7 +746,10 @@
 
     <!-- CDP Vision Status -->
     <section class="glass-section mt-20" >
-      <div class="section-title">👁 Vision Capture Status</div>
+      <div class="section-header">
+        <div class="section-title">👁 Vision Capture Status</div>
+        <a href="http://127.0.0.1.nip.io:5000/daemon_dashboard" target="_blank" class="qbtn qbtn-scan btn-sm-3" style="text-decoration:none; display:inline-flex; align-items:center;">🚀 Daemon Studio</a>
+      </div>
       <div id="visionStatus" class="vision-status-grid">
         <div class="loading"><div class="spinner"></div></div>
       </div>
@@ -641,6 +771,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="/static/js/dashboard-core.js"></script>
+<script src="/static/js/dashboard-analysis.js"></script>
 <script src="/static/js/dashboard-features.js"></script>
 </body>
 </html>

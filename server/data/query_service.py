@@ -158,24 +158,32 @@ async def get_equity_curve(symbol: Optional[str] = None) -> Dict[str, Any]:
 
         labels = []
         cumulative_pnl = []
+        drawdown_pct = []
         trades_detail = []
         running = 0.0
+        peak = 0.0
 
         for r in rows:
             running += r[1]  # pnl
+            if running > peak:
+                peak = running
+            dd_pct = round(((peak - running) / peak * 100), 2) if peak > 0 else 0.0
             labels.append(r[0])  # created_at
             cumulative_pnl.append(round(running, 2))
+            drawdown_pct.append(dd_pct)
             trades_detail.append({
                 "date": r[0],
                 "pnl": r[1],
                 "symbol": r[2],
                 "side": r[3],
                 "cumulative": round(running, 2),
+                "drawdown_pct": dd_pct,
             })
 
         return {
             "labels": labels,
             "cumulative_pnl": cumulative_pnl,
+            "drawdown_pct": drawdown_pct,
             "trades": trades_detail,
         }
 
