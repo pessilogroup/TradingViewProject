@@ -97,9 +97,11 @@ async def lifespan(app: FastAPI):
 
     # ── Phase 4: Register EventBus components (triggers @bus.on() decorators) ──
     import processor.signal_processor  # noqa: F401 — @bus.on(SignalReceived)
+    import processor.signal_enricher    # noqa: F401 — @bus.on(IndicatorSignalValidated)
     import engine.trade_engine          # noqa: F401 — @bus.on(SignalValidated)
     import analyzer.ai_analyzer         # noqa: F401 — @bus.on(AlertTriggered)
     import hub.notification_hub          # noqa: F401 — @bus.on(SignalRejected)
+    import data.indicator_persistence   # noqa: F401 — @bus.on(IndicatorSignalReceived) DI-1
     log.info(
         f"EventBus: {_event_bus.metrics['total_handlers']} handlers registered "
         f"across {_event_bus.metrics['registered_topics']} topics."

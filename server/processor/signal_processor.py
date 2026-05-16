@@ -14,7 +14,7 @@ import time
 from typing import Dict, Tuple
 
 from core.event_bus import bus as _default_bus
-from core.events import SignalReceived, SignalValidated, SignalRejected, AlertTriggered
+from core.events import SignalReceived, SignalValidated, SignalRejected, AlertTriggered, IndicatorSignalReceived, IndicatorSignalValidated, IndicatorSignalRejected
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,17 @@ def _is_duplicate(symbol: str, action: str) -> bool:
     if now - last_seen < DEDUP_TTL_SEC:
         return True
     _dedup_cache[key] = now
+    return False
+
+_indicator_dedup_cache: Dict[Tuple[str, str, str], float] = {}
+
+def _is_indicator_duplicate(symbol: str, indicator_name: str, signal_type: str) -> bool:
+    key = (symbol.strip().upper(), indicator_name.strip().lower(), signal_type.strip().lower())
+    now = time.time()
+    last_seen = _indicator_dedup_cache.get(key, 0)
+    if now - last_seen < DEDUP_TTL_SEC:
+        return True
+    _indicator_dedup_cache[key] = now
     return False
 
 
@@ -152,3 +163,72 @@ async def process_signal(event: SignalReceived) -> None:
 def reset_dedup_cache() -> None:
     """Clear dedup cache — for testing."""
     _dedup_cache.clear()
+    _indicator_dedup_cache.clear()
+
+@_default_bus.on(IndicatorSignalReceived)
+async def process_indicator_signal(event: IndicatorSignalReceived) -> None:
+    """
+    Indicator signal validation:
+    1. Validate signal_type in {"entry", "exit", "info"}
+    2. Clamp confidence_score to [0, 100]
+    3. Dedup check using (symbol, indicator_name, signal_type) key
+    4. Timeframe validation for entry signals only
+    5. Emit IndicatorSignalValidated or IndicatorSignalRejected
+    """
+    if event.signal_type not in {"entry", "exit", "info"}:
+        await _bus.emit(IndicatorSignalRejected(
+            signal_id=event.signal_id,
+            symbol=event.symbol,
+            indicator_name=event.indicator_name,
+            signal_type=event.signal_type,
+            reason="invalid_signal_type",
+            exchange=event.exchange
+        ))
+        return
+        
+    clamped_score = max(0, min(100, event.confidence_score))
+    
+    if clamped_score < 50:
+        await _bus.emit(IndicatorSignalRejected(
+            signal_id=event.signal_id,
+            symbol=event.symbol,
+            indicator_name=event.indicator_name,
+            signal_type=event.signal_type,
+            reason="low_confidence",
+            exchange=event.exchange
+        ))
+        return
+    
+    if _is_indicator_duplicate(event.symbol, event.indicator_name, event.signal_type):
+        await _bus.emit(IndicatorSignalRejected(
+            signal_id=event.signal_id,
+            symbol=event.symbol,
+            indicator_name=event.indicator_name,
+            signal_type=event.signal_type,
+            reason="duplicate_signal",
+            exchange=event.exchange
+        ))
+        return
+        
+    if event.signal_type == "entry" and not _is_valid_trade_interval(event.interval):
+        await _bus.emit(IndicatorSignalRejected(
+            signal_id=event.signal_id,
+            symbol=event.symbol,
+            indicator_name=event.indicator_name,
+            signal_type=event.signal_type,
+            reason="invalid_timeframe",
+            exchange=event.exchange
+        ))
+        return
+        
+    await _bus.emit(IndicatorSignalValidated(
+        signal_id=event.signal_id,
+        symbol=event.symbol,
+        indicator_name=event.indicator_name,
+        signal_type=event.signal_type,
+        price=event.price,
+        conditions_met=event.conditions_met,
+        confidence_score=clamped_score,
+        metadata=event.metadata,
+        exchange=event.exchange
+    ))

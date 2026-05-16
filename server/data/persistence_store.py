@@ -40,6 +40,38 @@ async def update_signal_status(signal_id: int, processed: int):
         )
         await db.commit()
 
+async def insert_indicator_signal(
+    signal_id: int,
+    symbol: str,
+    indicator_name: str,
+    signal_type: str,
+    confidence_score: int,
+    conditions_met: str,
+    metadata: str,
+    interval: str = "",
+    price: Optional[float] = None,
+    source_ip: Optional[str] = None,
+    exchange: str = "binance",
+) -> int:
+    """Luu tin hieu indicator vao bang indicator_signals (REQ 7.1 — full schema)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO indicator_signals
+               (signal_id, symbol, indicator_name, signal_type, interval, price,
+                confidence_score, conditions_met, metadata, source_ip, exchange)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (signal_id, symbol, indicator_name, signal_type, interval, price,
+             confidence_score, conditions_met, metadata, source_ip, exchange),
+        )
+        await db.commit()
+        indicator_signal_id = cursor.lastrowid
+        log.info(
+            f"Indicator Signal #{indicator_signal_id} saved for Webhook Signal #{signal_id}: "
+            f"{indicator_name} {symbol} ({signal_type})"
+        )
+        return indicator_signal_id
+
+
 # ═══════════════════════════════════════════════════════════════
 # TRADE WRITE
 # ═══════════════════════════════════════════════════════════════

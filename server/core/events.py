@@ -53,21 +53,44 @@ class SignalReceived(Event):
 
 
 @dataclass(frozen=True)
-class IndicatorSignalEvent(Event):
-    """Emitted by WebhookGateway specifically for indicator-based signals."""
+class IndicatorSignalReceived(Event):
+    """Emitted by WebhookGateway when an indicator payload is parsed and authenticated."""
     signal_id: int = 0
     symbol: str = ""
-    action: str = ""
-    price: Optional[float] = None
-    quote_qty: float = 10.0
+    indicator_name: str = ""
+    signal_type: str = "info"  # "entry" | "exit" | "info"
     interval: str = ""
-    sl: str = ""
-    tp: str = ""
-    indicator: str = ""
-    strategy: str = ""
-    message: str = ""
+    price: Optional[float] = None
+    conditions_met: tuple = ()  # Immutable tuple of condition strings
+    confidence_score: int = 0  # 0-100
+    metadata: Optional[Dict[str, Any]] = None
+    source_ip: str = ""
     exchange: str = "binance"
-    payload: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class IndicatorSignalValidated(Event):
+    """Emitted by SignalProcessor after indicator signal passes validation."""
+    signal_id: int = 0
+    symbol: str = ""
+    indicator_name: str = ""
+    signal_type: str = "info"
+    price: Optional[float] = None
+    conditions_met: tuple = ()
+    confidence_score: int = 0
+    metadata: Optional[Dict[str, Any]] = None
+    exchange: str = "binance"
+
+
+@dataclass(frozen=True)
+class IndicatorSignalRejected(Event):
+    """Emitted by SignalProcessor when an indicator signal fails validation."""
+    signal_id: int = 0
+    symbol: str = ""
+    indicator_name: str = ""
+    signal_type: str = ""
+    reason: str = ""
+    exchange: str = "binance"
 
 
 @dataclass(frozen=True)

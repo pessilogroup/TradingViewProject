@@ -29,7 +29,7 @@ import config
 import database
 
 from core.event_bus import bus as _event_bus
-from core.events import SignalReceived, IndicatorSignalEvent
+from core.events import SignalReceived, IndicatorSignalReceived
 
 log = logging.getLogger(__name__)
 
@@ -154,25 +154,46 @@ async def webhook(request: Request):
     # action, config, và fallback đều được đẩy xuống downstream.
     # ══════════════════════════════════════════════════════════════════════
 
-    indicator = tv_alert.indicator or ""
-    strategy = tv_alert.strategy or ""
-    message = tv_alert.message or ""
+    source = payload.get("source", "")
+    indicator_name = payload.get("indicator_name", "")
 
-    if indicator or strategy:
-        await _event_bus.emit_background(IndicatorSignalEvent(
+    if source == "indicator" or (indicator_name and action not in {"buy", "sell", "alert"}):
+        signal_type = payload.get("signal_type", "info")
+        
+        try:
+            conf_score = int(payload.get("confidence_score", 0))
+        except (ValueError, TypeError):
+            conf_score = 0
+            
+        raw_conditions = payload.get("conditions_met", [])
+        if isinstance(raw_conditions, list):
+            conditions_met = tuple(str(c) for c in raw_conditions)
+        else:
+            conditions_met = ()
+            
+        metadata = payload.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        # Guard: required fields (REQ 2.2, Prop 4 — DI-3: misclassification has no recovery)
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Missing required field: symbol")
+        if not indicator_name:
+            raise HTTPException(status_code=400, detail="Missing required field: indicator_name")
+
+        # Persistence is handled by data.indicator_persistence (DI-1: parallel listener)
+        await _event_bus.emit_background(IndicatorSignalReceived(
             signal_id=signal_id,
             symbol=symbol,
-            action=action,
-            price=price_float,
-            quote_qty=quote_qty_val,
+            indicator_name=indicator_name,
+            signal_type=signal_type,
             interval=interval,
-            sl=sl_str,
-            tp=tp_str,
-            indicator=indicator,
-            strategy=strategy,
-            message=message,
-            exchange=payload.get("exchange", config.DEFAULT_EXCHANGE),
-            payload=payload,
+            price=price_float,
+            conditions_met=conditions_met,
+            confidence_score=conf_score,
+            metadata=metadata,
+            source_ip=source_ip,
+            exchange=exchange,
         ))
     else:
         await _event_bus.emit_background(SignalReceived(

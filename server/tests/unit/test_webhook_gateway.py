@@ -44,20 +44,20 @@ async def test_webhook_auth_via_body_secret():
     _WEBHOOK_RATE_LIMITS.clear()
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = AsyncMock(return_value=1)
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": 68000}
-        )
-        resp = await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=1) as mock_db:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": 68000}
+            )
+            resp = await webhook(req)
         assert resp["received"] is True
         assert resp["signal_id"] == 1
 
@@ -69,21 +69,21 @@ async def test_webhook_auth_via_header():
     _WEBHOOK_RATE_LIMITS.clear()
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "header-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = AsyncMock(return_value=2)
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"symbol": "ETHUSDT", "action": "sell"},
-            headers={"X-TV-Secret": "header-secret"},
-        )
-        resp = await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=2):
+            req = _make_request(
+                payload={"symbol": "ETHUSDT", "action": "sell"},
+                headers={"X-TV-Secret": "header-secret"},
+            )
+            resp = await webhook(req)
         assert resp["received"] is True
 
 
@@ -94,21 +94,21 @@ async def test_webhook_dashboard_token_bypass():
     _WEBHOOK_RATE_LIMITS.clear()
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "real-secret"
         mock_config.DASHBOARD_TOKEN = "dashboard-token-xyz"
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = AsyncMock(return_value=3)
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"symbol": "BTCUSDT", "action": "buy"},  # No secret
-            headers={"Authorization": "Bearer dashboard-token-xyz"},
-        )
-        resp = await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=3):
+            req = _make_request(
+                payload={"symbol": "BTCUSDT", "action": "buy"},  # No secret
+                headers={"Authorization": "Bearer dashboard-token-xyz"},
+            )
+            resp = await webhook(req)
         assert resp["received"] is True
 
 
@@ -192,21 +192,21 @@ async def test_rate_limit_resets_after_window():
     _WEBHOOK_RATE_LIMITS[ip] = (15, time.time() - 70)
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = AsyncMock(return_value=10)
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"},
-            client_host=ip,
-        )
-        resp = await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=10):
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"},
+                client_host=ip,
+            )
+            resp = await webhook(req)
         assert resp["received"] is True
         # Counter should have been reset to 1
         assert _WEBHOOK_RATE_LIMITS[ip][0] == 1
@@ -228,21 +228,22 @@ async def test_price_parsed_with_comma_separator():
         return 20
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": "68,000.50"}
-        )
-        await webhook(req)
-        assert captured_args["price"] == pytest.approx(68000.50)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=20) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": "68,000.50"}
+            )
+            await webhook(req)
+            price = mock_insert.call_args.kwargs["price"]
+        assert price == pytest.approx(68000.50)
 
 
 @pytest.mark.asyncio
@@ -257,21 +258,22 @@ async def test_invalid_price_becomes_none():
         return 21
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": "INVALID"}
-        )
-        await webhook(req)
-        assert captured_args["price"] is None
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=21) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "price": "INVALID"}
+            )
+            await webhook(req)
+            price = mock_insert.call_args.kwargs["price"]
+        assert price is None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -290,21 +292,22 @@ async def test_quote_qty_capped_at_max():
         return 30
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 500.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "quoteQty": 99999}
-        )
-        await webhook(req)
-        assert captured_args["quote_qty"] == pytest.approx(500.0)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=30) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "quoteQty": 99999}
+            )
+            await webhook(req)
+            quote_qty = mock_insert.call_args.kwargs["quote_qty"]
+        assert quote_qty == pytest.approx(500.0)
 
 
 @pytest.mark.asyncio
@@ -319,21 +322,22 @@ async def test_quote_qty_defaults_to_10_on_invalid():
         return 31
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 500.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "quoteQty": "abc"}
-        )
-        await webhook(req)
-        assert captured_args["quote_qty"] == pytest.approx(10.0)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=31) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy", "quoteQty": "abc"}
+            )
+            await webhook(req)
+            quote_qty = mock_insert.call_args.kwargs["quote_qty"]
+        assert quote_qty == pytest.approx(10.0)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -357,26 +361,24 @@ async def test_ip_extracted_from_x_forwarded_for():
         return 40
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"},
-            # 203.0.113.5 = attacker-controlled first hop (untrusted)
-            # 10.0.0.1    = proxy-appended rightmost hop (authoritative)
-            headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"},
-            client_host="10.0.0.1",
-        )
-        await webhook(req)
-        # SEC-001: Must resolve to rightmost (proxy-set) hop, NOT the spoofable first hop
-        assert captured_args["source_ip"] == "10.0.0.1"
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=40) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"},
+                headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"},
+                client_host="10.0.0.1",
+            )
+            await webhook(req)
+            source_ip = mock_insert.call_args.kwargs["source_ip"]
+        assert source_ip == "10.0.0.1"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -396,29 +398,29 @@ async def test_signal_received_dispatched_to_event_bus():
         emitted_events.append(event)
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = AsyncMock(return_value=99)
         mock_bus.emit_background = AsyncMock(side_effect=capture_emit)
 
-        req = _make_request(
-            payload={
-                "secret": "test-secret",
-                "symbol": "SOLUSDT",
-                "action": "buy",
-                "price": 150.0,
-                "interval": "60",
-                "sl": "140",
-                "tp": "165",
-                "exchange": "bybit",
-            }
-        )
-        resp = await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=99):
+            req = _make_request(
+                payload={
+                    "secret": "test-secret",
+                    "symbol": "SOLUSDT",
+                    "action": "buy",
+                    "price": 150.0,
+                    "interval": "60",
+                    "sl": "140",
+                    "tp": "165",
+                    "exchange": "bybit",
+                }
+            )
+            resp = await webhook(req)
         assert resp["status"] == "dispatched"
 
         assert len(emitted_events) == 1
@@ -446,19 +448,20 @@ async def test_secret_stripped_from_stored_payload():
         return 50
 
     with patch("gateway.webhook.config") as mock_config, \
-         patch("gateway.webhook.database") as mock_db, \
          patch("gateway.webhook._event_bus") as mock_bus:
 
         mock_config.WEBHOOK_SECRET = "test-secret"
         mock_config.DASHBOARD_TOKEN = ""
         mock_config.MAX_QUOTE_QTY = 1000.0
         mock_config.DEFAULT_EXCHANGE = "binance"
-        mock_db.insert_signal = capture_insert
         mock_bus.emit_background = AsyncMock()
 
-        req = _make_request(
-            payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"}
-        )
-        await webhook(req)
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock, return_value=50) as mock_insert:
+            req = _make_request(
+                payload={"secret": "test-secret", "symbol": "BTCUSDT", "action": "buy"}
+            )
+            await webhook(req)
+            payload = mock_insert.call_args.kwargs["payload"]
         # Secret should be stripped from the stored payload
-        assert "secret" not in captured_args["payload"]
+        assert "secret" not in payload

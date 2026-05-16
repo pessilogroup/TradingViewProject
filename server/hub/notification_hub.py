@@ -34,7 +34,8 @@ from core.events import (
     TradeFailed,
     PositionClosed,
     TradeApprovalTimeout,
-    IndicatorSignalEvent,
+    IndicatorSignalReceived,
+    IndicatorSignalRejected,
 )
 
 log = logging.getLogger(__name__)
@@ -113,38 +114,67 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
     await notifier.notify_all(msg)
 
 
+@_default_bus.on(IndicatorSignalRejected)
+async def notify_indicator_signal_rejected(event: IndicatorSignalRejected) -> None:
+    """Send Notification when an indicator signal is rejected (e.g. invalid type, duplicate)."""
+    reason_map = {
+        "duplicate_signal": "Tín hiệu trùng lặp (dedup 60s)",
+        "invalid_timeframe": "Khung thời gian không hợp lệ cho lệnh entry",
+        "invalid_signal_type": f"Loại tín hiệu không hợp lệ: `{event.signal_type}`",
+    }
+    reason_text = reason_map.get(event.reason, event.reason)
+
+    msg = (
+        f"⛔ **Tín Hiệu Chỉ Báo Bị Từ Chối**\n"
+        f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
+        f"- Mã: `{event.symbol}`\n"
+        f"- Chỉ báo: `{event.indicator_name}`\n"
+        f"- Lý do: {reason_text}\n"
+        f"- Signal ID: `#{event.signal_id}`"
+    )
+    log.info(f"NotificationHub: Rejected indicator signal #{event.signal_id} on {event.exchange} — {event.reason}")
+    await notifier.notify_all(msg)
+
+
 # ═══════════════════════════════════════════════════════════════
-# HANDLER: IndicatorSignalEvent → Rich Telegram Notification
+# HANDLER: IndicatorSignalReceived → Rich Telegram Notification
 # ═══════════════════════════════════════════════════════════════
 
-@_default_bus.on(IndicatorSignalEvent)
-async def notify_indicator_signal(event: IndicatorSignalEvent) -> None:
+@_default_bus.on(IndicatorSignalReceived)
+async def notify_indicator_signal(event: IndicatorSignalReceived) -> None:
     """
-    Format and send a rich Telegram notification specifically tailored for indicator alerts.
+    Format and send a rich Telegram notification for indicator alerts.
+    High-priority prefix added when confidence_score > 80 (REQ 6.4, Prop 17).
     """
     exchange = getattr(event, 'exchange', 'binance')
-    
+
+    # REQ 6.4 / Prop 17: High-priority gate
+    priority_prefix = "🔴 **KHẨN CẤP** — " if event.confidence_score > 80 else ""
+
     msg = (
-        f"📊 **Chỉ Báo Kỹ Thuật (Indicator Alert)**\n"
+        f"{priority_prefix}📊 **Chỉ Báo Kỹ Thuật (Indicator Alert)**\n"
         f"- Sàn: `{exchange.upper()}`\n"
         f"- Mã: `{event.symbol}`\n"
-        f"- Hành động: `{event.action.upper()}`\n"
+        f"- Loại tín hiệu: `{event.signal_type.upper()}`\n"
+        f"- Chỉ báo: `{event.indicator_name}`\n"
+        f"- Khung TG: `{event.interval or 'N/A'}`\n"
         f"- Giá: `{event.price or 'N/A'}`\n"
-        f"- Vốn (Quote Qty): `{getattr(event, 'quote_qty', 10.0)}`\n"
-        f"- Khung TG: `{event.interval}`\n"
-        f"- Chỉ báo: `{event.indicator}`\n"
+        f"- Độ tin cậy: `{event.confidence_score}%`\n"
     )
-    if getattr(event, 'sl', ""):
-        msg += f"- Cắt lỗ (SL): `{event.sl}`\n"
-    if getattr(event, 'tp', ""):
-        msg += f"- Chốt lời (TP): `{event.tp}`\n"
-    if getattr(event, 'strategy', ""):
-        msg += f"- Chiến lược: `{event.strategy}`\n"
-    if getattr(event, 'message', ""):
-        msg += f"\n📝 **Chi tiết:**\n{event.message}"
-        
-    log.info(f"NotificationHub: Indicator Alert for {event.symbol} ({event.indicator})")
+
+    if event.conditions_met:
+        cond_str = ", ".join(event.conditions_met)
+        msg += f"- Điều kiện: `{cond_str}`\n"
+
+    if event.metadata:
+        msg += f"\n📝 **Metadata:**\n```json\n{event.metadata}\n```"
+
+    log.info(
+        f"NotificationHub: Indicator Alert for {event.symbol} "
+        f"({event.indicator_name}, confidence={event.confidence_score}%)"
+    )
     await notifier.notify_all(msg)
+
 
 
 # ═══════════════════════════════════════════════════════════════

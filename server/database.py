@@ -104,6 +104,27 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_sid ON auth_sessions(session_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_tg  ON auth_sessions(telegram_id);
+
+CREATE TABLE IF NOT EXISTS indicator_signals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id        INTEGER NOT NULL REFERENCES signals(id),
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    symbol           TEXT    NOT NULL,
+    indicator_name   TEXT    NOT NULL,
+    signal_type      TEXT    NOT NULL DEFAULT 'info',
+    interval         TEXT,
+    price            REAL,
+    confidence_score INTEGER DEFAULT 0,
+    conditions_met   TEXT,
+    metadata         TEXT,
+    source_ip        TEXT,
+    exchange         TEXT    DEFAULT 'binance'
+);
+
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_symbol ON indicator_signals(symbol);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_name   ON indicator_signals(indicator_name);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_type   ON indicator_signals(signal_type);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(created_at);
 """
 
 
@@ -132,6 +153,19 @@ async def init_db():
             except Exception:
                 pass  # Column already exists
 
+        # v6.1: Extend indicator_signals table (backward-compatible, REQ 7.1)
+        for col_def in [
+            "ALTER TABLE indicator_signals ADD COLUMN interval TEXT",
+            "ALTER TABLE indicator_signals ADD COLUMN price REAL",
+            "ALTER TABLE indicator_signals ADD COLUMN source_ip TEXT",
+            "ALTER TABLE indicator_signals ADD COLUMN exchange TEXT DEFAULT 'binance'",
+        ]:
+            try:
+                await db.execute(col_def)
+                await db.commit()
+            except Exception:
+                pass  # Column already exists
+
     log.info(f"Database initialized: {config.DB_PATH}")
 
 
@@ -146,6 +180,7 @@ async def init_db():
 from data.persistence_store import (  # noqa: E402, F401
     insert_signal,
     update_signal_status,
+    insert_indicator_signal,
     insert_trade,
     update_trade_oco,
     insert_brief,
