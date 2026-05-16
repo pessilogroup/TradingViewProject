@@ -3,7 +3,10 @@ param (
     [string]$Action = "buy",
     [string]$Symbol = "BTCUSDT",
     [string]$Price = "65000.00",
-    [string]$Interval = "60"
+    [string]$Interval = "60",
+    [string]$Indicator = "",
+    [string]$Strategy = "",
+    [string]$Message = ""
 )
 
 # Đọc Secret từ file .env (nếu có), hoặc dùng mặc định
@@ -32,7 +35,19 @@ $Payload = @{
     quoteQty = 50
     interval = $Interval
     time     = $CurrentTime
-} | ConvertTo-Json
+}
+
+if ($Indicator) {
+    $Payload["indicator"] = $Indicator
+}
+if ($Strategy) {
+    $Payload["strategy"] = $Strategy
+}
+if ($Message) {
+    $Payload["message"] = $Message
+}
+
+$Payload = $Payload | ConvertTo-Json
 
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "Gửi tín hiệu Webhook giả lập TradingView..." -ForegroundColor Cyan

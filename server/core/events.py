@@ -53,6 +53,24 @@ class SignalReceived(Event):
 
 
 @dataclass(frozen=True)
+class IndicatorSignalEvent(Event):
+    """Emitted by WebhookGateway specifically for indicator-based signals."""
+    signal_id: int = 0
+    symbol: str = ""
+    action: str = ""
+    price: Optional[float] = None
+    quote_qty: float = 10.0
+    interval: str = ""
+    sl: str = ""
+    tp: str = ""
+    indicator: str = ""
+    strategy: str = ""
+    message: str = ""
+    exchange: str = "binance"
+    payload: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
 class SignalValidated(Event):
     """Emitted by SignalProcessor after dedup + timeframe validation passes."""
     signal_id: int = 0

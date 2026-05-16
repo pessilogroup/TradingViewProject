@@ -29,7 +29,7 @@ import config
 import database
 
 from core.event_bus import bus as _event_bus
-from core.events import SignalReceived
+from core.events import SignalReceived, IndicatorSignalEvent
 
 log = logging.getLogger(__name__)
 
@@ -154,18 +154,39 @@ async def webhook(request: Request):
     # action, config, và fallback đều được đẩy xuống downstream.
     # ══════════════════════════════════════════════════════════════════════
 
-    await _event_bus.emit_background(SignalReceived(
-        signal_id=signal_id,
-        symbol=symbol,
-        action=action,
-        price=price_float,
-        quote_qty=quote_qty_val,
-        interval=interval,
-        sl=sl_str,
-        tp=tp_str,
-        source_ip=source_ip,
-        payload=payload,
-        exchange=payload.get("exchange", config.DEFAULT_EXCHANGE),
-    ))
+    indicator = tv_alert.indicator or ""
+    strategy = tv_alert.strategy or ""
+    message = tv_alert.message or ""
+
+    if indicator or strategy:
+        await _event_bus.emit_background(IndicatorSignalEvent(
+            signal_id=signal_id,
+            symbol=symbol,
+            action=action,
+            price=price_float,
+            quote_qty=quote_qty_val,
+            interval=interval,
+            sl=sl_str,
+            tp=tp_str,
+            indicator=indicator,
+            strategy=strategy,
+            message=message,
+            exchange=payload.get("exchange", config.DEFAULT_EXCHANGE),
+            payload=payload,
+        ))
+    else:
+        await _event_bus.emit_background(SignalReceived(
+            signal_id=signal_id,
+            symbol=symbol,
+            action=action,
+            price=price_float,
+            quote_qty=quote_qty_val,
+            interval=interval,
+            sl=sl_str,
+            tp=tp_str,
+            source_ip=source_ip,
+            payload=payload,
+            exchange=payload.get("exchange", config.DEFAULT_EXCHANGE),
+        ))
 
     return {"received": True, "signal_id": signal_id, "status": "dispatched"}

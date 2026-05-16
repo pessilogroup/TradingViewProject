@@ -73,7 +73,23 @@ Ví dụ Payload chuẩn:
   "time": "{{timenow}}"
 }
 ```
-*Lưu ý: Nếu không gửi `quoteQty`, bot sẽ mặc định đánh khối lượng 10 USDT.*
+
+Ví dụ Payload cho Indicator Signal (được phân tích bởi AI & SEPA Rules):
+```json
+{
+  "secret": "your_super_secret_key",
+  "action": "buy",
+  "symbol": "BTCUSDT",
+  "indicator": "RSI",
+  "strategy": "Oversold",
+  "message": "RSI fell below 30",
+  "price": "{{close}}",
+  "interval": "{{interval}}"
+}
+```
+*Lưu ý:*
+*   Nếu không gửi `quoteQty`, bot sẽ mặc định đánh khối lượng 10 USDT.
+*   Trường hợp có `indicator` và `strategy`, bot sẽ áp dụng luật Risk Management động theo file `server/data/sepa_rules.json` (tự động quyết định cần AI Confirmation hay khớp lệnh ngay).
 
 Workflow trên TradingView:
 1. Thêm Indicator/Strategy vào biểu đồ.

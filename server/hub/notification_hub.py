@@ -34,6 +34,7 @@ from core.events import (
     TradeFailed,
     PositionClosed,
     TradeApprovalTimeout,
+    IndicatorSignalEvent,
 )
 
 log = logging.getLogger(__name__)
@@ -109,6 +110,40 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
         )
 
     log.info(f"NotificationHub: Rejected signal #{event.signal_id} on {getattr(event, 'exchange', 'binance')} — {event.reason}")
+    await notifier.notify_all(msg)
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: IndicatorSignalEvent → Rich Telegram Notification
+# ═══════════════════════════════════════════════════════════════
+
+@_default_bus.on(IndicatorSignalEvent)
+async def notify_indicator_signal(event: IndicatorSignalEvent) -> None:
+    """
+    Format and send a rich Telegram notification specifically tailored for indicator alerts.
+    """
+    exchange = getattr(event, 'exchange', 'binance')
+    
+    msg = (
+        f"📊 **Chỉ Báo Kỹ Thuật (Indicator Alert)**\n"
+        f"- Sàn: `{exchange.upper()}`\n"
+        f"- Mã: `{event.symbol}`\n"
+        f"- Hành động: `{event.action.upper()}`\n"
+        f"- Giá: `{event.price or 'N/A'}`\n"
+        f"- Vốn (Quote Qty): `{getattr(event, 'quote_qty', 10.0)}`\n"
+        f"- Khung TG: `{event.interval}`\n"
+        f"- Chỉ báo: `{event.indicator}`\n"
+    )
+    if getattr(event, 'sl', ""):
+        msg += f"- Cắt lỗ (SL): `{event.sl}`\n"
+    if getattr(event, 'tp', ""):
+        msg += f"- Chốt lời (TP): `{event.tp}`\n"
+    if getattr(event, 'strategy', ""):
+        msg += f"- Chiến lược: `{event.strategy}`\n"
+    if getattr(event, 'message', ""):
+        msg += f"\n📝 **Chi tiết:**\n{event.message}"
+        
+    log.info(f"NotificationHub: Indicator Alert for {event.symbol} ({event.indicator})")
     await notifier.notify_all(msg)
 
 
