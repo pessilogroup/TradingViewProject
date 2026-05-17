@@ -133,6 +133,41 @@ async def test_webhook_unauthorized_wrong_secret():
 
 
 @pytest.mark.asyncio
+async def test_indicator_webhook_missing_name_no_db_insert():
+    """Invalid indicator payload must return 400 without persisting a signal row."""
+    from gateway.webhook import webhook, _WEBHOOK_RATE_LIMITS
+    from fastapi import HTTPException
+    _WEBHOOK_RATE_LIMITS.clear()
+
+    with patch("gateway.webhook.config") as mock_config, \
+         patch("gateway.webhook._event_bus") as mock_bus:
+
+        mock_config.WEBHOOK_SECRET = "test-secret"
+        mock_config.DASHBOARD_TOKEN = ""
+        mock_config.MAX_QUOTE_QTY = 1000.0
+        mock_config.DEFAULT_EXCHANGE = "binance"
+        mock_bus.emit_background = AsyncMock()
+
+        import database as _db_module
+        with patch.object(_db_module, "insert_signal", new_callable=AsyncMock) as mock_db:
+            req = _make_request(
+                payload={
+                    "secret": "test-secret",
+                    "source": "indicator",
+                    "symbol": "BTCUSDT",
+                    "signal_type": "entry",
+                    "confidence_score": 80,
+                }
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await webhook(req)
+
+            assert exc_info.value.status_code == 400
+            assert "indicator_name" in exc_info.value.detail
+            mock_db.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_webhook_empty_payload_after_secret_stripped():
     """Payload that becomes empty after secret is stripped should return 400."""
     from gateway.webhook import webhook, _WEBHOOK_RATE_LIMITS

@@ -133,6 +133,19 @@ async def webhook(request: Request):
     except (ValueError, TypeError):
         quote_qty_val = 10.0
 
+    source = payload.get("source", "")
+    indicator_name = payload.get("indicator_name", "") or payload.get("indicator", "") or ""
+    is_indicator = source == "indicator" or (
+        indicator_name and action not in {"buy", "sell", "alert"}
+    )
+
+    # Guard before DB write (Prop 4): invalid indicator payloads must not persist
+    if is_indicator:
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Missing required field: symbol")
+        if not indicator_name:
+            raise HTTPException(status_code=400, detail="Missing required field: indicator_name")
+
     # Luu signal vao database
     signal_id = await database.insert_signal(
         symbol=symbol,
@@ -154,10 +167,7 @@ async def webhook(request: Request):
     # action, config, và fallback đều được đẩy xuống downstream.
     # ══════════════════════════════════════════════════════════════════════
 
-    source = payload.get("source", "")
-    indicator_name = payload.get("indicator_name", "")
-
-    if source == "indicator" or (indicator_name and action not in {"buy", "sell", "alert"}):
+    if is_indicator:
         signal_type = payload.get("signal_type", "info")
         
         try:
@@ -174,12 +184,6 @@ async def webhook(request: Request):
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {}
-
-        # Guard: required fields (REQ 2.2, Prop 4 — DI-3: misclassification has no recovery)
-        if not symbol:
-            raise HTTPException(status_code=400, detail="Missing required field: symbol")
-        if not indicator_name:
-            raise HTTPException(status_code=400, detail="Missing required field: indicator_name")
 
         # Persistence is handled by data.indicator_persistence (DI-1: parallel listener)
         await _event_bus.emit_background(IndicatorSignalReceived(

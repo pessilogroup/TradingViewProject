@@ -453,6 +453,129 @@ async def get_latest_brief_endpoint():
     return {"available": True, **brief}
 
 
+# ═══ INDICATOR SIGNALS API ═══════════════════════════════════
+@app.get("/api/indicator-signals")
+async def get_indicator_signals(
+    symbol: Optional[str]         = Query(None, description="Filter by symbol, e.g. BTCUSDT"),
+    signal_type: Optional[str]    = Query(None, description="Filter by type: entry|exit|info"),
+    indicator_name: Optional[str] = Query(None, description="Filter by indicator name"),
+    limit: int                    = Query(50, ge=1, le=200),
+    offset: int                   = Query(0, ge=0),
+):
+    """Fetch indicator signals with optional filters for the Signals dashboard tab."""
+    conditions: list[str] = []
+    params: list = []
+
+    if symbol:
+        conditions.append("symbol = ?")
+        params.append(symbol.upper())
+    if signal_type:
+        conditions.append("signal_type = ?")
+        params.append(signal_type.lower())
+    if indicator_name:
+        conditions.append("indicator_name LIKE ?")
+        params.append(f"%{indicator_name}%")
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params_tuple = tuple(params)
+
+    import aiosqlite
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Total count
+        count_row = await db.execute_fetchall(
+            f"SELECT COUNT(*) AS cnt FROM indicator_signals {where_clause}",
+            params_tuple,
+        )
+        total = count_row[0]["cnt"] if count_row else 0
+
+        # Paginated rows
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT id, signal_id, created_at, symbol, indicator_name,
+                   signal_type, interval, price, confidence_score,
+                   conditions_met, metadata, source_ip, exchange
+            FROM indicator_signals
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params_tuple + (limit, offset),
+        )
+
+    import json as _json
+    signals = []
+    for r in rows:
+        try:
+            conditions_list = _json.loads(r["conditions_met"]) if r["conditions_met"] else []
+        except Exception:
+            conditions_list = [r["conditions_met"]] if r["conditions_met"] else []
+        try:
+            meta = _json.loads(r["metadata"]) if r["metadata"] else {}
+        except Exception:
+            meta = {}
+
+        signals.append({
+            "id":               r["id"],
+            "signal_id":        r["signal_id"],
+            "created_at":       r["created_at"],
+            "symbol":           r["symbol"],
+            "indicator_name":   r["indicator_name"],
+            "signal_type":      r["signal_type"],
+            "interval":         r["interval"] or "—",
+            "price":            r["price"],
+            "confidence_score": r["confidence_score"] or 0,
+            "conditions_met":   conditions_list,
+            "metadata":         meta,
+            "source_ip":        r["source_ip"] or "—",
+            "exchange":         r["exchange"] or "binance",
+        })
+
+    return {"total": total, "limit": limit, "offset": offset, "signals": signals}
+
+
+@app.get("/api/indicator-signals/stats")
+async def get_indicator_signals_stats():
+    """KPI stats for the Signals dashboard: total, by type, avg confidence, top indicators."""
+    import aiosqlite
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        totals = await db.execute_fetchall(
+            "SELECT signal_type, COUNT(*) AS cnt, AVG(confidence_score) AS avg_conf "
+            "FROM indicator_signals GROUP BY signal_type"
+        )
+        top_indicators = await db.execute_fetchall(
+            "SELECT indicator_name, COUNT(*) AS cnt "
+            "FROM indicator_signals GROUP BY indicator_name ORDER BY cnt DESC LIMIT 5"
+        )
+        recent_high = await db.execute_fetchall(
+            "SELECT COUNT(*) AS cnt FROM indicator_signals "
+            "WHERE confidence_score > 80 AND created_at >= datetime('now', '-24 hours')"
+        )
+        top_symbols = await db.execute_fetchall(
+            "SELECT symbol, COUNT(*) AS cnt FROM indicator_signals "
+            "GROUP BY symbol ORDER BY cnt DESC LIMIT 6"
+        )
+
+    by_type = {r["signal_type"]: {"count": r["cnt"], "avg_conf": round(r["avg_conf"] or 0, 1)}
+               for r in totals}
+    total_all = sum(v["count"] for v in by_type.values())
+    overall_conf = round(
+        sum(v["avg_conf"] * v["count"] for v in by_type.values()) / max(total_all, 1), 1
+    )
+
+    return {
+        "total":           total_all,
+        "by_type":         by_type,
+        "avg_confidence":  overall_conf,
+        "high_priority_24h": recent_high[0]["cnt"] if recent_high else 0,
+        "top_indicators":  [{"name": r["indicator_name"], "count": r["cnt"]} for r in top_indicators],
+        "top_symbols":     [{"symbol": r["symbol"], "count": r["cnt"]} for r in top_symbols],
+    }
+
+
 # ═══ RAG TEST ENDPOINT ════════════════════════════════════════
 @app.get("/api/rag/query")
 async def rag_query_endpoint(
