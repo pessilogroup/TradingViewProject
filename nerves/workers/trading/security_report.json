@@ -1,0 +1,46 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-15T03:55:22.836088+00:00",
+  "target": "C:\\Users\\pesil\\working\\mj_trading\\TradingViewProject\\server",
+  "total_files_scanned": 45,
+  "summary": {
+    "total_findings": 2,
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "info": 0,
+    "scanners_used": [
+      "tvp-trading-rules"
+    ]
+  },
+  "findings": [
+    {
+      "rule_id": "TVP-004",
+      "title": "No global rate limiting on API endpoints",
+      "severity": "medium",
+      "file": "C:\\Users\\pesil\\working\\mj_trading\\TradingViewProject\\server\\main.py",
+      "line": 196,
+      "description": "Found 27 FastAPI routes in main.py with no global rate-limit middleware (slowapi / shared limiter). A client could flood authenticated or expensive routes. POST /webhook is rate-limited in gateway/webhook.py (per-IP); remaining routes in main.py may still be unbounded.",
+      "evidence": "Endpoints: GET /health, GET /dashboard, GET /, GET /tv_health_check, GET /api/mcp/status",
+      "confidence": 0.95,
+      "remediation": "Add app-wide or per-route rate limits (e.g. slowapi). Keep webhook-specific limits in gateway/webhook.py.",
+      "cwe": "CWE-770",
+      "scanner": "tvp-trading-rules"
+    },
+    {
+      "rule_id": "TVP-006",
+      "title": "DRY_RUN mode overridable via environment variable",
+      "severity": "low",
+      "file": "C:\\Users\\pesil\\working\\mj_trading\\TradingViewProject\\server\\config.py",
+      "line": 25,
+      "description": "BINANCE_DRY_RUN is loaded from environment at startup. If .env file is writable or env can be injected, an attacker could disable dry-run mode and execute real trades.",
+      "evidence": "BINANCE_DRY_RUN    = os.getenv(\"BINANCE_DRY_RUN\", \"true\").lower() == \"true\"",
+      "confidence": 0.5,
+      "remediation": "Add runtime validation: if production, force DRY_RUN=true unless explicit unlock.",
+      "cwe": "CWE-1188",
+      "scanner": "tvp-trading-rules"
+    }
+  ],
+  "probe_results": []
+}

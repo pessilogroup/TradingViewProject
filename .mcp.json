@@ -1,8 +1,18 @@
-﻿{
+{
   "mcpServers": {
     "tradingview": {
       "command": "node",
       "args": ["tradingview-mcp/src/server.js"]
+    },
+    "angati": {
+      "command": "c:\\Users\\pesil\\working\\mj_trading\\TradingViewProject\\angati.exe",
+      "args": [
+        "mcp"
+      ],
+      "disabled": false,
+      "env": {
+        "ANGATI_AGENTS_ROOT": "c:\\Users\\pesil\\working\\mj_trading\\TradingViewProject"
+      }
     }
   }
 }
