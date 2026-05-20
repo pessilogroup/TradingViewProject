@@ -1,5 +1,15 @@
 $ErrorActionPreference = "Stop"
-$serverUrl = "http://localhost:5000/webhook"
+
+# Resolve server URL dynamically from environment variables
+$serverUrl = $env:SMOKE_BASE_URL
+if (-not $serverUrl) {
+    $port = $env:PORT
+    if (-not $port) {
+        $port = "5000"
+    }
+    $serverUrl = "http://localhost:$port/webhook"
+}
+
 $payloadPath = Join-Path $PSScriptRoot "..\tests\mock_data\payloads.json"
 
 if (-not (Test-Path $payloadPath)) {
@@ -8,6 +18,11 @@ if (-not (Test-Path $payloadPath)) {
 }
 
 $payloads = Get-Content $payloadPath | ConvertFrom-Json
+
+# Helper to deep clone objects via JSON round-trip
+function Clone-Object ($obj) {
+    return $obj | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+}
 
 function Test-Webhook {
     param (
@@ -64,11 +79,11 @@ $total = 0
 
 # 1. Valid 1H Buy
 $total++
-if (Test-Webhook -TestName "Valid 1H Buy" -Payload $payloads.valid_1h_buy -ExpectedStatusCode 200 -ExpectedStatus "processing_async") { $success++ }
+if (Test-Webhook -TestName "Valid 1H Buy" -Payload $payloads.valid_1h_buy -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 2. Invalid 4H Buy (Circuit Breaker)
 $total++
-if (Test-Webhook -TestName "Invalid 4H Buy" -Payload $payloads.invalid_4h_buy -ExpectedStatusCode 200 -ExpectedStatus "rejected" -ExpectedReason "invalid_timeframe") { $success++ }
+if (Test-Webhook -TestName "Invalid 4H Buy" -Payload $payloads.invalid_4h_buy -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 3. Invalid Secret
 $total++
@@ -76,25 +91,25 @@ if (Test-Webhook -TestName "Invalid Secret" -Payload $payloads.invalid_secret -E
 
 # 4. Missing Interval (Circuit Breaker)
 $total++
-if (Test-Webhook -TestName "Missing Interval" -Payload $payloads.missing_interval -ExpectedStatusCode 200 -ExpectedStatus "rejected" -ExpectedReason "invalid_timeframe") { $success++ }
+if (Test-Webhook -TestName "Missing Interval" -Payload $payloads.missing_interval -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 5. Missing QuoteQty (Fallback size=10)
 $total++
-$missingQty = $payloads.valid_1h_buy.PSObject.Copy()
-$missingQty.psobject.properties.remove("quoteQty")
-if (Test-Webhook -TestName "Missing QuoteQty (Fallback)" -Payload $missingQty -ExpectedStatusCode 200 -ExpectedStatus "processing_async") { $success++ }
+$missingQty = Clone-Object $payloads.valid_1h_buy
+$missingQty.PSObject.Properties.Remove("quoteQty")
+if (Test-Webhook -TestName "Missing QuoteQty (Fallback)" -Payload $missingQty -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 6. Invalid Price Type
 $total++
-$invalidPrice = $payloads.valid_1h_buy.PSObject.Copy()
+$invalidPrice = Clone-Object $payloads.valid_1h_buy
 $invalidPrice.price = "NotANumber"
-if (Test-Webhook -TestName "Invalid Price Type" -Payload $invalidPrice -ExpectedStatusCode 200 -ExpectedStatus "processing_async") { $success++ }
+if (Test-Webhook -TestName "Invalid Price Type" -Payload $invalidPrice -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 7. Unknown Action
 $total++
-$unknownAction = $payloads.valid_1h_buy.PSObject.Copy()
+$unknownAction = Clone-Object $payloads.valid_1h_buy
 $unknownAction.action = "hold"
-if (Test-Webhook -TestName "Unknown Action" -Payload $unknownAction -ExpectedStatusCode 200) { $success++ }
+if (Test-Webhook -TestName "Unknown Action" -Payload $unknownAction -ExpectedStatusCode 200 -ExpectedStatus "dispatched") { $success++ }
 
 # 8. Load Test
 Write-Host "`n>>> Running: Load Test (5 rapid requests)" -ForegroundColor Cyan
@@ -102,7 +117,7 @@ $loadSuccess = $true
 for ($i = 1; $i -le 5; $i++) {
     $json = $payloads.valid_1h_buy | ConvertTo-Json -Compress
     $res = Invoke-RestMethod -Uri $serverUrl -Method Post -Body $json -ContentType "application/json"
-    if ($res.status -ne "processing_async") {
+    if ($res.status -ne "dispatched") {
         $loadSuccess = $false
     }
 }

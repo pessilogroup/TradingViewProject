@@ -17,7 +17,7 @@ import config
 logger = logging.getLogger(__name__)
 
 # Path to MCP CLI
-_MCP_DIR = Path(__file__).parent.parent / "tradingview-mcp"
+_MCP_DIR = Path(__file__).parent.parent.parent.parent / "tradingview-mcp"
 _MCP_CLI = _MCP_DIR / "src" / "cli" / "index.js"
 
 

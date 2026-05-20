@@ -26,3 +26,33 @@ Extend `test_angati_integration.py` or add a unit test to verify that the versio
 ### Test Coverage
 - [ ] Test suite executes successfully with `python -m unittest` or the integration runner.
 - [ ] The test confirms that a mismatched version triggers the stderr warning.
+
+## 2026-05-21T05:09:33+07:00
+
+The goal of this project is to perform a comprehensive stability and safety evaluation of the TradingView Edge Node ecosystem, verifying runtime reliability, CDP browser automation connectivity, and Telegram notifications under stress and failure states.
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+
+## Requirements
+
+### R1. Webhook Edge Node Stability Verification
+- Validate the FastAPI Edge Node webhook under high concurrency and boundary inputs (invalid price, format, token).
+- Check that circuit breakers successfully isolate non-1H signals.
+
+### R2. TradingView CDP & Browser Integration Audit
+- Verify the connection to the TradingView Desktop app via Chrome DevTools Protocol (CDP) on port 9222.
+- Perform sanity tests to check that indicator alerts and chart interfaces load correctly.
+
+### R3. Telegram Notification & Interactive Hub Verification
+- Audit the Telegram Bot service, ensuring message dispatch and interactive trade approvals return correctly structured message coordinates.
+- Ensure no silent return type mismatches between components.
+
+## Acceptance Criteria
+
+### Security & Error Handling
+- [ ] No unauthorized payloads bypass the webhook gate.
+- [ ] Webhook rate limits (15 req/min) trigger HTTP 429 successfully and recover automatically.
+
+### System Interoperability
+- [ ] CDP debug connection returns valid version JSON from local TradingView desktop app.
+- [ ] Interactive approval callbacks map accurately to their respective active signal trackers without silent failures.

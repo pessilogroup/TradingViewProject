@@ -447,3 +447,136 @@ async def test_invalid_sl_tp_gracefully_becomes_none():
     finally:
         from core.event_bus import bus as default_bus
         set_bus(default_bus)
+
+
+@pytest.mark.asyncio
+async def test_invalid_entry_price_fails_trade_gracefully():
+    """If entry price is <= 0.0 or non-numeric, TradeEngine must fail the trade and emit TradeFailed."""
+    from engine.trade_engine import execute_trade, set_bus
+    from core.events import TradeFailed
+
+    test_bus = EventBus()
+    set_bus(test_bus)
+    failed_events = []
+
+    @test_bus.on(TradeFailed)
+    async def on_fail(event):
+        failed_events.append(event)
+
+    adapter = _make_adapter()
+
+    try:
+        with patch("exchanges.router.get_router") as mock_get_router, \
+             patch("engine.trade_engine.database") as mock_db:
+
+            mock_router = MagicMock()
+            mock_router.resolve_exchange.return_value = adapter
+            mock_get_router.return_value = mock_router
+
+            mock_db.insert_trade = AsyncMock(return_value=19)
+            mock_db.update_signal_status = AsyncMock()
+
+            # Test zero price
+            await execute_trade(_make_event(price=0.0, signal_id=200))
+            assert len(failed_events) == 1
+            assert failed_events[0].signal_id == 200
+            assert "Invalid entry price" in failed_events[0].error
+
+            # Test negative price
+            await execute_trade(_make_event(price=-100.0, signal_id=201))
+            assert len(failed_events) == 2
+            assert failed_events[1].signal_id == 201
+            assert "Invalid entry price" in failed_events[1].error
+
+            # Test non-numeric price
+            await execute_trade(_make_event(price="NotANumber", signal_id=202))
+            assert len(failed_events) == 3
+            assert failed_events[2].signal_id == 202
+            assert "Invalid entry price" in failed_events[2].error
+    finally:
+        from core.event_bus import bus as default_bus
+        set_bus(default_bus)
+
+
+@pytest.mark.asyncio
+async def test_negative_sl_tp_clamped_to_none():
+    """Negative or zero SL/TP values must be clamped to None to avoid downstream issues."""
+    from engine.trade_engine import execute_trade, set_bus
+
+    test_bus = EventBus()
+    set_bus(test_bus)
+
+    adapter = _make_adapter()
+    captured_args = {}
+
+    async def capture_execute(**kwargs):
+        captured_args.update(kwargs)
+        return MockOrderResult()
+
+    adapter.execute_smart_order = capture_execute
+
+    try:
+        with patch("exchanges.router.get_router") as mock_get_router, \
+             patch("engine.trade_engine.database") as mock_db:
+
+            mock_router = MagicMock()
+            mock_router.resolve_exchange.return_value = adapter
+            mock_get_router.return_value = mock_router
+
+            mock_db.insert_trade = AsyncMock(return_value=20)
+            mock_db.update_trade_oco = AsyncMock()
+            mock_db.update_signal_status = AsyncMock()
+
+            await execute_trade(_make_event(sl="-10.0", tp="0.0", price=100.0, signal_id=210))
+
+            assert captured_args["sl_price"] is None
+            assert captured_args["tp_price"] is None
+    finally:
+        from core.event_bus import bus as default_bus
+        set_bus(default_bus)
+
+
+@pytest.mark.asyncio
+async def test_negative_or_zero_qty_clamped_to_none():
+    """Negative or zero quote quantities must be sanitized to None (so exchange uses defaults)."""
+    from engine.trade_engine import execute_trade, set_bus
+
+    test_bus = EventBus()
+    set_bus(test_bus)
+
+    adapter = _make_adapter()
+    captured_args = {}
+
+    async def capture_execute(**kwargs):
+        captured_args.update(kwargs)
+        return MockOrderResult()
+
+    adapter.execute_smart_order = capture_execute
+
+    try:
+        with patch("exchanges.router.get_router") as mock_get_router, \
+             patch("engine.trade_engine.database") as mock_db:
+
+            mock_router = MagicMock()
+            mock_router.resolve_exchange.return_value = adapter
+            mock_get_router.return_value = mock_router
+
+            mock_db.insert_trade = AsyncMock(return_value=21)
+            mock_db.update_trade_oco = AsyncMock()
+            mock_db.update_signal_status = AsyncMock()
+
+            # Test negative qty
+            await execute_trade(_make_event(quote_qty=-5.0, price=100.0, signal_id=220))
+            assert captured_args["quote_qty"] is None
+
+            # Test zero qty
+            await execute_trade(_make_event(quote_qty=0.0, price=100.0, signal_id=221))
+            assert captured_args["quote_qty"] is None
+
+            # Test non-numeric qty
+            await execute_trade(_make_event(quote_qty="InvalidQty", price=100.0, signal_id=222))
+            assert captured_args["quote_qty"] is None
+    finally:
+        from core.event_bus import bus as default_bus
+        set_bus(default_bus)
+

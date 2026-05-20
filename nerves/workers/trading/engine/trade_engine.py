@@ -68,11 +68,15 @@ async def execute_trade(event: TradeApproved) -> None:
 
     try:
         sl_price = float(str(event.sl).replace(',', '')) if event.sl else None
+        if sl_price is not None and sl_price <= 0.0:
+            sl_price = None
     except (ValueError, TypeError):
         sl_price = None
 
     try:
         tp_price = float(str(event.tp).replace(',', '')) if event.tp else None
+        if tp_price is not None and tp_price <= 0.0:
+            tp_price = None
     except (ValueError, TypeError):
         tp_price = None
 
@@ -92,13 +96,31 @@ async def execute_trade(event: TradeApproved) -> None:
 
     combined_score: Optional[str] = getattr(event, 'combined_score', None)
 
+    # TVP-001 & TVP-002: Hardened validation
+    if entry_price <= 0.0:
+        error_msg = f"Invalid entry price: {entry_price} (from '{event.price}')"
+        log.error(f"TradeEngine: {error_msg}")
+        await _handle_failure(event, action, error_msg, requested_exchange, combined_score)
+        return
+
+    try:
+        quote_qty_val = float(event.quote_qty) if event.quote_qty else None
+        if quote_qty_val is not None:
+            if quote_qty_val <= 0.0:
+                quote_qty_val = None
+            else:
+                import config
+                quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
+    except (ValueError, TypeError):
+        quote_qty_val = None
+
     try:
         # ── Execute smart order (MARKET + OCO) ───────────────
         result = await adapter.execute_smart_order(
             symbol=event.symbol,
             side=action.upper(),
             entry_price=entry_price,
-            quote_qty=event.quote_qty if event.quote_qty else None,
+            quote_qty=quote_qty_val,
             sl_price=sl_price,
             tp_price=tp_price,
         )
@@ -124,7 +146,7 @@ async def execute_trade(event: TradeApproved) -> None:
                 side=action.upper(),
                 order_id=order_id,
                 status=order_status,
-                requested_qty=event.quote_qty,
+                requested_qty=quote_qty_val if quote_qty_val is not None else 10.0,
                 executed_qty=exec_qty,
                 executed_price=exec_price,
                 combined_score=combined_score,
@@ -188,7 +210,7 @@ async def execute_trade(event: TradeApproved) -> None:
                 exchange=actual_exchange,
                 executed_qty=exec_qty,
                 executed_price=exec_price,
-                quote_qty=event.quote_qty,
+                quote_qty=quote_qty_val if quote_qty_val is not None else 10.0,
                 stop_loss_price=result.risk.stop_loss_price if result.risk else None,
                 take_profit_price=result.risk.take_profit_price if result.risk else None,
                 oco_order_id=oco_id,
@@ -210,6 +232,8 @@ async def _handle_failure(event, action, error_msg, exchange, combined_score):
     """Handle trade execution failure: persist to DB and emit TradeFailed."""
     try:
         req_qty = float(event.quote_qty) if event.quote_qty else 0.0
+        if req_qty < 0.0:
+            req_qty = 0.0
     except (ValueError, TypeError):
         req_qty = 0.0
 
