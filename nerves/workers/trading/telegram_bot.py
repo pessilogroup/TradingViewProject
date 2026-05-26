@@ -24,12 +24,17 @@ import logging
 import asyncio
 import threading
 from datetime import datetime
+from dataclasses import dataclass
+from typing import Optional, List, Tuple, Dict
+
 
 log = logging.getLogger(__name__)
 
 # Lazy imports — only load if bot is enabled
 _bot_app = None
 _bot_thread = None
+running_tasks = set()
+
 
 
 def _get_imports():
@@ -134,6 +139,9 @@ async def cmd_help(update, context):
         "/status — Server + MCP + Scheduler status\n"
         "/brief — Chạy Morning Brief ngay\n"
         "/scan — Scan watchlist (TT + VCP)\n"
+        "/scan_all — Scan toàn bộ sàn trong background (USDT pairs)\n"
+        "/scan_mtf <code>SYMBOL</code> — Phân tích đa khung thời gian (1D -> 4H -> 1H) & Duyệt lệnh\n"
+        "/recommend — Gợi ý cơ hội giao dịch đa khung từ Watchlist\n"
         "/vision <code>SYMBOL</code> — 👁️ AI Vision phân tích chart\n"
         "/grade — 👨‍🏫 AI Mentor chấm điểm trade (Bar Replay)\n"
         "/watchlist — Xem danh sách symbols\n"
@@ -150,8 +158,8 @@ async def cmd_status(update, context):
     import config
 
     lines = [
-        "🔧 <b>System Status</b>\n",
-        f"⏰ Server time: <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
+        "🔧 **System Status**\n",
+        f"⏰ Server time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
         f"🌐 Server: FastAPI v7.0 on :{config.PORT}",
     ]
 
@@ -190,7 +198,7 @@ async def cmd_status(update, context):
 
     # ── REQ10 AC2+3: Per-exchange health block ────────────────────────────
     lines.append("")
-    lines.append("🏦 <b>Exchange Health</b>")
+    lines.append("🏦 **Exchange Health**")
     try:
         exchange_health = await _exchange_facade.get_exchange_health()
         if exchange_health:
@@ -203,22 +211,22 @@ async def cmd_status(update, context):
                 latency_str = f" | {eh.latency_ms:.0f}ms" if eh.latency_ms is not None else ""
                 mode_label = "/".join(mode_parts)
                 lines.append(
-                    f"  {status_icon} <code>{eh.exchange.upper()}</code> [{mode_label}]{latency_str}"
+                    f"- {status_icon} `{eh.exchange.upper()}` [{mode_label}]{latency_str}"
                 )
         else:
-            lines.append("  ⚠️ No exchanges registered")
+            lines.append("- ⚠️ No exchanges registered")
     except Exception as e:
-        lines.append(f"  ⚠️ Exchange health check failed: {e}")
+        lines.append(f"- ⚠️ Exchange health check failed: {e}")
 
     # ── P8 background task status ─────────────────────────────────────────
     lines.append("")
-    lines.append("⚙️ <b>P8 Background Tasks</b>")
+    lines.append("⚙️ **P8 Background Tasks**")
     pm_status = "✅ Running" if _position_monitor and _position_monitor._running else "❌ Stopped"
     tm_status = "✅ Running" if _approval_timeout_mgr and _approval_timeout_mgr._running else "❌ Stopped"
-    lines.append(f"  📡 PositionMonitor: {pm_status}")
-    lines.append(f"  ⏱️ ApprovalTimeout: {tm_status}")
+    lines.append(f"- 📡 PositionMonitor: {pm_status}")
+    lines.append(f"- ⏱️ ApprovalTimeout: {tm_status}")
     report_sched = "✅ Active" if config.REPORT_AUTO_SEND else "❌ Off"
-    lines.append(f"  📊 ReportScheduler: {report_sched} ({config.REPORT_SEND_TIME} ICT)")
+    lines.append(f"- 📊 ReportScheduler: {report_sched} ({config.REPORT_SEND_TIME} ICT)")
 
     from notifier import sanitize_for_telegram_html
     html_text = sanitize_for_telegram_html("\n".join(lines))
@@ -597,6 +605,7 @@ async def handle_menu_text(update, context):
 
 async def cmd_positions(update, context):
     """REQ3: /positions [EXCHANGE] — show open positions with unrealized P&L."""
+    from notifier import sanitize_for_telegram_html
     exchange_id = context.args[0].lower() if context.args else None
     await update.message.reply_text("📡 Đang tải vị thế mở...")
 
@@ -605,22 +614,21 @@ async def cmd_positions(update, context):
     if not positions:
         label = exchange_id.upper() if exchange_id else "tất cả sàn"
         await update.message.reply_text(
-            f"📭 Không có vị thế mở nào trên <b>{label}</b>.",
+            sanitize_for_telegram_html(f"📭 Không có vị thế mở nào trên **{label}**."),
             parse_mode="HTML",
         )
         return
 
-    lines = [f"📊 <b>Vị Thế Mở</b> ({len(positions)})\n"]
+    lines = [f"📊 **Vị Thế Mở** ({len(positions)})\n"]
     for p in positions:
         pnl_emoji = "🟢" if p.unrealized_pnl >= 0 else "🔴"
         lines.append(
-            f"{pnl_emoji} <code>{p.symbol}</code> [{p.exchange.upper()}]\n"
-            f"   Chiều: <b>{p.side.upper()}</b> | Qty: <code>{p.quantity:,.4f}</code>\n"
-            f"   Vào: <code>{p.entry_price:,.4f}</code> → Hiện: <code>{p.current_price:,.4f}</code>\n"
-            f"   P&L: <code>${p.unrealized_pnl:+,.2f}</code> ({p.unrealized_pnl_pct:+.2f}%)"
+            f"{pnl_emoji} `{p.symbol}` [{p.exchange.upper()}]\n"
+            f"   Chiều: **{p.side.upper()}** | Qty: `{p.quantity:,.4f}`\n"
+            f"   Vào: `{p.entry_price:,.4f}` → Hiện: `{p.current_price:,.4f}`\n"
+            f"   P&L: `${p.unrealized_pnl:+,.2f}` (`{p.unrealized_pnl_pct:+.2f}%`)"
         )
 
-    from notifier import sanitize_for_telegram_html
     await update.message.reply_text(
         sanitize_for_telegram_html("\n".join(lines)), parse_mode="HTML"
     )
@@ -674,15 +682,15 @@ async def cmd_trades(update, context):
         await update.message.reply_text("📭 Chưa có lịch sử giao dịch nào.")
         return
 
-    lines = [f"📋 <b>Lịch Sử Giao Dịch</b> (last {len(trades)})\n"]
+    lines = [f"📋 **Lịch Sử Giao Dịch** (last {len(trades)})\n"]
     for t in trades:
         pnl_emoji = "🟢" if (t.pnl or 0) > 0 else ("🔴" if (t.pnl or 0) < 0 else "⚪")
         pnl_str = f"${t.pnl:+,.2f}" if t.pnl is not None else "—"
         exit_str = f"{t.exit_price:,.4f}" if t.exit_price else "OPEN"
         lines.append(
-            f"{pnl_emoji} <code>{t.symbol}</code> {t.side.upper()} [{t.exchange.upper()}]\n"
-            f"   Vào: <code>{t.entry_price:,.4f}</code> → Ra: <code>{exit_str}</code> | P&L: <b>{pnl_str}</b>\n"
-            f"   <i>{t.created_at[:16]}</i>"
+            f"{pnl_emoji} `{t.symbol}` {t.side.upper()} [{t.exchange.upper()}]\n"
+            f"   Vào: `{t.entry_price:,.4f}` → Ra: `{exit_str}` | P&L: **{pnl_str}**\n"
+            f"   *{t.created_at[:16]}*"
         )
 
     from notifier import sanitize_for_telegram_html
@@ -693,27 +701,27 @@ async def cmd_trades(update, context):
 
 async def cmd_report(update, context):
     """REQ8: /report [YYYY-MM-DD] — daily performance summary."""
+    from notifier import sanitize_for_telegram_html
     date_arg = context.args[0] if context.args else None
     stats = await _data_facade.get_daily_stats(date_arg)
 
     if stats.total_trades == 0:
         await update.message.reply_text(
-            f"📭 Không có giao dịch nào vào ngày <b>{stats.date}</b>.",
+            sanitize_for_telegram_html(f"📭 Không có giao dịch nào vào ngày **{stats.date}**."),
             parse_mode="HTML",
         )
         return
 
     pnl_emoji = "🟢" if stats.total_pnl >= 0 else "🔴"
     text = (
-        f"📊 <b>Báo Cáo Ngày {stats.date}</b>\n\n"
-        f"📈 Tổng lệnh: <b>{stats.total_trades}</b>\n"
-        f"✅ Thắng: <b>{stats.winning_trades}</b> | ❌ Thua: <b>{stats.losing_trades}</b>\n"
-        f"🎯 Win Rate: <b>{stats.win_rate:.1f}%</b>\n"
-        f"{pnl_emoji} Tổng P&L: <b>${stats.total_pnl:+,.2f}</b>\n"
-        f"🏆 Lệnh tốt nhất: <code>${stats.best_trade:+,.2f}</code>\n"
-        f"💔 Lệnh tệ nhất: <code>${stats.worst_trade:+,.2f}</code>"
+        f"📊 **Báo Cáo Ngày {stats.date}**\n\n"
+        f"📈 Tổng lệnh: **{stats.total_trades}**\n"
+        f"✅ Thắng: **{stats.winning_trades}** | ❌ Thua: **{stats.losing_trades}**\n"
+        f"🎯 Win Rate: **{stats.win_rate:.1f}%**\n"
+        f"{pnl_emoji} Tổng P&L: **${stats.total_pnl:+,.2f}**\n"
+        f"🏆 Lệnh tốt nhất: `${stats.best_trade:+,.2f}`\n"
+        f"💔 Lệnh tệ nhất: `${stats.worst_trade:+,.2f}`"
     )
-    from notifier import sanitize_for_telegram_html
     await update.message.reply_text(sanitize_for_telegram_html(text), parse_mode="HTML")
 
 
@@ -740,13 +748,13 @@ async def cmd_balance_enhanced(update, context):
         mode_parts.append("TESTNET" if info.is_testnet else "MAINNET")
 
         text = (
-            f"💰 <b>Binance Balance</b>\n\n"
-            f"🏦 Sàn: <code>{info.exchange.upper()}</code>\n"
-            f"💎 Asset: <code>{info.asset}</code>\n"
-            f"✅ Free: <code>${info.free:,.2f}</code>\n"
-            f"🔒 Locked: <code>${info.locked:,.2f}</code>\n"
-            f"💵 Total: <code>${info.total:,.2f}</code>\n"
-            f"⚙️ Mode: <code>{', '.join(mode_parts)}</code>"
+            f"💰 **Binance Balance**\n\n"
+            f"🏦 Sàn: `{info.exchange.upper()}`\n"
+            f"💎 Asset: `{info.asset}`\n"
+            f"✅ Free: `${info.free:,.2f}`\n"
+            f"🔒 Locked: `${info.locked:,.2f}`\n"
+            f"💵 Total: `${info.total:,.2f}`\n"
+            f"⚙️ Mode: `{', '.join(mode_parts)}`"
         )
         from notifier import sanitize_for_telegram_html
         await update.message.reply_text(sanitize_for_telegram_html(text), parse_mode="HTML")
@@ -784,8 +792,8 @@ async def cmd_scan_enhanced(update, context):
             await update.message.reply_text("⚠️ Không scan được symbol nào.")
             return
 
-        lines = [f"📊 <b>Scan Results</b> ({len(results)} symbols)\n"]
-        lines.append("<pre>")
+        lines = [f"📊 **Scan Results** ({len(results)} symbols)\n"]
+        lines.append("```")
         lines.append(f"{'Symbol':<10} {'Price':>10} {'TT':>4} {'VCP':>5} {'Vol%':>6}")
         lines.append("─" * 40)
 
@@ -801,12 +809,12 @@ async def cmd_scan_enhanced(update, context):
             if r.vcp and r.vcp.detected:
                 vcp_setups.append(r.symbol)
 
-        lines.append("</pre>")
+        lines.append("```")
 
         # Build inline keyboard for VCP symbols (REQ4)
         keyboard = []
         if vcp_setups:
-            lines.append(f"\n🎯 <b>VCP Setups:</b> {', '.join(f'<code>{s}</code>' for s in vcp_setups)}")
+            lines.append(f"\n🎯 **VCP Setups:** {', '.join(f'`{s}`' for s in vcp_setups)}")
             keyboard = [[
                 {"text": f"👁 Analyze {sym}", "callback_data": f"analyze_{sym}"}
             ] for sym in vcp_setups]
@@ -828,6 +836,409 @@ async def cmd_scan_enhanced(update, context):
         log.error(f"cmd_scan_enhanced error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Scan failed: {e}")
 
+
+async def cmd_scan_all(update, context):
+    """Trigger background scan across all configured exchanges and reply when done."""
+    await update.message.reply_text("🔄 Đang bắt đầu scan toàn bộ các sàn trong background... Vui lòng chờ kết quả.")
+    
+    chat_id = update.effective_chat.id
+    
+    async def run_scan_and_notify():
+        try:
+            from analysis import scan_all_configured_exchanges
+            results = await scan_all_configured_exchanges()
+            
+            if not results:
+                await context.bot.send_message(chat_id=chat_id, text="⚠️ Quá trình scan hoàn tất nhưng không tìm thấy kết quả nào.")
+                return
+                
+            filtered_results = [
+                r for r in results 
+                if (r.trend_template and r.trend_template.score >= 6) or (r.vcp and r.vcp.detected)
+            ]
+            
+            if not filtered_results:
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"✅ Scan hoàn tất ({len(results)} symbols).\nKhông có symbol nào đạt Trend Template >= 6/8 hoặc phát hiện VCP."
+                )
+                return
+
+            lines = [f"📊 **Kết quả Scan All (TT ≥ 6 hoặc VCP)** ({len(filtered_results)}/{len(results)} symbols)\n"]
+            lines.append("```")
+            lines.append(f"{'Exchange':<8} {'Symbol':<12} {'Price':>10} {'TT':>4} {'VCP':>5}")
+            lines.append("─" * 45)
+            
+            for r in filtered_results:
+                tt_score = r.trend_template.score if r.trend_template else "?"
+                vcp_flag = "⭐" if r.vcp and r.vcp.detected else ""
+                price = r.price
+                price_str = f"{price:,.2f}" if price >= 1 else f"{price:.4f}"
+                exchange_label = r.exchange[:8]
+                lines.append(f"{exchange_label:<8} {r.symbol:<12} {price_str:>10} {tt_score}/8  {vcp_flag:<3}")
+                
+            lines.append("```")
+            
+            vcp_setups = [r for r in filtered_results if r.vcp and r.vcp.detected]
+            if vcp_setups:
+                lines.append("\n🎯 **Chi tiết VCP Setups:**")
+                for r in vcp_setups:
+                    pivot = r.vcp.pivot_level if r.vcp.pivot_level else 0
+                    vol_ratio = r.vcp.volume_ratio if r.vcp.volume_ratio else 0
+                    lines.append(
+                        f"• `{r.symbol}` ({r.exchange.upper()}) — Vol: {vol_ratio*100:.0f}% avg, "
+                        f"Pivot: {pivot:,.2f}"
+                    )
+            
+            from notifier import sanitize_for_telegram_html
+            text = sanitize_for_telegram_html("\n".join(lines))
+            
+            keyboard = []
+            if vcp_setups:
+                keyboard = [[
+                    {"text": f"👁 Analyze {r.symbol} ({r.exchange})", "callback_data": f"analyze_{r.symbol}"}
+                ] for r in vcp_setups]
+                
+            if keyboard:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(row[0]["text"], callback_data=row[0]["callback_data"])]
+                    for row in keyboard
+                ])
+                await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=kb)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+                
+        except Exception as err:
+            log.error(f"Background scan notify error: {err}", exc_info=True)
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Quá trình scan background bị lỗi: {err}")
+
+    task = asyncio.create_task(run_scan_and_notify())
+    running_tasks.add(task)
+    task.add_done_callback(running_tasks.discard)
+
+
+def parse_mtf_trade_params(text: str, current_price: float) -> Tuple[Optional[float], Optional[float], Optional[float], str]:
+    import re
+    entry, sl, tp = None, None, None
+    side = "AVOID"
+    
+    text_lower = text.lower()
+    if "long" in text_lower or "mua" in text_lower:
+        side = "BUY"
+    elif "short" in text_lower or "bán" in text_lower:
+        side = "SELL"
+        
+    num_pattern = r"[\d,]+(?:\.\d+)?"
+    
+    entry_match = re.search(r"(?:entry|giá vào|vào)[^:\d]*[:\s]*\$?\s*(" + num_pattern + ")", text_lower)
+    if entry_match:
+        try:
+            entry = float(entry_match.group(1).replace(",", ""))
+        except ValueError:
+            pass
+            
+    sl_match = re.search(r"(?:stop loss|cắt lỗ|sl)[^:\d]*[:\s]*\$?\s*(" + num_pattern + ")", text_lower)
+    if sl_match:
+        try:
+            sl = float(sl_match.group(1).replace(",", ""))
+        except ValueError:
+            pass
+            
+    tp_match = re.search(r"(?:take profit|chốt lời|tp)[^:\d]*[:\s]*\$?\s*(" + num_pattern + ")", text_lower)
+    if tp_match:
+        try:
+            tp = float(tp_match.group(1).replace(",", ""))
+        except ValueError:
+            pass
+            
+    if not entry or entry <= 0:
+        entry = current_price
+        
+    return entry, sl, tp, side
+
+
+async def cmd_scan_mtf(update, context):
+    """
+    Scan symbol on multi-timeframe (1D, 4H, 1H), analyze with AI Vision and provide
+    interactive buttons to execute.
+    Usage: /scan_mtf <symbol> [exchange]
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Cần chỉ định symbol.\nVD: /scan_mtf <code>BTCUSDT</code> [exchange]",
+            parse_mode="HTML",
+        )
+        return
+
+    symbol = context.args[0].strip().upper()
+    
+    import config
+    exchange_name = context.args[1].strip().lower() if len(context.args) > 1 else config.DEFAULT_EXCHANGE.lower()
+    
+    progress_msg = await update.message.reply_text(
+        f"🔍 Đang tiến hành phân tích đa khung thời gian (1D → 4H → 1H) cho <code>{symbol}</code> trên sàn <code>{exchange_name}</code>...\n"
+        f"1. Fetching klines & scoring Trend Template/VCP...",
+        parse_mode="HTML"
+    )
+    
+    try:
+        import aiohttp
+        import asyncio
+        from analysis import scan_symbol_multi_timeframe
+        from mcp_client import get_mcp_client
+        
+        # 2. Algorithmic MTF scan
+        semaphore = asyncio.Semaphore(1)
+        async with aiohttp.ClientSession() as session:
+            mtf_scan_result = await scan_symbol_multi_timeframe(session, exchange_name, symbol, semaphore)
+            
+        await progress_msg.edit_text(
+            f"🔍 Phân tích đa khung thời gian cho <code>{symbol}</code> ({exchange_name}):\n"
+            f"✅ 1. Hoàn tất scan thuật toán.\n"
+            f"2. Đang chụp ảnh biểu đồ 3 khung thời gian...",
+            parse_mode="HTML"
+        )
+        
+        # 3. Capture screenshots
+        from pathlib import Path
+        import re
+        from datetime import datetime
+        
+        screenshots_dir = Path(config.CHROMA_DB_PATH).parent.resolve() / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        
+        safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        path_1d = screenshots_dir / f"mtf_1d_{safe_symbol}_{timestamp}.png"
+        path_4h = screenshots_dir / f"mtf_4h_{safe_symbol}_{timestamp}.png"
+        path_1h = screenshots_dir / f"mtf_1h_{safe_symbol}_{timestamp}.png"
+        
+        mcp = get_mcp_client()
+        
+        # Capture screenshots sequentially to avoid TradingView browser collisions
+        captured_1d = await mcp.capture_screenshot(symbol=symbol, timeframe="D", save_path=path_1d)
+        await asyncio.sleep(0.5)
+        captured_4h = await mcp.capture_screenshot(symbol=symbol, timeframe="240", save_path=path_4h)
+        await asyncio.sleep(0.5)
+        captured_1h = await mcp.capture_screenshot(symbol=symbol, timeframe="60", save_path=path_1h)
+        
+        image_paths = []
+        for p in [captured_1d, captured_4h, captured_1h]:
+            if p and Path(p).exists():
+                image_paths.append(Path(p))
+                
+        if not image_paths:
+            await progress_msg.edit_text("❌ Lỗi: Không thể chụp ảnh biểu đồ (TradingView MCP & local fallback failed).")
+            return
+            
+        await progress_msg.edit_text(
+            f"🔍 Phân tích đa khung thời gian cho <code>{symbol}</code> ({exchange_name}):\n"
+            f"✅ 1. Hoàn tất scan thuật toán.\n"
+            f"✅ 2. Đã chụp xong {len(image_paths)} biểu đồ.\n"
+            f"3. Đang gửi ảnh cho AI Vision phân tích...",
+            parse_mode="HTML"
+        )
+        
+        # 4. Vision AI analysis
+        from vision import analyze_chart_vision_mtf
+        
+        vision_result = await analyze_chart_vision_mtf(
+            image_paths=image_paths,
+            symbol=symbol,
+            mtf_scan_result={
+                "timeframes": mtf_scan_result.timeframes
+            }
+        )
+        
+        if vision_result.get("error"):
+            await progress_msg.edit_text(f"❌ AI Vision analysis error: {vision_result['error']}")
+            return
+            
+        # Parse Entry, SL, TP, and Side
+        entry, sl, tp, side = parse_mtf_trade_params(vision_result["analysis"], mtf_scan_result.price)
+        
+        # 5. Insert manual signal into database
+        import database
+        signal_id = await database.insert_signal(
+            symbol=symbol,
+            action=side.lower(),
+            price=entry,
+            quote_qty=10.0,
+            source_ip="127.0.0.1",
+            payload={
+                "source": "telegram_mtf_scan",
+                "confidence": vision_result.get("confidence", 0),
+                "combined_score": vision_result.get("combined_score", "N/A"),
+                "verdict": vision_result.get("verdict", ""),
+                "sl": str(sl) if sl else "",
+                "tp": str(tp) if tp else "",
+                "analysis_text": vision_result.get("analysis", "")
+            }
+        )
+        
+        # 6. Create AnalysisComplete event and store in PENDING_TRADES
+        from core.events import AnalysisComplete
+        from hub.notification_hub import PENDING_TRADES
+        
+        confidence = vision_result.get("confidence", 5)
+        combined_score = vision_result.get("combined_score", "N/A")
+        
+        event = AnalysisComplete(
+            signal_id=signal_id,
+            symbol=symbol,
+            action=side.lower(),
+            price=entry,
+            quote_qty=10.0,
+            sl=str(sl) if sl else "",
+            tp=str(tp) if tp else "",
+            exchange=exchange_name,
+            confidence=confidence,
+            analysis_text=vision_result["analysis"],
+            screenshot_path=str(image_paths[0]),
+            combined_score=combined_score,
+            should_trade=(side != "AVOID"),
+            interactive_required=True
+        )
+        
+        PENDING_TRADES[signal_id] = event
+        
+        # Track for timeout
+        from telegram_bot import get_approval_timeout_mgr
+        timeout_mgr = get_approval_timeout_mgr()
+        
+        # 7. Send the screenshots as a media group
+        from telegram import InputMediaPhoto
+        media_group = []
+        file_handles = []
+        for i, p in enumerate(image_paths):
+            fh = open(p, 'rb')
+            file_handles.append(fh)
+            caption = f"📊 {symbol} Multi-Timeframe Charts (1D, 4H, 1H)" if i == 0 else None
+            media_group.append(InputMediaPhoto(media=fh, caption=caption))
+            
+        await update.message.reply_media_group(media=media_group)
+        for fh in file_handles:
+            fh.close()
+            
+        # 8. Send the text report with inline buttons
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        
+        keyboard = []
+        if side != "AVOID":
+            keyboard.append([
+                InlineKeyboardButton(f"📈 APPROVE {side}", callback_data=f"approve_{signal_id}"),
+                InlineKeyboardButton("❌ REJECT", callback_data=f"reject_{signal_id}")
+            ])
+        else:
+            keyboard.append([
+                InlineKeyboardButton("❌ DISMISS", callback_data=f"reject_{signal_id}")
+            ])
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        from notifier import sanitize_for_telegram_html
+        formatted_analysis = sanitize_for_telegram_html(vision_result["analysis"])
+        
+        entry_str = f"{entry:,.4f}" if entry is not None else "N/A"
+        sl_str = f"{sl:,.4f}" if sl is not None else "N/A"
+        tp_str = f"{tp:,.4f}" if tp is not None else "N/A"
+        
+        report_text = (
+            f"👁️ <b>MULTI-TIMEFRAME ANALYSIS — {symbol}</b>\n\n"
+            f"{formatted_analysis}\n\n"
+            f"📊 Combined Score: <b>{combined_score}</b>\n"
+            f"📋 Verdict: <b>{vision_result.get('verdict', 'N/A')}</b>\n"
+            f"💰 Entry: <code>{entry_str}</code> | SL: <code>{sl_str}</code> | TP: <code>{tp_str}</code>\n"
+            f"🏦 Sàn: <code>{exchange_name.upper()}</code>"
+        )
+        
+        sent_msg = await update.message.reply_text(
+            report_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+        
+        if timeout_mgr:
+            timeout_mgr.track_message(signal_id, update.effective_chat.id, sent_msg.message_id)
+            
+        await progress_msg.delete()
+        
+    except Exception as e:
+        log.error(f"cmd_scan_mtf failed: {e}", exc_info=True)
+        await progress_msg.edit_text(f"❌ Phân tích thất bại: {e}")
+
+
+async def cmd_recommend(update, context):
+    """Gợi ý cơ hội giao dịch đa khung thời gian từ Watchlist."""
+    await update.message.reply_text("🔄 Đang quét danh sách Watchlist để tìm điểm đồng thuận đa khung thời gian (1D → 4H → 1H)...")
+    
+    try:
+        from watchlist import get_watchlist
+        from analysis import scan_symbol_multi_timeframe
+        import config
+        import aiohttp
+        
+        symbols = get_watchlist()
+        if not symbols:
+            await update.message.reply_text("📋 Watchlist trống. Dùng /add để thêm symbols.")
+            return
+            
+        exchange_name = context.args[0].strip().lower() if context.args else config.DEFAULT_EXCHANGE.lower()
+        
+        semaphore = asyncio.Semaphore(3)
+        
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                scan_symbol_multi_timeframe(session, exchange_name, sym, semaphore)
+                for sym in symbols
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+        lines = ["📊 **Gợi ý Đa Khung Thời Gian (Watchlist)**\n"]
+        lines.append("```")
+        lines.append(f"{'Symbol':<12} {'Price':>10} {'1D/4H/1H':>10} {'Verdict':<15}")
+        lines.append("─" * 50)
+        
+        aligned_count = 0
+        for r in results:
+            if isinstance(r, Exception) or not r or getattr(r, 'error', None):
+                continue
+            
+            # Format scores
+            score_1d = r.timeframes.get("1d").trend_template.score if r.timeframes.get("1d") and not r.timeframes.get("1d").error else "?"
+            score_4h = r.timeframes.get("4h").trend_template.score if r.timeframes.get("4h") and not r.timeframes.get("4h").error else "?"
+            score_1h = r.timeframes.get("1h").trend_template.score if r.timeframes.get("1h") and not r.timeframes.get("1h").error else "?"
+            scores_str = f"{score_1d}/{score_4h}/{score_1h}"
+            
+            price = r.price
+            price_str = f"{price:,.2f}" if price >= 1 else f"{price:.4f}"
+            
+            # Check if aligned
+            alignment = "NEUTRAL"
+            if r.aligned_long:
+                alignment = "LONG 📈"
+                aligned_count += 1
+            elif r.aligned_short:
+                alignment = "SHORT 📉"
+                aligned_count += 1
+                
+            lines.append(f"{r.symbol:<12} {price_str:>10} {scores_str:>10} {alignment:<15}")
+            
+        lines.append("```")
+        
+        if aligned_count == 0:
+            lines.append("\n⚠️ Không tìm thấy đồng thuận xu hướng cho symbol nào trong Watchlist hiện tại.")
+        else:
+            lines.append(f"\n🎯 Phát hiện {aligned_count} cơ hội giao dịch có đồng thuận xu hướng đa khung thời gian!")
+            
+        from notifier import sanitize_for_telegram_html
+        await update.message.reply_text(sanitize_for_telegram_html("\n".join(lines)), parse_mode="HTML")
+        
+    except Exception as e:
+        log.error(f"cmd_recommend failed: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Lỗi khi quét Watchlist: {e}")
 
 
 # ── Inline Keyboard Callback ──────────────────────────────────────────────
@@ -860,7 +1271,8 @@ async def button_callback(update, context):
                 sl=event.sl,
                 tp=event.tp,
                 approved_by=f"Human (@{user})",
-                analysis_text=event.analysis_text
+                analysis_text=event.analysis_text,
+                exchange=getattr(event, "exchange", "binance")
             )))
             from notifier import sanitize_for_telegram_html
             safe_text = sanitize_for_telegram_html(query.message.text)
@@ -1060,8 +1472,6 @@ async def cmd_brief_inline(message):
 
 # ── P8 Data Models ────────────────────────────────────────────────────────
 
-from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict
 
 @dataclass
 class PositionSnapshot:
@@ -1313,7 +1723,7 @@ class ExchangeQueryFacade:
                         is_dry_run=getattr(client, "dry_run", True),
                         latency_ms=round(latency, 1),
                     ))
-                except Exception as e:
+                except Exception:
                     results.append(ExchangeHealthInfo(
                         exchange=eid, healthy=False,
                         is_testnet=False, is_dry_run=True, latency_ms=None,
@@ -1790,7 +2200,6 @@ async def cmd_login(update, context):
         from auth.auth_config import AuthConfig
         from auth.service import AuthService
         import database as db
-        import config
 
         auth_cfg = AuthConfig()
         auth_svc = AuthService(auth_cfg)
@@ -1956,6 +2365,8 @@ def start_bot():
                     BotCommand("help",      "Danh sách lệnh"),
                     BotCommand("status",    "Trạng thái hệ thống"),
                     BotCommand("scan",      "Scan watchlist (TT + VCP + 👁 Vision)"),
+                    BotCommand("scan_mtf",  "Scan đa khung (1D/4H/1H) & Duyệt lệnh"),
+                    BotCommand("recommend", "Gợi ý cơ hội giao dịch đa khung"),
                     BotCommand("brief",     "Chạy Morning Brief"),
                     BotCommand("watchlist", "Xem watchlist"),
                     BotCommand("balance",   "Xem balance [EXCHANGE] [ASSET]"),
@@ -1994,6 +2405,9 @@ def start_bot():
             app.add_handler(CommandHandler("add",       cmd_add))
             app.add_handler(CommandHandler("remove",    cmd_remove))
             app.add_handler(CommandHandler("scan",      cmd_scan_enhanced))  # P8: replaces cmd_scan
+            app.add_handler(CommandHandler("scan_all",  cmd_scan_all))
+            app.add_handler(CommandHandler("scan_mtf",  cmd_scan_mtf))
+            app.add_handler(CommandHandler("recommend", cmd_recommend))
             app.add_handler(CommandHandler("brief",     cmd_brief))
             app.add_handler(CommandHandler("vision",    cmd_vision))
             app.add_handler(CommandHandler("grade",     cmd_grade))

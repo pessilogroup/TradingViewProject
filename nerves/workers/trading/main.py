@@ -1,8 +1,9 @@
 import logging
+import sys
+import io
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional
-import secrets
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
 from fastapi.responses import JSONResponse, FileResponse
@@ -33,15 +34,16 @@ from claude_cli import SdkClient, ClaudeService
 import claude_cli.telegram_commands as _claude_tg
 import claude_cli.event_handler as _claude_eh
 
-# Module-level singleton — shared between lifespan and REST endpoints
-_claude_service: Optional[ClaudeService] = None
-
 # ── Phase 4: EventBus imports ────────────────────────────────────────────────
 from core.event_bus import bus as _event_bus
-from core.events import SignalReceived
 
 # ── Phase 5: WebhookGateway (Component 8/8) ──────────────────────────────────
 from gateway.webhook import router as _webhook_router
+
+from auth.routes import auth_router as _auth_router
+from auth.middleware import AuthMiddleware
+
+_claude_service: Optional[ClaudeService] = None
 
 
 # ── Fix Windows cp1252 UnicodeEncodeError for emoji in log messages ──────────
@@ -49,7 +51,6 @@ from gateway.webhook import router as _webhook_router
 # pytest replaces sys.stdout with an internal capture object that has no .buffer,
 # so checking for 'buffer' is the safe sentinel. Direct replacement would
 # destroy pytest's capture file handle and cause ValueError on teardown.
-import sys, io
 _is_pytest = "pytest" in sys.modules
 if not _is_pytest and sys.stdout and hasattr(sys.stdout, 'buffer'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -105,7 +106,7 @@ async def lifespan(app: FastAPI):
             if ":" in bind_addr:
                 try:
                     port = int(bind_addr.split(":")[-1])
-                except:
+                except Exception:
                     pass
             server_address = ('', port)
             try:
@@ -272,11 +273,9 @@ app = FastAPI(
 app.include_router(_webhook_router)
 
 # ── P10: Auth router ─────────────────────────────────────────────────────────
-from auth.routes import auth_router as _auth_router
 app.include_router(_auth_router)
 
 # ── P10: AuthMiddleware (replaces legacy dashboard_auth_middleware) ───────────
-from auth.middleware import AuthMiddleware
 app.add_middleware(AuthMiddleware, auth_service=getattr(app.state, 'auth_service', None))
 
 # Mount static files
@@ -478,6 +477,170 @@ async def scan_watchlist_endpoint(
             }
             for r in results
         ],
+    }
+
+
+@app.get("/api/scan/all")
+async def scan_all_endpoint(
+    background_tasks: BackgroundTasks,
+    force: bool = Query(False, description="Nếu True, bắt buộc chạy scan mới trong background kể cả khi đang có kết quả cũ.")
+):
+    """Trigger hoặc lấy kết quả scan toàn bộ sàn được cấu hình."""
+    trigger_new = force or (analysis_module._scan_status == "idle" and not analysis_module._latest_scan_results)
+    
+    if trigger_new and analysis_module._scan_status != "running":
+        background_tasks.add_task(analysis_module.scan_all_configured_exchanges)
+        
+    results = analysis_module._latest_scan_results
+    return {
+        "status": analysis_module._scan_status,
+        "start_time": analysis_module._scan_start_time,
+        "end_time": analysis_module._scan_end_time,
+        "error": analysis_module._scan_error,
+        "scanned": len(results),
+        "results": [
+            {
+                "symbol": r.symbol,
+                "price": r.price,
+                "change_pct": r.change_pct,
+                "exchange": r.exchange,
+                "trend_template_score": r.trend_template.score,
+                "trend_template_stage": r.trend_template.stage,
+                "trend_template_criteria": r.trend_template.criteria,
+                "vcp_detected": r.vcp.detected,
+                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
+                "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp.volume_ratio is not None else 1.0,
+                "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp.range_ratio is not None else 1.0,
+                "pivot_level": r.vcp.pivot_level,
+                "vcp_note": r.vcp.note,
+                "error": r.error,
+            }
+            for r in results
+        ]
+    }
+
+
+@app.get("/api/scan/mtf")
+async def scan_mtf_endpoint(
+    symbol: str = Query(..., description="Symbol to scan, e.g. BTCUSDT"),
+    exchange: Optional[str] = Query(None, description="Exchange name, e.g. binance, weex. Default is config.DEFAULT_EXCHANGE"),
+):
+    """
+    Perform multi-timeframe scan (1D, 4H, 1H) for a symbol, capture screenshots,
+    run Vision AI analysis, and return scorecard + analysis report.
+    """
+    import aiohttp
+    import asyncio
+    from pathlib import Path
+    import re
+    from datetime import datetime
+    import config
+    import mcp_client as _mcp_module
+    import vision as vision_module
+    import analysis as analysis_module
+
+    sym = symbol.upper()
+    exch = (exchange or config.DEFAULT_EXCHANGE).lower()
+
+    # 1. Algorithmic scan
+    semaphore = asyncio.Semaphore(1)
+    async with aiohttp.ClientSession() as session:
+        try:
+            mtf_res = await analysis_module.scan_symbol_multi_timeframe(
+                session=session,
+                exchange_name=exch,
+                symbol=sym,
+                semaphore=semaphore
+            )
+        except Exception as e:
+            log.exception(f"Algorithmic scan failed in endpoint for {sym}")
+            raise HTTPException(status_code=500, detail=f"MTF Scan failed: {e}")
+
+    # 2. Capture screenshots
+    screenshots_dir = Path(config.CHROMA_DB_PATH).parent.resolve() / "screenshots"
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    
+    safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', sym)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    path_1d = screenshots_dir / f"mtf_1d_{safe_symbol}_{timestamp}.png"
+    path_4h = screenshots_dir / f"mtf_4h_{safe_symbol}_{timestamp}.png"
+    path_1h = screenshots_dir / f"mtf_1h_{safe_symbol}_{timestamp}.png"
+    
+    mcp = _mcp_module.get_mcp_client()
+
+    captured_1d = await mcp.capture_screenshot(symbol=sym, timeframe="D", save_path=path_1d)
+    await asyncio.sleep(0.5)
+    captured_4h = await mcp.capture_screenshot(symbol=sym, timeframe="240", save_path=path_4h)
+    await asyncio.sleep(0.5)
+    captured_1h = await mcp.capture_screenshot(symbol=sym, timeframe="60", save_path=path_1h)
+    
+    image_paths = []
+    for p in [captured_1d, captured_4h, captured_1h]:
+        if p and Path(p).exists():
+            image_paths.append(Path(p))
+
+    # 3. Vision AI analysis
+    vision_result = {}
+    if image_paths:
+        try:
+            vision_result = await vision_module.analyze_chart_vision_mtf(
+                image_paths=image_paths,
+                symbol=sym,
+                mtf_scan_result={
+                    "timeframes": mtf_res.timeframes
+                }
+            )
+        except Exception as e:
+            log.error(f"Vision analysis failed in endpoint for {sym}: {e}")
+            vision_result = {"error": str(e)}
+    else:
+        vision_result = {"error": "Failed to capture any charts for vision analysis."}
+
+    # Helper to serialize ScanResult
+    def serialize_scan(r):
+        if not r:
+            return None
+        return {
+            "symbol": r.symbol,
+            "price": r.price,
+            "change_pct": r.change_pct,
+            "trend_template_score": r.trend_template.score if r.trend_template else 0,
+            "trend_template_stage": r.trend_template.stage if r.trend_template else "Unknown",
+            "trend_template_criteria": r.trend_template.criteria if r.trend_template else {},
+            "vcp_detected": r.vcp.detected if r.vcp else False,
+            "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+            "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp and r.vcp.volume_ratio is not None else 1.0,
+            "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp and r.vcp.range_ratio is not None else 1.0,
+            "pivot_level": r.vcp.pivot_level if r.vcp else None,
+            "vcp_note": r.vcp.note if r.vcp else "",
+            "error": r.error,
+        }
+
+    return {
+        "symbol": sym,
+        "exchange": exch,
+        "price": mtf_res.price,
+        "aligned_long": mtf_res.aligned_long,
+        "aligned_short": mtf_res.aligned_short,
+        "verdict": mtf_res.verdict,
+        "timeframes": {
+            tf: serialize_scan(scan)
+            for tf, scan in mtf_res.timeframes.items()
+        },
+        "vision": {
+            "analysis": vision_result.get("analysis", ""),
+            "confidence": vision_result.get("confidence", 0),
+            "patterns": vision_result.get("patterns", []),
+            "combined_score": vision_result.get("combined_score", "N/A"),
+            "verdict": vision_result.get("verdict", ""),
+            "error": vision_result.get("error")
+        },
+        "screenshots": {
+            "1d": str(path_1d) if path_1d.exists() else None,
+            "4h": str(path_4h) if path_4h.exists() else None,
+            "1h": str(path_1h) if path_1h.exists() else None,
+        }
     }
 
 
@@ -972,7 +1135,8 @@ async def get_vision_stats():
             try:
                 vd = _json.loads(b["vision_data"])
                 c = vd.get("confidence", 0)
-                if c: confidences.append(c)
+                if c:
+                    confidences.append(c)
             except Exception:
                 pass
     avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0
