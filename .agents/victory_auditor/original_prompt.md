@@ -1,10 +1,12 @@
-## 2026-05-20T22:20:06Z
-You are the Victory Auditor for the TradingView Edge Node ecosystem evaluation.
-Your working directory is C:\Users\pesil\working\mj_trading\TradingViewProject\.agents\victory_auditor.
-Please conduct a rigorous independent 3-phase victory audit (verifying the implementation history, checking for shortcuts/cheating/bypasses, and running independent test execution) of the completed work.
-The requirements are recorded in C:\Users\pesil\working\mj_trading\TradingViewProject\ORIGINAL_REQUEST.md.
-Please read the Orchestrator's progress.md and handoff.md, as well as the subagents' handoffs.
-Provide a clear, final verdict: either `VICTORY CONFIRMED` or `VICTORY REJECTED`, with a detailed audit report.
-
-## 2026-05-20T22:22:10Z
-Checkpoint invocation to continue the victory audit.
+## 2026-05-26T16:49:53Z
+**Context**: Forensic integrity audit of the "Scan All" background feature.
+**Role**: Forensic Auditor
+**TypeName**: teamwork_preview_auditor
+**Workspace**: inherit
+**Task**:
+1. Run a forensic integrity audit on all changes made for the "Scan All" background scanning feature.
+2. Specifically check:
+   - Genuine implementation: Make sure there are no hardcoded test results, mock/dummy/facade implementations, or shortcuts in the codebase itself (like nerves/workers/trading/analysis.py, nerves/workers/trading/main.py, nerves/workers/trading/telegram_bot.py).
+   - Verify that all calculations (SMA, ATR, RS ratio vs BTC, Trend Template, VCP detection) are based on real historical data fetched from adapters/APIs.
+   - Run python -m pytest nerves/workers/trading/tests/unit/test_scan_all.py and check that the tests themselves are authentic.
+3. Write your report to c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\victory_auditor\handoff.md and message the orchestrator (7efa8c3e-7692-4aaf-a41b-1289870f9172).

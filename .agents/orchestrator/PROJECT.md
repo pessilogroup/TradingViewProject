@@ -10,11 +10,11 @@
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | 1 | Exploration & Architecture | Explore symbol retrieval APIs, scanner concurrency models, and Telegram bot handlers. | None | DONE |
-| 2 | Dynamic Symbol Discovery | Implement dynamic linear symbol listing for Weex, Binance, Bybit in exchange adapters and registry. | M1 | PLANNED |
-| 3 | Concurrency & Rate-limiting | Implement concurrent scanning logic with exponential back-off and queue management. | M2 | PLANNED |
-| 4 | FastAPI Endpoint | Implement GET /api/scan/all route returning ranked VCP and Trend Template scores. | M3 | PLANNED |
-| 5 | Telegram Command | Implement /scan_all command to trigger scanning in background and broadcast results. | M4 | PLANNED |
-| 6 | Testing & Audit | Add integration tests, run full test suite, perform Forensic Auditing. | M5 | PLANNED |
+| 2 | Dynamic Symbol Discovery | Implement dynamic linear symbol listing for Weex, Binance, Bybit in exchange adapters and registry. | M1 | DONE |
+| 3 | Concurrency & Rate-limiting | Implement concurrent scanning logic with exponential back-off and queue management. | M2 | DONE |
+| 4 | FastAPI Endpoint | Implement GET /api/scan/all route returning ranked VCP and Trend Template scores. | M3 | DONE |
+| 5 | Telegram Command | Implement /scan_all command to trigger scanning in background and broadcast results. | M4 | DONE |
+| 6 | Testing & Audit | Add integration tests, run full test suite, perform Forensic Auditing. | M5 | DONE |
 
 ## Interface Contracts
 ### ExchangeAdapter ↔ Scanner

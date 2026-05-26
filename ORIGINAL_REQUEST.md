@@ -137,4 +137,28 @@ Integrity mode: development
 - [ ] Endpoint `/api/scan/all` is active and returns valid JSON output.
 - [ ] Telegram bot command `/scan_all` functions and broadcasts results.
 
+## Follow-up — 2026-05-26T23:46:29+07:00
+
+The user has updated `nerves/workers/trading/exchanges/weex_adapter.py` to add `get_active_symbols()` which fetches active futures symbols dynamically:
+```python
+    async def get_active_symbols(self) -> List[str]:
+        if self.dry_run:
+            return ["BTCUSDT_UMCBL", "ETHUSDT_UMCBL", "SOLUSDT_UMCBL", "ADAUSDT_UMCBL", "XRPUSDT_UMCBL"]
+        try:
+            data = await self._request("GET", "/api/v2/contract/public/symbols")
+            symbols_list = data.get("data", [])
+            active_symbols = []
+            for s in symbols_list:
+                sym = s.get("symbol", "")
+                status = s.get("status", "")
+                if sym.endswith("_UMCBL") and status == "Trading":
+                    active_symbols.append(sym)
+            return active_symbols
+        except Exception as e:
+            log.error(f"Error fetching active symbols from Weex: {e}")
+            return ["BTCUSDT_UMCBL", "ETHUSDT_UMCBL"]
+```
+Please utilize this method for implementing R1 (Dynamic Symbol Discovery) on the Weex exchange.
+
+
 

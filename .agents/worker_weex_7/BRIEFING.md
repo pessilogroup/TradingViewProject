@@ -1,4 +1,4 @@
-# BRIEFING — 2026-05-26T23:38:35+07:00
+# BRIEFING — 2026-05-26T23:55:00+07:00
 
 ## Mission
 Implement automated "Scan All" background feature for USDT-M futures on Weex (using suffix `_UMCBL`) and all configured exchanges.
@@ -19,7 +19,7 @@ Implement automated "Scan All" background feature for USDT-M futures on Weex (us
 
 ## Current Parent
 - Conversation ID: 7efa8c3e-7692-4aaf-a41b-1289870f9172
-- Updated: not yet
+- Updated: 2026-05-26T23:55:00+07:00
 
 ## Task Summary
 - **What to build**: Automated background scanner for futures, API endpoint, and Telegram bot command integration.
@@ -31,20 +31,23 @@ Implement automated "Scan All" background feature for USDT-M futures on Weex (us
 - **Code layout**: nerves/workers/trading/
 
 ## Key Decisions Made
-- [TBD]
+- Implemented client session retry handler for 429 status code handling in `fetch_candles_with_retry`.
+- Bound concurrency of requests via an `asyncio.Semaphore` set to 15.
+- Created `test_scan_all.py` containing 9 comprehensive unit and integration tests.
 
 ## Artifact Index
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\worker_weex_7\original_prompt.md — Task description and parent messages.
+- nerves/workers/trading/tests/unit/test_scan_all.py — Test suite for scanning logic, API endpoints, and Telegram handlers.
 
 ## Change Tracker
-- **Files modified**: None
-- **Build status**: Untested
+- **Files modified**: Added `nerves/workers/trading/tests/unit/test_scan_all.py`.
+- **Build status**: Passed
 - **Pending issues**: None
 
 ## Quality Status
-- **Build/test result**: Untested
-- **Lint status**: Untested
-- **Tests added/modified**: None
+- **Build/test result**: Passed (290 tests passed)
+- **Lint status**: Clean (0 errors on added file)
+- **Tests added/modified**: 9 new tests added.
 
 ## Loaded Skills
 - **Source**: C:\Users\pesil\.gemini\config\skills\angati-core-qa\SKILL.md
