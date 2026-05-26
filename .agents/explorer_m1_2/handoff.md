@@ -1,65 +1,68 @@
-# Handoff Report - Hook Service Startup Analysis & Test Design
+# Handoff Report - Scanner Concurrency & Rate Limiting Analysis
 
 ## 1. Observation
-*   **Hook Server File**: `nerves/core/hook_service.py` runs a multi-threaded HTTP server using:
+*   **Trend Template Scorer Location**: `nerves/workers/trading/analysis.py` (Lines 42-133) implements `score_trend_template(price, sma50, sma150, sma200, high_52w, low_52w, sma200_slope=None, rs_ratio=None)` returning a score between 0 and 8 based on 8 Minervini criteria.
+*   **VCP Detector Location**: `nerves/workers/trading/analysis.py` (Lines 136-185) implements `detect_vcp(price, high, low, volume, volume_avg20, atr14, high_52w)` returning `VCPResult` where contraction is detected if `volume_ratio < 0.5` and `range_ratio < 0.5`.
+*   **Stateful Subprocess Executions**: In `nerves/workers/trading/mcp_client.py`, the client runs MCP commands via subprocess:
     ```python
-    # nerves/core/hook_service.py (Lines 247-259)
-    def main():
-        port = 9105
-        server_address = ('', port)
-        httpd = ThreadingHTTPServer(server_address, SRAHookHandler)
-        print(f"[SRA Server] Running SRA Hybrid Hook Server on port {port}...", file=sys.stderr)
+    # nerves/workers/trading/mcp_client.py (Lines 67-73)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(_MCP_DIR),
+        env={**os.environ, "TV_CDP_PORT": str(self.cdp_port)}
+    )
+    ```
+*   **Sequential Data Fetching**: `nerves/workers/trading/mcp_client.py` loops sequentially across symbols without locks or rate limiting:
+    ```python
+    # nerves/workers/trading/mcp_client.py (Lines 324-329)
+    for sym in symbols:
         try:
-            httpd.serve_forever()
+            quote = await self.get_quote(sym)
+            studies = await self.get_study_values(sym, timeframe)
+            ohlcv = await self.get_ohlcv_summary(sym, timeframe)
     ```
-*   **Local Binary Resolution**: In `nerves/core/hook_service.py` (lines 120-122), the local binary path resolves to:
-    ```python
-    angati_exe = AGENTS_ROOT / "tools" / "angati" / "angati.exe"
-    if not angati_exe.exists():
-        angati_exe = AGENTS_ROOT / "angati.exe"
+*   **Chart Symbol Switch**: `tradingview-mcp/src/core/chart.js` (Line 46) executes a global chart change on the active widget:
+    ```javascript
+    chart.setSymbol(safeString(symbol), {});
     ```
-*   **Test Setup File**: `nerves/workers/trading/test_angati_integration.py` currently initiates the HTTP server manually in `setUpClass` (lines 45-47) rather than calling `main()`:
-    ```python
-    cls.httpd = hook_service.ThreadingHTTPServer(cls.server_address, hook_service.SRAHookHandler)
-    cls.server_thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
-    cls.server_thread.start()
-    ```
-*   **Project Specification**: `PROJECT.md` dictates checking local `angati.exe` SHA256 against brain `angati.exe` (nominally at `~/.gemini/antigravity/tools/angati/angati.exe`), warning to `sys.stderr` on mismatch:
-    `[SRA Server] WARNING: Local angati.exe version mismatch detected! Please manually restart the hook server to synchronize the binary.`
+*   **DOM Polling Wait**: `tradingview-mcp/src/wait.js` (Lines 6-72) runs `waitForChartReady` which checks the DOM for loading spinner and bar count stability, taking a minimum of 400ms to 1000ms+ per switch.
 
 ---
 
 ## 2. Logic Chain
-1.  **Requirement for Asynchrony**: Because `serve_forever()` in `hook_service.py` blocks the main thread, the version checking procedure must run in a separate background thread (`threading.Thread`) as a daemon. This guarantees that startup of the HTTP service is never delayed or blocked.
-2.  **Safety & Fault Tolerance**: To satisfy the constraint of handling missing files gracefully, checking routines must verify existence via `is_file()`. Any unhandled file access exception (e.g. permission issues) must be caught and ignored, keeping the hook service functional under all circumstances.
-3.  **Path Decoupling for Isolation**: Testing mismatch conditions requires control over file contents. Directly patching filesystem methods or relying on system-wide paths is fragile. By introducing environment variables (`ANGATI_LOCAL_EXE_PATH`, `ANGATI_BRAIN_EXE_PATH`), tests can dynamically define arbitrary temporary files.
-4.  **Windows Lock Avoidance**: On Windows, concurrent file reading on open file objects triggers `PermissionError`. Therefore, temporary test files must write, flush, and explicitly close their writer handles (`temp_file.close()`) before launching the version checker thread.
-5.  **Deterministic Test Assertion**: By returning the created thread object from `check_angati_version_async()`, tests can call `.join(timeout=2.0)` to ensure execution has completed synchronously before inspecting the captured stderr output.
+1.  **Shared Global State**: Because `setSymbol` in `tradingview-mcp/src/core/chart.js` modifies the single active chart view on TradingView Desktop, the active ticker is a global stateful resource.
+2.  **Concurrency Race Conditions**: If multiple scan requests run concurrently without serialization, tasks will overlap. For example, Task A sets the symbol to `BTCUSDT` and awaits `get_quote`. Before `get_quote` is executed, Task B changes the chart symbol to `ETHUSDT`. Task A then reads study values for `ETHUSDT` and logs them under `BTCUSDT` (data contamination).
+3.  **Process Overhead**: Since `mcp_client.py` calls the CLI tool via `asyncio.create_subprocess_exec` four times per symbol, scanning 100 symbols results in 400 subprocess spawns. This leads to high CPU utilization and potential OS process starvation.
+4.  **Network Rate Limiting**: Switching symbols rapidly forces TradingView Desktop to execute heavy WebSocket queries to TradingView servers. Without throttling, this causes the TV servers to rate limit the client (silently throttling websocket data or returning HTTP 429), leading to timeouts in `waitForChartReady`.
+5.  **Synchronization Mitigation**: To scan 100+ active pairs concurrently without errors, we must:
+    *   Serialize chart switches using an `asyncio.Lock`.
+    *   Throttling switching speed using a Token Bucket limiter (e.g. max 1 switch per 1.2 seconds).
+    *   Handle timeouts/failures gracefully via exponential back-off and retry blocks.
+    *   Reduce subprocess overhead by routing requests through the persistent `CaptureDaemon` HTTP API or multiplexing chart queries across multiple pages/tabs.
 
 ---
 
 ## 3. Caveats
-*   The default path for the brain `angati.exe` assumes the standard user home path (`Path.home() / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe"`). On some systems where standard environment variables like `USERPROFILE` or `HOME` are unset, `Path.home()` could raise a `RuntimeError`. This is mitigated by wrapping path calculations in a try-except block inside the background task.
-*   Mocking relies on setting/unsetting environment variables during the test lifecycle. Concurrent tests modifying the same environment variables could lead to race conditions; however, this test suite is configured to run sequentially.
+*   The scanner assumes the user has configured the necessary indicators (SMA50, SMA150, SMA200, Volume MA, ATR14) on the active TradingView chart. If these indicators are missing or named differently, `get_study_values` will fail to extract them.
+*   True concurrency (running scans in parallel) is physically limited by the number of open pages/tabs in the TradingView Desktop application. Without multi-tab orchestration, scans must execute sequentially under the lock.
 
 ---
 
 ## 4. Conclusion
-A robust design has been developed:
-1.  `check_angati_version_async()` is implemented in `hook_service.py` using a daemon thread, resolving local and brain `angati.exe` paths or environment overrides.
-2.  It calculates SHA256 hashes using a chunk size of 8192 bytes and emits warnings on `sys.stderr` on mismatch.
-3.  A complete integration test strategy is drafted and saved as `.patch` files to allow zero-dependency, Windows-safe testing.
+The existing scanner lacks synchronization and rate limiting, causing concurrency race hazards and susceptibility to TV server blocks. A robust design has been drafted in `.agents/explorer_m1_2/analysis.md` incorporating:
+1.  An `asyncio.Lock` to guarantee stateful serialization.
+2.  A Token Bucket limiter to throttle symbol switches.
+3.  An exponential back-off retry mechanism for 429/timeouts.
+4.  Standardized mapping rules for dynamic exchange symbols (Bybit/Binance/Weex) to TV-compatible formats.
 
 ---
 
 ## 5. Verification Method
-1.  **Apply patches**: The implementing agent should apply the provided patch files (`proposed_hook_service.patch` and `proposed_test_angati_integration.patch`) to the repository:
-    ```bash
-    git apply .agents/explorer_m1_2/proposed_hook_service.patch
-    git apply .agents/explorer_m1_2/proposed_test_angati_integration.patch
+1.  **Verify Analysis File**: Read `.agents/explorer_m1_2/analysis.md` and confirm it exists with the complete scanner architecture and computations.
+2.  **Simulate Concurrency Race Condition**: Execute concurrent requests to `/api/scan/watchlist` and verify if mixed-symbol logs or timeouts occur.
+3.  **Test Suite Execution**: Ensure existing tests pass:
+    ```powershell
+    pytest nerves/workers/trading/tests/unit/test_ai_analyzer.py
     ```
-2.  **Run tests**: Run the integration tests using the project's testing harness:
-    ```bash
-    python -m unittest nerves/workers/trading/test_angati_integration.py
-    ```
-3.  **Inspect stderr output**: Confirm that the mismatch test prints `[OK] Test 3: Version mismatch warning verified!`, `[OK] Test 4: Version match no-warning verified!`, and `[OK] Test 5: Graceful handle of missing files verified!`.

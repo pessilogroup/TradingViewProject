@@ -1,9 +1,9 @@
-# Progress
+# Progress Log
 
-Last visited: 2026-05-20T21:33:10Z
+Last visited: 2026-05-26T23:40:00+07:00
 
-- [x] Initialized original_prompt.md and BRIEFING.md.
-- [x] Read and inspect PROJECT.md in orchestrator.
-- [x] Formulate design for robust non-blocking file check and hashing.
-- [x] Write analysis.md with detailed report.
-- [x] Write handoff.md.
+- [x] Initialized original_prompt.md and BRIEFING.md
+- [x] Investigate FastAPI routers and main.py
+- [x] Investigate Telegram bot module / commands
+- [x] Design /scan_all command with background task and top setups broadcast format
+- [x] Write handoff.md and send_message back to orchestrator

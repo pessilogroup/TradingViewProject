@@ -1,43 +1,52 @@
-# Plan: TradingView Edge Node Ecosystem Evaluation
+# Plan - Automated "Scan All" Background Feature
 
-This plan outlines the steps, roles, and milestones to perform a comprehensive stability and safety evaluation of the TradingView Edge Node ecosystem.
+## Objectives
+Implement dynamic symbol discovery for active exchanges, execute unfiltered concurrent scanning with rate-limit protection, and expose `/api/scan/all` API endpoint and `/scan_all` Telegram bot command.
 
-## Cognitive Role: SRE | E-Factor: E4 (Critical)
-The evaluation requires testing under high concurrency, stress, failure states, network protocol connectivity (CDP on 9222), and asynchronous Telegram bot message coordinates.
+## Step-by-Step Execution Plan
 
-## Milestones
+### Step 1: Exploration and Feasibility Analysis
+- **Goal**: Understand how Weex Adapter, Binance Adapter, and Bybit Adapter retrieve active linear contracts.
+- **Details**:
+  - Locate API endpoints for each exchange (e.g. Weex: `/api/v2/contract/public/symbols`, Bybit: `/v5/market/instruments-info`, Binance: `/fapi/v1/exchangeInfo`).
+  - Analyze current scheduler configuration, API routing, and Telegram commands module.
+- **Verification**: Explorer produces a clear report showing required changes.
 
-### Milestone 1: Exploration & System State Audit
-- **Goal**: Verify current codebase hooks, test paths, and identify existing scripts or endpoints for Webhook, CDP, and Telegram.
-- **Tasks**:
-  1. Inspect `nerves/workers/trading/gateway/webhook.py` and `nerves/workers/trading/processor/signal_processor.py`.
-  2. Inspect `nerves/workers/trading/telegram_bot.py` and `nerves/workers/trading/hub/notification_hub.py`.
-  3. Locate existing tests under `nerves/workers/trading/tests/` that check rate limits, circuit breakers, CDP, and Telegram.
-- **Worker**: `teamwork_preview_explorer` (Explorer)
+### Step 2: Implement Dynamic Symbol Discovery
+- **Goal**: Implement methods to fetch linear futures contract symbols dynamically from Weex, Binance, and Bybit.
+- **Details**:
+  - Add/update methods in adapters to fetch active futures symbols.
+  - Implement a registry method or helper function to query all active exchanges for active linear contract list.
+  - Ensure Weex filtering uses `_UMCBL` suffix.
+- **Verification**: A unit test runs and returns list of symbols.
 
-### Milestone 2: Webhook Stability & Circuit Breaker Verification
-- **Goal**: Perform stress and boundary testing on the FastAPI webhook to verify concurrency, rate limiting, and circuit breaker isolation.
-- **Tasks**:
-  1. Verify rate limiting triggers HTTP 429 at 15 req/min and recovers automatically.
-  2. Verify unauthorized payloads are rejected (invalid price, format, token).
-  3. Verify timeframe circuit breaker isolates non-1H signals (rejections for 4H, 15m, D, etc.).
-- **Worker**: `teamwork_preview_worker` (Worker) & `teamwork_preview_challenger` (Challenger)
+### Step 3: Implement Concurrency and Rate-Limit Protecting Scanner
+- **Goal**: Scan 100+ active pairs concurrently without being rate-limited.
+- **Details**:
+  - Implement an async semaphore/queue to limit max concurrent requests.
+  - Add retry-with-exponential-backoff logic for handling `HTTP 429` (Rate Limited) errors.
+  - Integrate Trend Template and VCP scoring for each pair.
+- **Verification**: Scanner can scan a simulated large list of symbols without blocking or failing on rate limit.
 
-### Milestone 3: CDP & Telegram Hub Verification
-- **Goal**: Audit CDP browser automation connectivity and Telegram interactive approval flow return types.
-- **Tasks**:
-  1. Verify CDP connection on port 9222 and version JSON.
-  2. Audit `send_interactive_trade_approval` in `telegram_bot.py` to ensure it returns `List[Tuple[int, int]]` (coordinates) and not `bool` (SCAR-G2-001).
-  3. Verify approval callbacks map correctly to active signal trackers.
-- **Worker**: `teamwork_preview_worker` (Worker) & `teamwork_preview_challenger` (Challenger)
+### Step 4: Expose API Endpoint `/api/scan/all`
+- **Goal**: Expose an endpoint that triggers a full scan of all dynamic pairs.
+- **Details**:
+  - Add route `@app.get("/api/scan/all")` in `nerves/workers/trading/main.py` or separate router.
+  - Make sure scan results are ranked (e.g., VCP detected first, then by Trend Template score descending).
+- **Verification**: `GET /api/scan/all` returns valid JSON with ranked results.
 
-### Milestone 4: Forensic Audit & Synthesis
-- **Goal**: Perform independent verification of results, check integrity logs, and write the final report.
-- **Tasks**:
-  1. Review all testing logs and test runner output.
-  2. Run `teamwork_preview_auditor` to perform integrity checks.
-  3. Synthesize the findings and present the final report.
-- **Worker**: `teamwork_preview_reviewer` & `teamwork_preview_auditor`
+### Step 5: Implement Telegram Command `/scan_all`
+- **Goal**: Register and implement `/scan_all` Telegram command.
+- **Details**:
+  - Register `/scan_all` command in the Telegram bot.
+  - Command executes the scan in a background task (so the bot doesn't time out or block).
+  - Broadcast results to target chat ID(s) once complete (filtering for Trend Template score >= 6 or VCP detected).
+- **Verification**: Mock bot execution or log output shows Telegram broadcast payload contains correct setups.
 
-## Execution Path
-Explorer (Milestone 1) -> Worker (Milestone 2 & 3) -> Challenger (Stress/Adversarial validation) -> Reviewers -> Forensic Auditor -> Orchestrator Synthesis -> Done.
+### Step 6: End-to-End Verification and Auditing
+- **Goal**: Validate implementation correctness and run tests.
+- **Details**:
+  - Run the test suite.
+  - Verify that Weex futures contract pairs compute VCP/Trend Template scores correctly.
+  - Perform forensic integrity auditing.
+- **Verification**: All tests pass. Auditor reports CLEAN.

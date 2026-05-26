@@ -1,15 +1,13 @@
-# Progress Heartbeat
+# Progress
 
-- Last visited: 2026-05-20T21:36:02Z
-
-## Active Task
-Locating local and brain's `angati.exe` across App Data, UserProfile, and system paths.
-
-## Steps Completed
-- Created `original_prompt.md`, `BRIEFING.md`, and `progress.md`.
-- Searched workspace and found local `angati.exe` at `c:\Users\pesil\working\mj_trading\TradingViewProject\angati.exe`.
-- Searched parent directories and found main Brain `angati.exe` at `C:\Users\pesil\EAIS\test_scaffold\angati.exe`.
-- Analyzed daemon configuration and logs (`angati_stdout.log`, `adr_v9_era.md`).
-- Designed a Python helper file pattern for dynamic path retrieval using `pathlib` and environment variables.
-- Wrote and saved `analysis.md` report.
-- Wrote and saved `handoff.md` report.
+- Last visited: 2026-05-26T23:37:10+07:00
+- Initialized investigation.
+- Created `original_prompt.md` and `BRIEFING.md`.
+- Read and analyzed `weex_adapter.py`, `binance_adapter.py`, `bybit_adapter.py`, `registry.py`, and `base.py`.
+- Formulated paths, HTTP methods, and parameter requirements for dynamic symbol retrieval for each exchange:
+  - Weex: `GET /api/v2/contract/public/symbols` (suffix filtering for `_UMCBL` and status `"Trading"`).
+  - Bybit: `GET /v5/market/instruments-info` (category `"linear"`, status `"Trading"`).
+  - Binance: `GET /api/v3/exchangeInfo` (Spot) or `GET /fapi/v1/exchangeInfo` (Futures) (status `"TRADING"`, ends with `"USDT"`).
+- Analyzed existing functions (`get_symbol_info`) and unified interface availability (concluding a new method `get_active_linear_symbols` is required).
+- Written findings to `handoff.md`.
+- Ready to handoff to main orchestrator.

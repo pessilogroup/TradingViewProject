@@ -1,21 +1,24 @@
-# Project: TradingView Edge Node Ecosystem Evaluation
+# Project: Automated "Scan All" Background Feature
 
 ## Architecture
-- **FastAPI Webhook Node**: `nerves/workers/trading/gateway/webhook.py` handles TV indicator alerts, performing auth validation, IP whitelisting, rate-limiting, and schema validation.
-- **Signal Processor & Circuit Breakers**: `nerves/workers/trading/processor/signal_processor.py` validates timeframes. Live trades only allow 1H signals (60, 1h, 60m). All non-1H signals are isolated/rejected by the circuit breaker.
-- **TradingView CDP connection**: Port 9222. Connects to TradingView desktop app via Chrome DevTools Protocol to fetch version JSON and query indicator alerts/charts.
-- **Telegram Bot service**: `nerves/workers/trading/telegram_bot.py`. Handles alert notifications and interactive trade approvals. Must return correctly structured message coordinates `List[Tuple[int, int]]` (SCAR-G2-001).
+- Dynamic symbol retrieval from Weex, Binance, Bybit adapters using exchange-specific endpoints.
+- Unfiltered, rate-limit protected concurrent scanning of 100+ pairs.
+- FastAPI endpoint `/api/scan/all` exposing results ranked by VCP detection and Trend Template score.
+- Telegram Command `/scan_all` triggering background scanning and broadcasting top setups.
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | Exploration & Diagnostics | Find existing test coverage, review codebase hooks, check CDP capability, and verify Telegram bot structure | None | DONE |
-| 2 | Webhook Stability & Circuit Breaker Verification | Validate webhook concurrency, auth gate, 15 req/min rate limit (HTTP 429), and 1H circuit breaker isolation | M1 | DONE |
-| 3 | CDP & Telegram Hub Verification | Verify CDP JSON output on port 9222, verify Telegram bot return type compliance (SCAR-G2-001), check signal mapping | M2 | DONE |
-| 4 | Verification & Forensic Audit | Run Reviewers and Forensic Auditor to ensure clean verdict, check against SCAR codes | M3 | DONE |
+| 1 | Exploration & Architecture | Explore symbol retrieval APIs, scanner concurrency models, and Telegram bot handlers. | None | DONE |
+| 2 | Dynamic Symbol Discovery | Implement dynamic linear symbol listing for Weex, Binance, Bybit in exchange adapters and registry. | M1 | PLANNED |
+| 3 | Concurrency & Rate-limiting | Implement concurrent scanning logic with exponential back-off and queue management. | M2 | PLANNED |
+| 4 | FastAPI Endpoint | Implement GET /api/scan/all route returning ranked VCP and Trend Template scores. | M3 | PLANNED |
+| 5 | Telegram Command | Implement /scan_all command to trigger scanning in background and broadcast results. | M4 | PLANNED |
+| 6 | Testing & Audit | Add integration tests, run full test suite, perform Forensic Auditing. | M5 | PLANNED |
 
-## Interface & Safety Contracts
-- **Webhook Rate Limiting**: 15 requests per minute per IP. Hits HTTP 429 "Too Many Requests".
-- **Timeframe Circuit Breaker**: Only accepts intervals `60`, `1h`, or `60m`. Rejects `4h`, `15m`, `D`, etc.
-- **Telegram Approval Return Type**: `send_interactive_trade_approval` must return `List[Tuple[chat_id, message_id]]`. Under no circumstances should it return a `bool`.
-- **CDP Debug Connection**: Querying `http://localhost:9222/json/version` must return a valid JSON object matching the Chromium version info schema.
+## Interface Contracts
+### ExchangeAdapter ↔ Scanner
+- `async get_active_symbols() -> List[str]`: New interface method to list active linear futures contracts.
+- Weex adapter must return symbols ending in `_UMCBL`.
+- Binance adapter must return active USDT-M contracts.
+- Bybit adapter must return active USDT linear contracts.

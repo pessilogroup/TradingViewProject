@@ -1,0 +1,29 @@
+--- Ingestion Log ---
+Processing database: C:\Users\pesil\EAIS\memory\V3_brain.db
+Cleared old Weex memories. Rows deleted: 5
+Inserted L1 Memory for weex_spot_api.md (ID: 7baa4f75-2ecf-4619-8593-36ec37edde03)
+Inserted L1 Memory for weex_contract_v2_api.md (ID: 2a937f9b-e36d-4654-90af-0ac2c3f01ff8)
+Inserted L1 Memory for weex_websocket.md (ID: b0631bec-4dee-4678-bc64-df36e4b053ab)
+Inserted L1 Memory for weex_signatures.md (ID: 33e3d1f1-b74b-4cea-8469-37697bc18a6c)
+Inserted L1 Memory for weex_quickstart_sandbox.md (ID: 61fbb03b-974b-44b6-9442-1144e1a69032)
+L1 Ingestion committed successfully.
+Verified L1 Memories: retrieved 5 entries:
+  ID: 7baa4f75-2ecf-4619-8593-36ec37edde03 | Summary: Weex Spot API reference including base URL, headers, order operations, and request/response examples. | TS: 2026-05-26 22:51:57
+  ID: 2a937f9b-e36d-4654-90af-0ac2c3f01ff8 | Summary: Weex Contract V2 API reference covering base URL, _UMCBL suffix, order operations, positions, and V2 migration changelog. | TS: 2026-05-26 22:51:59
+  ID: b0631bec-4dee-4678-bc64-df36e4b053ab | Summary: Weex WebSocket API specification outlining public tickers subscriptions, tickers payloads, and login authentication. | TS: 2026-05-26 22:52:00
+  ID: 33e3d1f1-b74b-4cea-8469-37697bc18a6c | Summary: Weex signature calculation mechanism details and executable Python hmac/hashlib/base64 code example. | TS: 2026-05-26 22:52:01
+  ID: 61fbb03b-974b-44b6-9442-1144e1a69032 | Summary: Weex Sandbox (Demo Mode) reference including sandbox URLs, demo keys rules, and mock assets matrix. | TS: 2026-05-26 22:52:03
+Processing database: c:\Users\pesil\working\mj_trading\TradingViewProject\memory\V3_brain.db
+Cleared old Weex memories. Rows deleted: 5
+Inserted L1 Memory for weex_spot_api.md (ID: fa0e4291-8097-4c10-b5a3-fd180b96a40d)
+Inserted L1 Memory for weex_contract_v2_api.md (ID: f4caa99f-1919-46f6-a833-c6af1780c5cd)
+Inserted L1 Memory for weex_websocket.md (ID: f526fd48-2bd5-48c2-918c-a40203572f5d)
+Inserted L1 Memory for weex_signatures.md (ID: dce0b999-994a-4b3e-873a-d7095ecf4e5a)
+Inserted L1 Memory for weex_quickstart_sandbox.md (ID: 0d1dc7ab-26ec-4acd-90e1-90fbfda88b70)
+L1 Ingestion committed successfully.
+Verified L1 Memories: retrieved 5 entries:
+  ID: fa0e4291-8097-4c10-b5a3-fd180b96a40d | Summary: Weex Spot API reference including base URL, headers, order operations, and request/response examples. | TS: 2026-05-26 22:52:05
+  ID: f4caa99f-1919-46f6-a833-c6af1780c5cd | Summary: Weex Contract V2 API reference covering base URL, _UMCBL suffix, order operations, positions, and V2 migration changelog. | TS: 2026-05-26 22:52:06
+  ID: f526fd48-2bd5-48c2-918c-a40203572f5d | Summary: Weex WebSocket API specification outlining public tickers subscriptions, tickers payloads, and login authentication. | TS: 2026-05-26 22:52:08
+  ID: dce0b999-994a-4b3e-873a-d7095ecf4e5a | Summary: Weex signature calculation mechanism details and executable Python hmac/hashlib/base64 code example. | TS: 2026-05-26 22:52:09
+  ID: 0d1dc7ab-26ec-4acd-90e1-90fbfda88b70 | Summary: Weex Sandbox (Demo Mode) reference including sandbox URLs, demo keys rules, and mock assets matrix. | TS: 2026-05-26 22:52:10

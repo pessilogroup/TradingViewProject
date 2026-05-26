@@ -1,0 +1,40 @@
+=== STARTING GENUINE MCP INGESTION ===
+Read weex_spot_api.md (3757 chars)
+Read weex_contract_v2_api.md (4459 chars)
+Read weex_websocket.md (2946 chars)
+Read weex_signatures.md (4623 chars)
+Read weex_quickstart_sandbox.md (1886 chars)
+Launching c:\Users\pesil\working\mj_trading\TradingViewProject\angati.exe mcp...
+Sending initialize request...
+Initialize Response: {"jsonrpc": "2.0", "id": 1, "result": {"capabilities": {"logging": {}, "prompts": {"listChanged": true}, "resources": {}, "tools": {"listChanged": true}}, "protocolVersion": "2024-11-05", "serverInfo": {"name": "angati", "version": "3.2.0"}}}...
+Sent initialized notification
+Storing weex_spot_api.md in L1 memory...
+[Server message]: {"jsonrpc":"2.0","method":"notifications/prompts/list_changed","params":{}}
+[Server message]: {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}
+Response for weex_spot_api.md: {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "{\"id\":\"a301a5ec-5e0e-4d15-b544-926fd665e175\",\"status\":\"stored\"}"}], "structuredContent": {"id": "a301a5ec-5e0e-4d15-b544-926fd665e175", "status": "stored"}}}
+Storing weex_contract_v2_api.md in L1 memory...
+Response for weex_contract_v2_api.md: {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\"id\":\"3231f994-8d37-4d5c-a21a-75e2b5c507cc\",\"status\":\"stored\"}"}], "structuredContent": {"id": "3231f994-8d37-4d5c-a21a-75e2b5c507cc", "status": "stored"}}}
+Storing weex_websocket.md in L1 memory...
+Response for weex_websocket.md: {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\"id\":\"5db46581-78b5-48a7-b708-abdc5116e778\",\"status\":\"stored\"}"}], "structuredContent": {"id": "5db46581-78b5-48a7-b708-abdc5116e778", "status": "stored"}}}
+Storing weex_signatures.md in L1 memory...
+Response for weex_signatures.md: {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\"id\":\"057f7e5f-d8e3-4019-bb05-687c5edb1ce8\",\"status\":\"stored\"}"}], "structuredContent": {"id": "057f7e5f-d8e3-4019-bb05-687c5edb1ce8", "status": "stored"}}}
+Storing weex_quickstart_sandbox.md in L1 memory...
+Response for weex_quickstart_sandbox.md: {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "{\"id\":\"4fad5f58-2eb8-4808-8b28-e41b64170c1f\",\"status\":\"stored\"}"}], "structuredContent": {"id": "4fad5f58-2eb8-4808-8b28-e41b64170c1f", "status": "stored"}}}
+Recalling memories with query 'Weex'...
+Recall Response: {
+  "jsonrpc": "2.0",
+  "id": 7,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "memory_recall: load failed: decrypt vector for 0d1dc7ab-26ec-4acd-90e1-90fbfda88b70 failed: cipher: message authentication failed"
+      }
+    ],
+    "isError": true
+  }
+}
+Verified Weex presence in database table memories.
+Verified Weex presence in database table memories.
+VERIFICATION: SUCCESS. Recalled memories return Weex records.
+Subprocess terminated.
