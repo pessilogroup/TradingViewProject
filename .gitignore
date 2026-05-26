@@ -1,16 +1,16 @@
 # Environment & secrets
-server/.env
+nerves/workers/trading/.env
 *.env
 # SEC-004 fix: .env.production must NOT be tracked — use .env.production.template instead
 # !.env.production  ← REMOVED: was re-including production env file in git
 !.env.example
-!server/.env.example
+!nerves/workers/trading/.env.example
 
 # Database
-server/trades.db
+nerves/workers/trading/trades.db
 
 # Python
-server/__pycache__/
+nerves/workers/trading/__pycache__/
 __pycache__/
 *.pyc
 
@@ -18,13 +18,13 @@ __pycache__/
 node_modules/
 
 # P5: ChromaDB vector database
-server/chroma_db/
+nerves/workers/trading/chroma_db/
 
 # P6: Runtime data (watchlist, screenshots, logs)
-server/watchlist.json
-server/screenshots/
-server/trades.log
-server/.venv
+nerves/workers/trading/watchlist.json
+nerves/workers/trading/screenshots/
+nerves/workers/trading/trades.log
+nerves/workers/trading/.venv
 
 # Docker runtime
 .env
@@ -43,3 +43,6 @@ refactor_styles.py
 
 # Kiro IDE
 .kiro/
+
+# Antigravity CLI local state
+.antigravitycli/
