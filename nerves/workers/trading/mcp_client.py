@@ -220,11 +220,38 @@ class MCPClient:
         save_path: Optional[Path] = None,
         active_only: bool = False,
         crop: bool = True,
+        drawings: Optional[list] = None,
+        strategy_table: Optional[dict] = None,
     ) -> Optional[Path]:
         """
         Capture chart screenshot, then auto-crop to chart area.
-        Returns path to saved PNG file, or None on failure.
+        Uses fast local rendering (lightweight-charts/mplfinance) or daemon by default,
+        and falls back to legacy subprocess mode on failure.
         """
+        # Try fast local/daemon capture first
+        try:
+            from capture_client import get_capture_client
+            client = get_capture_client()
+            
+            # Map "active" to default symbol/timeframe if local native rendering is resolved
+            target_symbol = symbol if symbol != "active" else "BTCUSDT"
+            target_timeframe = timeframe if timeframe != "active" else "1h"
+            
+            res = await client.capture_screenshot(
+                symbol=target_symbol,
+                timeframe=target_timeframe,
+                region=region,
+                crop=crop,
+                save_path=save_path,
+                drawings=drawings,
+                strategy_table=strategy_table
+            )
+            if res.success and res.file_path:
+                return Path(res.file_path)
+            logger.warning(f"Fast capture client returned success=False ({res.error}), falling back to legacy subprocess...")
+        except Exception as e:
+            logger.warning(f"Fast capture client failed: {e}. Falling back to legacy subprocess...")
+
         try:
             if not active_only:
                 if symbol != "active": await self._run("symbol", symbol)

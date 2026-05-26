@@ -125,6 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_indicator_signals_symbol ON indicator_signals(sym
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_name   ON indicator_signals(indicator_name);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_type   ON indicator_signals(signal_type);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(created_at);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -306,3 +311,29 @@ def cleanup_expired_auth_codes() -> int:
         return cursor.rowcount
     finally:
         conn.close()
+
+
+async def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Get a setting value asynchronously."""
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else default
+    except Exception as e:
+        log.warning(f"Failed to get setting {key}: {e}")
+        return default
+
+
+async def set_setting(key: str, value: str) -> None:
+    """Set a setting value asynchronously."""
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, value)
+            )
+            await db.commit()
+    except Exception as e:
+        log.warning(f"Failed to set setting {key} to {value}: {e}")
+

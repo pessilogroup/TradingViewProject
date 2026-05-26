@@ -32,6 +32,9 @@ class BinanceAdapter:
     async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
         return await self._client.get_symbol_info(symbol)
 
+    async def get_active_symbols(self) -> List[str]:
+        return await self._client.get_active_symbols()
+
     async def place_market_order(self, symbol: str, side: str, quote_qty: Optional[float] = None, base_qty: Optional[float] = None) -> Dict[str, Any]:
         return await self._client.place_market_order(symbol, side, quote_qty, base_qty)
 

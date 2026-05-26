@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TradingView Lightweight Chart Export</title>
+    <!-- Use standard CDN; if it fails, the python fallback will handle the screenshot rendering -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #131722;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        #chart-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        #strategy-table-overlay {
+            position: absolute;
+            top: 20px;
+            right: 120px; /* Leave room for price scale */
+            background-color: rgba(30, 34, 45, 0.9);
+            border: 1px solid #2a2e39;
+            border-radius: 6px;
+            padding: 10px 14px;
+            color: #b2b5be;
+            font-size: 11px;
+            font-family: monospace;
+            z-index: 100;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            display: none;
+            pointer-events: none;
+        }
+        #strategy-table-overlay h4 {
+            margin: 0 0 6px 0;
+            color: #ffffff;
+            font-size: 12px;
+            border-bottom: 1px solid #2a2e39;
+            padding-bottom: 4px;
+        }
+        #strategy-table-overlay table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        #strategy-table-overlay td {
+            padding: 2px 0;
+        }
+        #strategy-table-overlay td.value {
+            text-align: right;
+            padding-left: 15px;
+            color: #ffffff;
+            font-weight: bold;
+        }
+        #title-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffffff;
+            z-index: 100;
+            font-size: 18px;
+            font-weight: bold;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="title-overlay">BTCUSDT 1h</div>
+    <div id="strategy-table-overlay">
+        <h4 id="table-title">Strategy Specs</h4>
+        <table id="table-body"></table>
+    </div>
+    <div id="chart-container"></div>
+
+    <script>
+        window.renderChart = function(chartData) {
+            try {
+                const container = document.getElementById('chart-container');
+                container.innerHTML = ''; // clear
+
+                const symbol = chartData.symbol || 'BTCUSDT';
+                const timeframe = chartData.timeframe || '1h';
+                document.getElementById('title-overlay').innerText = `${symbol} ${timeframe}`;
+
+                // 1. Create Chart
+                const chart = LightweightCharts.createChart(container, {
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                    layout: {
+                        background: { type: 'solid', color: '#131722' },
+                        textColor: '#b2b5be',
+                        fontSize: 12,
+                    },
+                    grid: {
+                        vertLines: { color: '#2a2e39' },
+                        horzLines: { color: '#2a2e39' },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#2a2e39',
+                        autoScale: true,
+                    },
+                    timeScale: {
+                        borderColor: '#2a2e39',
+                        timeVisible: true,
+                        secondsVisible: false,
+                    },
+                });
+
+                // 2. Add Candlestick Series
+                const candleSeries = chart.addCandlestickSeries({
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                });
+
+                // Convert timestamps if they are integer ms
+                const candles = chartData.ohlcv.map(c => {
+                    let timeVal;
+                    if (Array.isArray(c)) {
+                        // [timestamp, open, high, low, close, volume]
+                        timeVal = c[0];
+                        return {
+                            time: typeof timeVal === 'number' ? timeVal / 1000 : timeVal,
+                            open: parseFloat(c[1]),
+                            high: parseFloat(c[2]),
+                            low: parseFloat(c[3]),
+                            close: parseFloat(c[4]),
+                            volume: c[5] ? parseFloat(c[5]) : 0
+                        };
+                    } else {
+                        timeVal = c.time || c.timestamp;
+                        return {
+                            time: typeof timeVal === 'number' ? timeVal / 1000 : timeVal,
+                            open: parseFloat(c.open),
+                            high: parseFloat(c.high),
+                            low: parseFloat(c.low),
+                            close: parseFloat(c.close),
+                            volume: c.volume ? parseFloat(c.volume) : 0
+                        };
+                    }
+                });
+
+                // Sort candles chronologically
+                candles.sort((a, b) => a.time - b.time);
+
+                candleSeries.setData(candles.map(c => ({
+                    time: c.time,
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close
+                })));
+
+                // 3. Add Volume Series (Panel below)
+                const volumeSeries = chart.addHistogramSeries({
+                    color: '#26a69a',
+                    priceFormat: {
+                        type: 'volume',
+                    },
+                    priceScaleId: '', // Overlay volume on the main pane but separate scale
+                });
+                
+                // Position volume histogram in bottom 25% of the chart
+                chart.priceScale('').applyOptions({
+                    scaleMargins: {
+                        top: 0.75,
+                        bottom: 0,
+                    },
+                });
+
+                volumeSeries.setData(candles.map(c => ({
+                    time: c.time,
+                    value: c.volume,
+                    color: c.close >= c.open ? '#26a69a' : '#ef5350'
+                })));
+
+                // 4. Calculate and Add EMAs/SMAs
+                if (candles.length >= 20) {
+                    const emaData = calculateEMA(candles, 20);
+                    const emaLine = chart.addLineSeries({
+                        color: '#2962ff',
+                        lineWidth: 1.5,
+                        title: 'EMA 20',
+                    });
+                    emaLine.setData(emaData);
+                }
+                if (candles.length >= 50) {
+                    const smaData = calculateSMA(candles, 50);
+                    const smaLine = chart.addLineSeries({
+                        color: '#ff9800',
+                        lineWidth: 1.5,
+                        title: 'SMA 50',
+                    });
+                    smaLine.setData(smaData);
+                }
+
+                // 5. Add Horizontal Price Lines (Entry, SL, TP)
+                if (chartData.drawings && chartData.drawings.length > 0) {
+                    chartData.drawings.forEach(draw => {
+                        const price = parseFloat(draw.price);
+                        if (isNaN(price) || price <= 0) return;
+                        
+                        candleSeries.createPriceLine({
+                            price: price,
+                            color: draw.color || '#2962ff',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: draw.label || '',
+                        });
+                    });
+                }
+
+                // 6. Populate Strategy Table Overlay
+                if (chartData.strategy_table) {
+                    const tableOverlay = document.getElementById('strategy-table-overlay');
+                    const tableTitle = document.getElementById('table-title');
+                    const tableBody = document.getElementById('table-body');
+                    
+                    tableTitle.innerText = chartData.strategy_table.title || 'Strategy Specs';
+                    tableBody.innerHTML = '';
+                    
+                    if (chartData.strategy_table.rows && chartData.strategy_table.rows.length > 0) {
+                        chartData.strategy_table.rows.forEach(row => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `<td class="label">${row[0]}</td><td class="value">${row[1]}</td>`;
+                            tableBody.appendChild(tr);
+                        });
+                        tableOverlay.style.display = 'block';
+                    }
+                }
+
+                // Fit time scale
+                chart.timeScale().fitContent();
+
+                // Signal completion to Playwright
+                const marker = document.createElement('div');
+                marker.id = 'chart-loaded';
+                document.body.appendChild(marker);
+            } catch (err) {
+                console.error("Error rendering chart:", err);
+                const marker = document.createElement('div');
+                marker.id = 'chart-error';
+                marker.setAttribute('data-error', err.message);
+                document.body.appendChild(marker);
+            }
+        };
+
+        // Helper calculations
+        function calculateEMA(data, period) {
+            const k = 2 / (period + 1);
+            let emaVal = data[0].close;
+            const emaData = [{ time: data[0].time, value: emaVal }];
+            for (let i = 1; i < data.length; i++) {
+                emaVal = data[i].close * k + emaVal * (1 - k);
+                emaData.append ? emaData.push({ time: data[i].time, value: emaVal }) : emaData.push({ time: data[i].time, value: emaVal });
+            }
+            return emaData;
+        }
+
+        function calculateSMA(data, period) {
+            const smaData = [];
+            for (let i = period - 1; i < data.length; i++) {
+                let sum = 0;
+                for (let j = 0; j < period; j++) {
+                    sum += data[i - j].close;
+                }
+                smaData.push({ time: data[i].time, value: sum / period });
+            }
+            return smaData;
+        }
+    </script>
+</body>
+</html>

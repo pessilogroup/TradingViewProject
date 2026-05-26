@@ -95,20 +95,20 @@ def test_client_initial_state():
 
 @pytest.mark.asyncio
 async def test_client_fallback_on_daemon_down():
-    """When daemon is unavailable, client should use fallback."""
+    """When daemon is unavailable, client should use local rendering fallback."""
     from capture_client import PythonCaptureClient, CaptureResult
 
     client = PythonCaptureClient(host="127.0.0.1", port=19999)
     client._daemon_available = False
     client._last_check_time = time.monotonic()
 
-    # Mock fallback to avoid real subprocess
-    mock_result = CaptureResult(success=True, method="fallback", latency_ms=5000)
-    client._fallback_capture = AsyncMock(return_value=mock_result)
+    # Mock local capture fallback to avoid real subprocess/Playwright/mplfinance call
+    mock_result = CaptureResult(success=True, method="local-charts", latency_ms=5000)
+    client._local_capture = AsyncMock(return_value=mock_result)
 
     result = await client.capture_screenshot(symbol="BTCUSDT")
-    assert result.method == "fallback"
-    client._fallback_capture.assert_called_once()
+    assert result.method == "local-charts"
+    client._local_capture.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -134,8 +134,8 @@ async def test_client_batch_result_count():
     client._daemon_available = False
     client._last_check_time = time.monotonic()
 
-    mock_result = CaptureResult(success=True, method="fallback", latency_ms=100)
-    client._fallback_capture = AsyncMock(return_value=mock_result)
+    mock_result = CaptureResult(success=True, method="local-charts", latency_ms=100)
+    client._local_capture = AsyncMock(return_value=mock_result)
 
     symbols = [
         {"symbol": "BTCUSDT", "timeframe": "D"},

@@ -127,6 +127,23 @@ class BybitAdapter:
         data = await self._request("GET", "/v5/market/instruments-info", {"category": "spot", "symbol": symbol})
         return data.get("result", {}).get("list", [{}])[0]
 
+    async def get_active_symbols(self) -> List[str]:
+        if self.dry_run:
+            return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
+        try:
+            data = await self._request("GET", "/v5/market/instruments-info", {"category": "spot"})
+            instruments = data.get("result", {}).get("list", [])
+            active_symbols = []
+            for inst in instruments:
+                sym = inst.get("symbol", "")
+                status = inst.get("status", "")
+                if sym.endswith("USDT") and status.upper() == "TRADING":
+                    active_symbols.append(sym)
+            return active_symbols
+        except Exception as e:
+            log.error(f"Error fetching active symbols from Bybit: {e}")
+            return ["BTCUSDT", "ETHUSDT"]
+
     async def place_market_order(self, symbol: str, side: str, quote_qty: Optional[float] = None, base_qty: Optional[float] = None) -> Dict[str, Any]:
         params = {
             "category": "spot",

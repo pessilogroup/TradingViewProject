@@ -120,6 +120,28 @@ class BinanceClient:
                     return symbols[0]
                 raise Exception(f"Symbol {symbol} not found on Binance")
 
+    async def get_active_symbols(self) -> list[str]:
+        """Get active trading symbols ending with USDT."""
+        if self.dry_run:
+            return ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.base_url}/api/v3/exchangeInfo"
+                async with session.get(url) as resp:
+                    data = await resp.json()
+                    symbols = data.get("symbols", [])
+                    active_symbols = []
+                    for s in symbols:
+                        sym = s.get("symbol", "")
+                        status = s.get("status", "")
+                        if sym.endswith("USDT") and status.upper() == "TRADING":
+                            active_symbols.append(sym)
+                    return active_symbols
+        except Exception as e:
+            log.error(f"Error fetching active symbols from Binance: {e}")
+            return ["BTCUSDT", "ETHUSDT"]
+
     # ═══ POSITION SIZING ═══════════════════════════════════════
 
     @staticmethod

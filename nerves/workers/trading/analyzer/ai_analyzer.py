@@ -120,37 +120,77 @@ async def process_validated_signal(event: SignalValidated) -> None:
     # ── Step 1: Screenshot + Vision AI ───────────────────────
     try:
         mcp = get_mcp_client()
-        health = await mcp.health_check()
-        if health.get("connected"):
-            ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
-            save_path = Path(__file__).parent.parent / "screenshots" / f"stealth_{safe_symbol}_{ts_str}.png"
+        
+        # Build drawings and strategy table parameters for fast rendering
+        drawings = []
+        if event.price is not None:
+            drawings.append({"price": event.price, "label": f"Entry ({event.price:.2f})", "color": "#26a69a"})
+        try:
+            if event.sl:
+                drawings.append({"price": float(event.sl), "label": f"SL ({float(event.sl):.2f})", "color": "#ef5350"})
+        except (ValueError, TypeError):
+            pass
+        try:
+            if event.tp:
+                drawings.append({"price": float(event.tp), "label": f"TP ({float(event.tp):.2f})", "color": "#2962ff"})
+        except (ValueError, TypeError):
+            pass
 
-            screenshot_path = await mcp.capture_screenshot(
-                symbol="active",
-                timeframe="active",
-                region="chart",
-                save_path=save_path,
-                active_only=True,
-                crop=True,
+        rows = []
+        if event.action:
+            rows.append(("Action", event.action.upper()))
+        if event.price is not None:
+            rows.append(("Entry Price", f"{event.price:.2f}"))
+        try:
+            if event.sl:
+                rows.append(("Stop Loss", f"{float(event.sl):.2f}"))
+        except (ValueError, TypeError):
+            pass
+        try:
+            if event.tp:
+                rows.append(("Take Profit", f"{float(event.tp):.2f}"))
+        except (ValueError, TypeError):
+            pass
+
+        strategy_table = None
+        if rows:
+            strategy_table = {
+                "title": f"{symbol} Setup",
+                "rows": rows
+            }
+
+        ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+        save_path = Path(__file__).parent.parent / "screenshots" / f"stealth_{safe_symbol}_{ts_str}.png"
+
+        screenshot_path = await mcp.capture_screenshot(
+            symbol=symbol,
+            timeframe="1h",
+            region="chart",
+            save_path=save_path,
+            active_only=False,  # Specific symbol rendering is preferred
+            crop=True,
+            drawings=drawings,
+            strategy_table=strategy_table
+        )
+
+        if screenshot_path and Path(screenshot_path).exists():
+            vision_result = await vision_module.analyze_chart_vision(
+                image_path=Path(screenshot_path),
+                symbol=symbol,
             )
 
-            if screenshot_path and Path(screenshot_path).exists():
-                vision_result = await vision_module.analyze_chart_vision(
-                    image_path=Path(screenshot_path),
-                    symbol=symbol,
-                )
-
-                if not vision_result.get("error"):
-                    analysis_text += "👁️ **VISION AI:**\n" + vision_result.get("analysis", "") + "\n\n"
-                    # v6.0: Use vision confidence directly (1-10 scale)
-                    confidence = vision_result.get("confidence", 5)
-                else:
-                    analysis_text += f"❌ Vision Error: {vision_result['error']}\n\n"
-                    confidence = 3  # Error → low confidence
+            if not vision_result.get("error"):
+                analysis_text += "👁️ **VISION AI:**\n" + vision_result.get("analysis", "") + "\n\n"
+                # v6.0: Use vision confidence directly (1-10 scale)
+                confidence = vision_result.get("confidence", 5)
+            else:
+                analysis_text += f"❌ Vision Error: {vision_result['error']}\n\n"
+                confidence = 3  # Error → low confidence
         else:
-            log.warning("AIAnalyzer: MCP not connected, skipping Vision AI.")
-            analysis_text += "⚠️ TradingView MCP chưa kết nối. Bỏ qua phân tích hình ảnh.\n\n"
+            log.warning("AIAnalyzer: Screenshot capture failed or not found, skipping Vision AI.")
+            analysis_text += "⚠️ Không thể chụp ảnh biểu đồ. Bỏ qua phân tích hình ảnh.\n\n"
+            confidence = 5
 
     except Exception as e:
         log.error(f"AIAnalyzer: Vision capture failed: {e}")

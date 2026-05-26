@@ -580,3 +580,41 @@ async def test_negative_or_zero_qty_clamped_to_none():
         from core.event_bus import bus as default_bus
         set_bus(default_bus)
 
+
+@pytest.mark.asyncio
+async def test_weex_routing_success():
+    """Verify that Weex exchange events are correctly routed to the Weex adapter."""
+    from engine.trade_engine import execute_trade, set_bus
+
+    test_bus = EventBus()
+    set_bus(test_bus)
+    executed_events = []
+
+    @test_bus.on(TradeExecuted)
+    async def on_exec(event):
+        executed_events.append(event)
+
+    adapter = _make_adapter(exchange_id="weex")
+
+    try:
+        with patch("exchanges.router.get_router") as mock_get_router, \
+             patch("engine.trade_engine.database") as mock_db:
+
+            mock_router = MagicMock()
+            mock_router.resolve_exchange.return_value = adapter
+            mock_get_router.return_value = mock_router
+
+            mock_db.insert_trade = AsyncMock(return_value=30)
+            mock_db.update_trade_oco = AsyncMock()
+            mock_db.update_signal_status = AsyncMock()
+
+            await execute_trade(_make_event(exchange="weex", symbol="BTCUSDT", signal_id=300))
+
+            assert len(executed_events) == 1
+            assert executed_events[0].exchange == "weex"
+            assert executed_events[0].symbol == "BTCUSDT"
+    finally:
+        from core.event_bus import bus as default_bus
+        set_bus(default_bus)
+
+

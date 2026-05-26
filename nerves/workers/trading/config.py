@@ -30,6 +30,13 @@ BYBIT_API_SECRET   = os.getenv("BYBIT_API_SECRET", "")
 BYBIT_TESTNET      = os.getenv("BYBIT_TESTNET", "true").lower() == "true"
 BYBIT_DRY_RUN      = os.getenv("BYBIT_DRY_RUN", "true").lower() == "true"
 
+# Weex (Contract V2 USDT-M Linear Futures)
+WEEX_API_KEY       = os.getenv("WEEX_API_KEY", "")
+WEEX_API_SECRET    = os.getenv("WEEX_API_SECRET", "")
+WEEX_PASSPHRASE    = os.getenv("WEEX_PASSPHRASE", "")
+WEEX_TESTNET       = os.getenv("WEEX_TESTNET", "true").lower() == "true"
+WEEX_DRY_RUN       = os.getenv("WEEX_DRY_RUN", "true").lower() == "true"
+
 # Multi-Exchange Routing
 DEFAULT_EXCHANGE   = os.getenv("DEFAULT_EXCHANGE", "binance")
 STRATEGY_EXCHANGE_MAP = os.getenv("STRATEGY_EXCHANGE_MAP", "{}")  # JSON string e.g. '{"strategy_1": {"exchange": "bybit", "fallback": "binance"}}'
@@ -73,7 +80,7 @@ ENABLE_IP_WHITELIST = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true
 # Đường dẫn tới thư mục chứa các file chunk Markdown của Minervini
 KNOWLEDGE_DIR = os.getenv(
     "KNOWLEDGE_DIR",
-    str((Path(__file__).resolve().parent.parent / "docs" / "knowledge" / "trading_wizard" / "chunks").absolute())
+    str((Path(__file__).resolve().parent.parent.parent.parent / "docs" / "knowledge" / "trading_wizard" / "chunks").absolute())
 )
 
 # Đường dẫn lưu ChromaDB vector database (persistent trên disk)
@@ -153,6 +160,11 @@ CAPTURE_HOOKS = [h.strip() for h in os.getenv("CAPTURE_HOOKS", "on_signal").spli
 CAPTURE_SCHEDULE_CRON = os.getenv("CAPTURE_SCHEDULE_CRON", "*/15 9-16 * * 1-5")
 CAPTURE_BATCH_CONCURRENCY = int(os.getenv("CAPTURE_BATCH_CONCURRENCY", 1))
 CAPTURE_COOLDOWN_SEC = int(os.getenv("CAPTURE_COOLDOWN_SEC", "60"))
+
+# ── Chart Capture Configuration ──────────────────────────────────────────────
+CHART_CAPTURE_METHOD = os.getenv("CHART_CAPTURE_METHOD", "mplfinance").lower()
+CHART_CANDLES_COUNT = int(os.getenv("CHART_CANDLES_COUNT", "100"))
+CHART_CCXT_FALLBACK = os.getenv("CHART_CCXT_FALLBACK", "true").lower() == "true"
 
 # ── P7: Telegram Bot Interactive ─────────────────────────────────────────────
 # Bật/tắt interactive Telegram bot (polling mode, chạy song song với FastAPI)

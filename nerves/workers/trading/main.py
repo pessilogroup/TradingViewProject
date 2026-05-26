@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
         import threading
         
         # Add the nerves parent path to sys.path so hook_service can find local core
-        project_root = Path(__file__).resolve().parent.parent.parent
+        project_root = Path(__file__).resolve().parent.parent.parent.parent
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
         
