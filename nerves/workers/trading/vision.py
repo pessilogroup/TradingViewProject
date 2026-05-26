@@ -27,7 +27,7 @@ import logging
 import base64
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +82,41 @@ Trả lời NGẮN GỌN (dưới 250 từ), format Telegram-friendly.
 Bắt đầu bằng: 👁️ VISUAL ANALYSIS — {symbol}"""
 
 
+# ── Multi-Timeframe Vision Prompt ─────────────────────────────────────────
+
+VISION_MTF_SYSTEM_PROMPT = """Bạn là chuyên gia phân tích kỹ thuật theo phương pháp SEPA của Mark Minervini.
+Bạn đang nhìn vào 3 biểu đồ (Khung 1D, 4H, và 1H) của một cặp giao dịch crypto/cổ phiếu.
+
+Nhiệm vụ: Phân tích đa khung thời gian để tìm điểm đồng thuận xu hướng (Multi-Timeframe Alignment) và đề xuất lệnh mua/bán (Long/Short) cụ thể."""
+
+VISION_MTF_USER_PROMPT = """Phân tích đa khung thời gian cho {symbol}:
+- Ảnh 1: Khung ngày (1D)
+- Ảnh 2: Khung 4 giờ (4H)
+- Ảnh 3: Khung 1 giờ (1H)
+
+## DỮ LIỆU ĐỊNH LƯỢNG (từ scanner)
+{mtf_context}
+
+## YÊU CẦU PHÂN TÍCH
+Hãy phân tích sự liên kết xu hướng đa khung thời gian:
+1. **Xu hướng lớn (1D)**: Xu hướng chính đang ở Stage mấy? Cấu trúc kháng cự/hỗ trợ lớn.
+2. **Cấu trúc trung hạn (4H)**: Có mẫu hình VCP, Cup-with-Handle, hay tích lũy Base đi ngang không?
+3. **Điểm kích hoạt (1H)**: Điểm Pivot hay vùng nén giá chặt chẽ đã sẵn sàng breakout/breakdown chưa?
+4. **Quyết định lệnh (Trading Decision)**:
+   - **Tín hiệu**: LONG (Mua), SHORT (Bán khống) hoặc AVOID (Đứng ngoài).
+   - **Entry Price** (Giá vào): ...
+   - **Stop Loss** (Cắt lỗ): ...
+   - **Take Profit** (Chốt lời): ...
+   - **R:R Ratio** (Tỷ lệ R:R): ...
+5. **Visual Confidence Score** (1-10): Điểm tin cậy trực quan.
+
+## FORMAT TRẢ LỜI
+Trả lời bằng Tiếng Việt ngắn gọn, format Telegram-friendly (sử dụng tag HTML bold/code).
+Bắt đầu bằng: 👁️ MULTI-TIMEFRAME ANALYSIS — {symbol}"""
+
+
 def _encode_image(image_path: Path) -> Optional[str]:
+
     """Encode image to base64 for Claude Vision API."""
     try:
         with open(image_path, "rb") as f:
@@ -369,6 +403,218 @@ async def analyze_chart_vision(
 
     except Exception as e:
         log.error(f"Vision API error for {symbol}: {e}")
+        result["error"] = str(e)
+
+    return result
+
+
+async def analyze_chart_vision_mtf(
+    image_paths: List[Path],
+    symbol: str,
+    mtf_scan_result: dict = None,
+    model: str = "claude-sonnet-4-5",
+) -> dict:
+    """
+    Gửi 3 chart screenshots (1D, 4H, 1H) cho Claude/Gemini Vision để phân tích đa khung thời gian.
+    """
+    result = {
+        "symbol": symbol,
+        "analysis": "",
+        "confidence": 0,
+        "patterns": [],
+        "combined_score": "N/A",
+        "error": None,
+        "verdict": "",
+    }
+
+    provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
+
+    # Validate
+    if provider == "gemini":
+        has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
+        has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
+        if not (has_vertex or has_genai):
+            result["error"] = "Gemini API not available or configured"
+            return result
+    elif provider == "claude_cli":
+        pass
+    else:
+        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
+            result["error"] = "Anthropic API not available or configured"
+            return result
+
+    # Check images exist
+    valid_paths = [Path(p) for p in image_paths if Path(p).exists()]
+    if not valid_paths:
+        result["error"] = f"No valid images found from paths: {image_paths}"
+        return result
+
+    # Build prompt context
+    mtf_context_lines = []
+    if mtf_scan_result and "timeframes" in mtf_scan_result:
+        for tf, scan in mtf_scan_result["timeframes"].items():
+            if scan and not getattr(scan, 'error', None):
+                mtf_context_lines.append(
+                    f"Khung {tf.upper()}:\n"
+                    f"  - Price: {scan.price:,.2f}\n"
+                    f"  - Trend Template: {scan.trend_template.score}/8 ({scan.trend_template.stage})\n"
+                    f"  - VCP: {'Detected' if scan.vcp.detected else 'Not detected'} ({scan.vcp.note})"
+                )
+            elif scan:
+                mtf_context_lines.append(f"Khung {tf.upper()}: Lỗi scan ({scan.error})")
+    
+    mtf_context = "\n".join(mtf_context_lines) if mtf_context_lines else "Không có dữ liệu scanner."
+    user_prompt = VISION_MTF_USER_PROMPT.format(
+        symbol=symbol,
+        mtf_context=mtf_context,
+    )
+
+    try:
+        if provider == "gemini":
+            model_name = "gemini-2.5-pro" if model == "claude-sonnet-4-5" else "gemini-2.5-flash"
+            max_retries = 3
+            analysis_text = ""
+            
+            for attempt in range(max_retries):
+                try:
+                    has_vertex = getattr(config, "GCP_PROJECT_ID", None) and VERTEXAI_AVAILABLE
+                    has_genai  = getattr(config, "GEMINI_API_KEY", None) and GENAI_AVAILABLE
+
+                    _use_vertex = False
+                    if has_vertex:
+                        try:
+                            import google.auth
+                            google.auth.default()
+                            _use_vertex = True
+                        except Exception:
+                            pass
+
+                    if _use_vertex:
+                        import vertexai
+                        from vertexai.generative_models import GenerativeModel as VertexGenerativeModel, Part as VertexPart
+                        vertexai.init(project=config.GCP_PROJECT_ID, location=getattr(config, "GCP_LOCATION", "us-central1"))
+                        g_model = VertexGenerativeModel(model_name, system_instruction=VISION_MTF_SYSTEM_PROMPT)
+                        contents = [user_prompt]
+                        for path in valid_paths:
+                            contents.append(VertexPart.from_data(data=path.read_bytes(), mime_type=_get_media_type(path)))
+                        response = g_model.generate_content(contents)
+                        analysis_text = response.text
+                        break
+                    elif has_genai:
+                        from google import genai
+                        from google.genai import types as genai_types
+                        client = genai.Client(api_key=config.GEMINI_API_KEY)
+                        contents = [user_prompt]
+                        for path in valid_paths:
+                            contents.append(
+                                genai_types.Part.from_bytes(
+                                    data=path.read_bytes(),
+                                    mime_type=_get_media_type(path),
+                                )
+                            )
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=contents,
+                            config=genai_types.GenerateContentConfig(
+                                system_instruction=VISION_MTF_SYSTEM_PROMPT,
+                            ),
+                        )
+                        analysis_text = response.text
+                        break
+                    else:
+                        result["error"] = "No Gemini auth available."
+                        return result
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt
+                            await asyncio.sleep(wait_time)
+                            continue
+                    raise
+
+        elif provider == "claude_cli":
+            try:
+                import rag as _rag
+                cli_prompt = f"{VISION_MTF_SYSTEM_PROMPT}\n\n{user_prompt}"
+                # call with the first image, since CLI only takes one primary image
+                analysis_text = await _rag._call_claude_cli(
+                    cli_prompt, image_path=str(valid_paths[0].resolve())
+                )
+            except Exception as cli_err:
+                if (
+                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
+                    and ANTHROPIC_AVAILABLE
+                    and getattr(config, "ANTHROPIC_API_KEY", None)
+                ):
+                    provider = "anthropic"
+                else:
+                    result["error"] = f"Claude CLI error: {cli_err}"
+                    return result
+
+        if provider != "claude_cli" and provider != "gemini":
+            content_blocks = []
+            for path in valid_paths:
+                image_data = _encode_image(path)
+                if image_data:
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": _get_media_type(path),
+                            "data": image_data,
+                        },
+                    })
+            content_blocks.append({
+                "type": "text",
+                "text": user_prompt,
+            })
+
+            import anthropic
+            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+            message = client.messages.create(
+                model=model,
+                max_tokens=1000,
+                system=VISION_MTF_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": content_blocks}],
+            )
+            analysis_text = message.content[0].text
+
+        result["analysis"] = analysis_text
+        result["confidence"] = _parse_confidence(analysis_text)
+        result["patterns"] = _parse_patterns(analysis_text)
+
+        # Combined scoring logic for MTF
+        if mtf_scan_result and "timeframes" in mtf_scan_result:
+            scan_1d = mtf_scan_result["timeframes"].get("1d")
+            tt_score = scan_1d.trend_template.score if scan_1d and not getattr(scan_1d, 'error', None) else 0
+            vcp_algo = scan_1d.vcp.detected if scan_1d and not getattr(scan_1d, 'error', None) else False
+            visual_conf = result["confidence"]
+
+            algo_score = (tt_score / 8) * 10
+            combined = algo_score * 0.4 + visual_conf * 0.6 if visual_conf >= 9 else algo_score * 0.5 + visual_conf * 0.5
+            result["combined_score"] = f"{combined:.1f}/10"
+
+            is_long = "long" in analysis_text.lower() or "mua" in analysis_text.lower()
+            is_short = "short" in analysis_text.lower() or "bán" in analysis_text.lower()
+            is_avoid = "avoid" in analysis_text.lower() or "đứng ngoài" in analysis_text.lower() or "bỏ qua" in analysis_text.lower()
+
+            if is_avoid:
+                result["verdict"] = "🔴 AVOID — MTF Structure Neutral/Weak"
+            elif is_long and combined >= 6:
+                result["verdict"] = "🟢 STRONG LONG SETUP"
+            elif is_short and combined >= 6:
+                result["verdict"] = "🟣 STRONG SHORT SETUP"
+            else:
+                result["verdict"] = "🟡 WATCHLIST — Uncertain structure"
+        else:
+            result["combined_score"] = f"{result['confidence']}/10 (visual only)"
+            result["verdict"] = ""
+
+        log.info(f"Vision MTF: {symbol} analyzed — confidence {result['confidence']}/10")
+
+    except Exception as e:
+        log.error(f"Vision MTF API error for {symbol}: {e}")
         result["error"] = str(e)
 
     return result
