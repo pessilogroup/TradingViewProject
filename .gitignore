@@ -46,3 +46,7 @@ refactor_styles.py
 
 # Antigravity CLI local state
 .antigravitycli/
+
+# SQLite temp files
+*.db-shm
+*.db-wal
