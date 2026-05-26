@@ -88,3 +88,14 @@ def init_registry() -> None:
             dry_run=getattr(config, 'BYBIT_DRY_RUN', True)
         )
         _registry.register(bybit)
+
+    if getattr(config, 'WEEX_API_KEY', None) or getattr(config, 'WEEX_DRY_RUN', True):
+        from .weex_adapter import WeexAdapter
+        weex = WeexAdapter(
+            api_key=getattr(config, 'WEEX_API_KEY', ''),
+            api_secret=getattr(config, 'WEEX_API_SECRET', ''),
+            passphrase=getattr(config, 'WEEX_PASSPHRASE', ''),
+            testnet=getattr(config, 'WEEX_TESTNET', True),
+            dry_run=getattr(config, 'WEEX_DRY_RUN', True)
+        )
+        _registry.register(weex)

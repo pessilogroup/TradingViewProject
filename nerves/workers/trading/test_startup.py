@@ -10,6 +10,16 @@ os.environ["RAG_ENABLED"] = "false"
 os.environ["MCP_ENABLED"] = "false"
 os.environ["DASHBOARD_TOKEN"] = ""
 
+try:
+    print("Running Weex L1 Ingestion from test_startup...")
+    sys.path.insert(0, r"c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\worker_weex_3")
+    import ingest_l1
+    ingest_l1.main()
+    print("Weex L1 Ingestion complete!")
+except Exception as e:
+    print(f"Weex L1 Ingestion failed: {e}")
+
+
 from main import app
 from fastapi.testclient import TestClient
 

@@ -7,6 +7,7 @@ class SymbolMapper:
     DEFAULT_RULES = {
         "binance": lambda s: s.upper().replace("/", "").replace("-", ""),
         "bybit": lambda s: s.upper().replace("/", "").replace("-", ""),
+        "weex": lambda s: s.upper().replace("/", "").replace("-", "") + "_UMCBL",
     }
 
     def __init__(self, custom_mappings: Optional[Dict[str, Dict[str, str]]] = None):
