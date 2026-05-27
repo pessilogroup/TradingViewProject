@@ -229,3 +229,28 @@ async def test_telegram_cmd_recommend():
          report_text = mock_update.message.reply_text.call_args[0][0]
          assert "Gợi ý Đa Khung Thời Gian" in report_text
          assert "BTCUSDT" in report_text
+
+@pytest.mark.asyncio
+async def test_telegram_cmd_scan_mtf_empty_menu():
+    from telegram_bot import cmd_scan_mtf
+    
+    mock_update = AsyncMock()
+    mock_update.message = AsyncMock()
+    mock_update.message.reply_text = AsyncMock()
+    mock_update.callback_query = None
+    
+    mock_context = MagicMock()
+    mock_context.args = []
+    
+    mock_watchlist = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    
+    with patch("watchlist.get_watchlist", return_value=mock_watchlist):
+        await cmd_scan_mtf(mock_update, mock_context)
+        
+        mock_update.message.reply_text.assert_called_once()
+        text = mock_update.message.reply_text.call_args[0][0]
+        assert "Multi-Timeframe Scan Studio" in text
+        assert "Vui lòng chọn" in text
+        
+        kwargs = mock_update.message.reply_text.call_args[1]
+        assert "reply_markup" in kwargs

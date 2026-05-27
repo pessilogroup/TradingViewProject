@@ -13,8 +13,23 @@ def sanitize_for_telegram_html(text: str) -> str:
     if not text:
         return ""
         
+    # First, recursively unescape HTML entities to get raw HTML tags
+    # This prevents double-escaping if the AI model already returned escaped HTML tags (like &lt;b&gt;)
+    for _ in range(3):
+        new_text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        if new_text == text:
+            break
+        text = new_text
+
     # 1. Escape HTML special chars first
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    # Restore safe, valid Telegram HTML tags that might have been present in the input
+    text = text.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
+    text = text.replace('&lt;strong&gt;', '<strong>').replace('&lt;/strong&gt;', '</strong>')
+    text = text.replace('&lt;i&gt;', '<i>').replace('&lt;/i&gt;', '</i>')
+    text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
+    text = text.replace('&lt;pre&gt;', '<pre>').replace('&lt;/pre&gt;', '</pre>')
     
     # 2. Convert Bold: **text** -> <b>text</b>
     text = re.compile(r'\*\*(.*?)\*\*').sub(r'<b>\1</b>', text)

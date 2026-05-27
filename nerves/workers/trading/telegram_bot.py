@@ -924,12 +924,24 @@ def parse_mtf_trade_params(text: str, current_price: float) -> Tuple[Optional[fl
     import re
     entry, sl, tp = None, None, None
     side = "AVOID"
-    
     text_lower = text.lower()
-    if "long" in text_lower or "mua" in text_lower:
-        side = "BUY"
-    elif "short" in text_lower or "bán" in text_lower:
-        side = "SELL"
+
+    # Search for specific lines containing verdict/signal indicators
+    for line in text.splitlines():
+        line_lower = line.lower()
+        if any(kw in line_lower for kw in ["tín hiệu", "hành động", "decision", "verdict", "khuyến nghị"]):
+            if "short" in line_lower or "bán" in line_lower or "sell" in line_lower:
+                side = "SELL"
+                break
+            elif "long" in line_lower or "mua" in line_lower or "buy" in line_lower:
+                side = "BUY"
+                break
+    else:
+        # Fallback to general substring checking
+        if "short" in text_lower or "bán" in text_lower:
+            side = "SELL"
+        elif "long" in text_lower or "mua" in text_lower:
+            side = "BUY"
         
     num_pattern = r"[\d,]+(?:\.\d+)?"
     
@@ -966,19 +978,58 @@ async def cmd_scan_mtf(update, context):
     interactive buttons to execute.
     Usage: /scan_mtf <symbol> [exchange]
     """
-    if not context.args:
-        await update.message.reply_text(
-            "⚠️ Cần chỉ định symbol.\nVD: /scan_mtf <code>BTCUSDT</code> [exchange]",
-            parse_mode="HTML",
+    message = update.message if update.message else (update.callback_query.message if update.callback_query else None)
+    if not message:
+        return
+
+    args = context.args
+    if not args and update.callback_query:
+        data = update.callback_query.data
+        if data.startswith("scanmtf_"):
+            symbol = data.split("_", 1)[1].upper()
+            args = [symbol]
+
+    if not args:
+        # Show watchlist/recommended symbols menu
+        try:
+            from watchlist import get_watchlist
+            watchlist = get_watchlist()
+        except Exception:
+            watchlist = []
+            
+        if not watchlist:
+            import config
+            wl_str = getattr(config, "WATCHLIST_SYMBOLS", "")
+            if wl_str:
+                watchlist = [s.strip().upper() for s in wl_str.split(",") if s.strip()]
+                
+        if not watchlist:
+            watchlist = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
+            
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = []
+        for i in range(0, len(watchlist), 2):
+            row = []
+            row.append(InlineKeyboardButton(text=f"🔍 {watchlist[i]}", callback_data=f"scanmtf_{watchlist[i]}"))
+            if i + 1 < len(watchlist):
+                row.append(InlineKeyboardButton(text=f"🔍 {watchlist[i+1]}", callback_data=f"scanmtf_{watchlist[i+1]}"))
+            keyboard.append(row)
+            
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await message.reply_text(
+            "🔍 *Multi-Timeframe Scan Studio*\n\n"
+            "Vui lòng chọn một mã giao dịch từ danh sách dưới đây để bắt đầu phân tích đa khung thời gian (1D → 4H → 1H) bằng AI Vision:",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
         )
         return
 
-    symbol = context.args[0].strip().upper()
+    symbol = args[0].strip().upper()
     
     import config
-    exchange_name = context.args[1].strip().lower() if len(context.args) > 1 else config.DEFAULT_EXCHANGE.lower()
+    exchange_name = args[1].strip().lower() if len(args) > 1 else config.DEFAULT_EXCHANGE.lower()
     
-    progress_msg = await update.message.reply_text(
+    progress_msg = await message.reply_text(
         f"🔍 Đang tiến hành phân tích đa khung thời gian (1D → 4H → 1H) cho <code>{symbol}</code> trên sàn <code>{exchange_name}</code>...\n"
         f"1. Fetching klines & scoring Trend Template/VCP...",
         parse_mode="HTML"
@@ -1120,7 +1171,7 @@ async def cmd_scan_mtf(update, context):
             caption = f"📊 {symbol} Multi-Timeframe Charts (1D, 4H, 1H)" if i == 0 else None
             media_group.append(InputMediaPhoto(media=fh, caption=caption))
             
-        await update.message.reply_media_group(media=media_group)
+        await message.reply_media_group(media=media_group)
         for fh in file_handles:
             fh.close()
             
@@ -1141,7 +1192,22 @@ async def cmd_scan_mtf(update, context):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         from notifier import sanitize_for_telegram_html
-        formatted_analysis = sanitize_for_telegram_html(vision_result["analysis"])
+        import re
+        
+        clean_analysis = vision_result["analysis"].strip()
+        # Remove any leading header line starting with "👁️ MULTI-TIMEFRAME ANALYSIS" (case-insensitive) recursively
+        while True:
+            prev_len = len(clean_analysis)
+            clean_analysis = re.sub(
+                rf"^👁️?\s*(?:MULTI-TIMEFRAME\s+ANALYSIS|PHÂN\s+TÍCH\s+ĐA\s+KHUNG\s+THỜI\s+GIAN)\s*(?:[-—–:]\s*{re.escape(symbol)})?\s*\n*",
+                "",
+                clean_analysis,
+                flags=re.IGNORECASE
+            ).strip()
+            if len(clean_analysis) == prev_len:
+                break
+        
+        formatted_analysis = sanitize_for_telegram_html(clean_analysis)
         
         entry_str = f"{entry:,.4f}" if entry is not None else "N/A"
         sl_str = f"{sl:,.4f}" if sl is not None else "N/A"
@@ -1156,7 +1222,7 @@ async def cmd_scan_mtf(update, context):
             f"🏦 Sàn: <code>{exchange_name.upper()}</code>"
         )
         
-        sent_msg = await update.message.reply_text(
+        sent_msg = await message.reply_text(
             report_text,
             parse_mode="HTML",
             reply_markup=reply_markup
@@ -1315,6 +1381,9 @@ async def button_callback(update, context):
     elif data == "brief":
         await query.message.reply_text("🌅 Đang chạy Morning Brief... Vui lòng chờ 30-60s.")
         await cmd_brief_inline(query.message)
+
+    elif data.startswith("scanmtf_"):
+        await cmd_scan_mtf(update, context)
 
     elif data.startswith("analyze_"):
         # REQ4: Inline Vision Pipeline Shortcut from /scan results
