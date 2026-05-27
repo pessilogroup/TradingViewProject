@@ -1,0 +1,64 @@
+//@version=5
+// Strategy template detailing the webhook setup for:
+// - "A.007 + MIS v2 Combined (Auto Paper Trading)"
+// - "A.007 + MIS v1 Combined (Auto Paper Trading)"
+//
+// Designed to route alerts through a local reverse proxy tunnel to the Local Server's `/webhook` endpoint.
+strategy("A.007 + MIS Webhook Integration", overlay=true)
+
+// --- Strategy Inputs & Parameters ---
+useA007 = input.bool(true, "Enable A.007 Breakout Logic", group="Strategy Settings")
+useMIS  = input.bool(true, "Enable MIS Trend Filter", group="Strategy Settings")
+webhookSecret = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret", group="Webhook Settings", tooltip="Secret key to authorize webhook requests")
+confidenceScore = input.int(85, "Confidence Score (%)", minval=0, maxval=100, group="Strategy Settings")
+
+// --- Mock Trading Logic (Replace with actual strategy conditions) ---
+fastEMA = ta.ema(close, 20)
+slowEMA = ta.ema(close, 50)
+atrVal  = ta.atr(14)
+
+longCondition  = ta.crossover(fastEMA, slowEMA) and barstate.isconfirmed
+shortCondition = ta.crossunder(fastEMA, slowEMA) and barstate.isconfirmed
+
+longExitCondition  = ta.crossunder(close, fastEMA) and barstate.isconfirmed
+shortExitCondition = ta.crossover(close, fastEMA) and barstate.isconfirmed
+
+// --- Webhook Payload Generator Helper ---
+// Generates the strict JSON schema expected by the FastAPI WebhookGateway
+generate_payload(action, signal_type, direction) =>
+    payload = '{"secret":"' + webhookSecret + '"'
+    payload := payload + ',"source":"indicator"'
+    payload := payload + ',"indicator_name":"A.007 + MIS Combined"'
+    payload := payload + ',"symbol":"' + syminfo.ticker + '"'
+    payload := payload + ',"signal_type":"' + signal_type + '"'
+    payload := payload + ',"action":"' + action + '"'
+    payload := payload + ',"price":"' + str.tostring(close) + '"'
+    payload := payload + ',"interval":"' + timeframe.period + '"'
+    payload := payload + ',"exchange":"' + syminfo.prefix + '"'
+    payload := payload + ',"confidence_score":' + str.tostring(confidenceScore)
+    payload := payload + ',"metadata":{"direction":"' + direction + '"'
+    payload := payload + ',"atr_value":"' + str.tostring(atrVal) + '"}'
+    payload := payload + '}'
+    payload
+
+
+// --- Execution & Alert Dispatch ---
+if (longCondition)
+    strategy.entry("Long", strategy.long)
+    alert(generate_payload("buy", "entry", "long"), alert.freq_once_per_bar_close)
+
+if (shortCondition)
+    strategy.entry("Short", strategy.short)
+    alert(generate_payload("sell", "entry", "short"), alert.freq_once_per_bar_close)
+
+if (longExitCondition)
+    strategy.close("Long")
+    alert(generate_payload("sell", "exit", "long"), alert.freq_once_per_bar_close)
+
+if (shortExitCondition)
+    strategy.close("Short")
+    alert(generate_payload("buy", "exit", "short"), alert.freq_once_per_bar_close)
+
+// --- Visualization ---
+plotshape(longCondition,  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, title="Long Entry")
+plotshape(shortCondition, style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, title="Short Entry")
