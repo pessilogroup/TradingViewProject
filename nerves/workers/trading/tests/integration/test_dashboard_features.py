@@ -139,7 +139,7 @@ async def test_vision_capture_endpoint(client):
         assert data["has_screenshot"] is True
         assert "brief_id" in data
         mock_vision.assert_called_once()
-        mock_mcp.capture_screenshot.assert_called_once_with(symbol="BTCUSDT")
+        mock_mcp.capture_screenshot.assert_called_once_with(symbol="BTCUSDT", timeframe="1H")
 
 
 @pytest.mark.asyncio

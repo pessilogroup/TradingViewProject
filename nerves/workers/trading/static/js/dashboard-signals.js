@@ -315,13 +315,7 @@ function formatShortTime(ts) {
 }
 
 /* apiFetch: use existing global or fallback */
-async function apiFetch(url) {
-  const tok = localStorage.getItem('dashboard_token');
-  const headers = tok ? { 'Authorization': `Bearer ${tok}` } : {};
-  const r = await fetch(url, { headers });
-  if (!r.ok) return null;
-  return r.json();
-}
+// apiFetch is defined globally in dashboard-core.js. We don't overwrite it to avoid token key mismatches or missing POST options.
 
 /* ── Hook into switchTab ─────────────────────────────────────────── */
 (function patchSwitchTab() {

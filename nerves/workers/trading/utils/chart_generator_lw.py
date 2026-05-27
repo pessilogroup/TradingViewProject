@@ -14,6 +14,9 @@ async def generate_chart_lw(
     drawings: Optional[List[Dict[str, Any]]] = None,
     strategy_table: Optional[Dict[str, Any]] = None,
     save_path: Optional[Union[str, Path]] = None,
+    parent_timeframe: Optional[str] = None,
+    parent_ohlcv: Optional[Union[List[List[Any]], List[Dict[str, Any]]]] = None,
+    inset_position: str = "bottom-right",
 ) -> Path:
     """
     Renders a TradingView lightweight candlestick chart using Playwright headless browser.
@@ -29,6 +32,9 @@ async def generate_chart_lw(
         strategy_table: Optional dict for a side/overlay table metrics:
                         {"title": "SEPA Setup", "rows": [("Trend", "Bullish"), ("ATR", "4.2")]}
         save_path: Optional file path to save the PNG image.
+        parent_timeframe: Optional parent timeframe string
+        parent_ohlcv: Optional parent OHLCV data
+        inset_position: Position of inset chart ("bottom-right" or "top-left")
         
     Returns:
         Path object pointing to the generated PNG file.
@@ -52,13 +58,16 @@ async def generate_chart_lw(
     else:
         save_path = Path(save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-
+ 
     chart_payload = {
         "symbol": symbol,
         "timeframe": timeframe,
         "ohlcv": ohlcv_data,
         "drawings": drawings or [],
-        "strategy_table": strategy_table
+        "strategy_table": strategy_table,
+        "parent_timeframe": parent_timeframe,
+        "parent_ohlcv": parent_ohlcv,
+        "inset_position": inset_position
     }
 
     log.info(f"Launching Playwright to capture lightweight chart for {symbol}...")

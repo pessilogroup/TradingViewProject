@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minervini SEPA â€” Edge Node Dashboard</title>
-  <meta name="description" content="TradingView Webhook Edge Node â€” Pine V1/V2 Indicators, Quick Trade, Vision Capture">
+  <title>Minervini SEPA — Edge Node Dashboard</title>
+  <meta name="description" content="TradingView Webhook Edge Node — Pine V1/V2 Indicators, Quick Trade, Vision Capture">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/dashboard.css">
@@ -14,9 +14,9 @@
 <!-- LOGIN OVERLAY -->
 <div id="loginOverlay" class="login-overlay d-none" >
   <div class="login-box">
-    <div class="login-logo">âš¡</div>
+    <div class="login-logo">⚡</div>
     <h2>Edge Node Access</h2>
-    <p>Minervini SEPA â€” TradingView Bridge</p>
+    <p>Minervini SEPA — TradingView Bridge</p>
     <input type="password" id="loginToken" placeholder="Access Token" autocomplete="off">
     <button id="loginBtn" onclick="handleLogin()">Authenticate</button>
     <div id="loginError" class="login-error">Invalid token. Please try again.</div>
@@ -30,8 +30,8 @@
 <div id="orderModal" class="modal-overlay d-none" >
   <div class="modal-box">
     <div class="modal-header">
-      <span class="modal-title">âš¡ Äáº·t Lá»‡nh Nhanh</span>
-      <button class="modal-close" onclick="closeOrderModal()">âœ•</button>
+      <span class="modal-title">⚡ Đặt Lệnh Nhanh</span>
+      <button class="modal-close" onclick="closeOrderModal()">✕</button>
     </div>
     <div class="order-form">
       <div class="form-row">
@@ -46,11 +46,11 @@
         </div>
       </div>
       <div class="form-row">
-        <label>GiÃ¡ (USDT)</label>
+        <label>Giá (USDT)</label>
         <input id="orderPrice" type="number" placeholder="80000" class="form-input">
       </div>
       <div class="form-row">
-        <label>Sá»‘ lÆ°á»£ng</label>
+        <label>Số lượng</label>
         <input id="orderQty" type="number" placeholder="0.001" step="0.001" class="form-input">
       </div>
       <div class="form-row">
@@ -61,9 +61,9 @@
         <label>Take Profit</label>
         <input id="orderTP" type="number" placeholder="85000" class="form-input tp-input">
       </div>
-      <div id="rrDisplay" class="rr-display">R:R â€” / â€”</div>
+      <div id="rrDisplay" class="rr-display">R:R — / —</div>
       <button class="btn-submit-order" onclick="submitOrder()">
-        <span id="orderBtnText">âš¡ XÃ¡c nháº­n lá»‡nh</span>
+        <span id="orderBtnText">⚡ Xác nhận lệnh</span>
       </button>
     </div>
   </div>
@@ -73,13 +73,13 @@
 <div id="analysisModal" class="modal-overlay d-none" >
   <div class="modal-box modal-wide">
     <div class="modal-header">
-      <span class="modal-title">ðŸ§  AI Vision Analysis</span>
-      <button class="modal-close" onclick="document.getElementById('analysisModal').style.display='none'">âœ•</button>
+      <span class="modal-title">🧠 AI Vision Analysis</span>
+      <button class="modal-close" onclick="document.getElementById('analysisModal').style.display='none'">✕</button>
     </div>
     <div id="analysisContent" class="analysis-content">
       <div class="analysis-loading">
         <div class="spinner"></div>
-        <p>Äang phÃ¢n tÃ­ch chart...</p>
+        <p>Đang phân tích chart...</p>
       </div>
     </div>
   </div>
@@ -88,7 +88,7 @@
 <!-- HEADER -->
 <header class="header">
   <div class="header-left">
-    <div class="logo-mark">âš¡</div>
+    <div class="logo-mark">⚡</div>
     <div class="header-title">
       <h1>Minervini SEPA</h1>
       <span class="header-sub">TradingView Edge Node v7.6</span>
@@ -109,47 +109,47 @@
 <!-- QUICK ACTION BAR -->
 <div class="quick-bar">
   <button class="qbtn qbtn-trade" id="btnQuickOrder" onclick="openOrderModal()">
-    <span class="qbtn-icon">âš¡</span> Äáº·t Lá»‡nh
+    <span class="qbtn-icon">⚡</span> Đặt Lệnh
   </button>
   <button class="qbtn qbtn-vision" id="btnVision" onclick="triggerVisionCapture()">
-    <span class="qbtn-icon">ðŸ‘</span> Capture Chart
+    <span class="qbtn-icon">👁</span> Capture Chart
   </button>
   <button class="qbtn qbtn-brief" onclick="triggerBrief()">
-    <span class="qbtn-icon">ðŸŒ…</span> Morning Brief
+    <span class="qbtn-icon">🌅</span> Morning Brief
   </button>
   <button class="qbtn qbtn-scan" onclick="triggerScan()">
-    <span class="qbtn-icon">ðŸ”</span> Run Scan
+    <span class="qbtn-icon">🔍</span> Run Scan
   </button>
   <div class="quick-symbol">
     <span class="symbol-live" id="liveSymbol">BTCUSDT</span>
-    <span class="symbol-price" id="livePrice">â€”</span>
-    <span class="symbol-change" id="liveChange">â€”</span>
+    <span class="symbol-price" id="livePrice">—</span>
+    <span class="symbol-change" id="liveChange">—</span>
   </div>
 </div>
 
 <!-- TAB NAV -->
 <nav class="tab-nav">
-  <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">ðŸ  Overview</button>
-  <button class="tab-btn" data-tab="signals" onclick="switchTab('signals')">ðŸ“¡ Signals <span id="signalBadge" class="tab-badge">0</span></button>
-  <button class="tab-btn" data-tab="indicators" onclick="switchTab('indicators')">ðŸ“Š Chá»‰ BÃ¡o</button>
+  <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">🏠 Overview</button>
+  <button class="tab-btn" data-tab="signals" onclick="switchTab('signals')">📡 Signals <span id="signalBadge" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="indicators" onclick="switchTab('indicators')">📊 Chỉ Báo</button>
   <button class="tab-btn" data-tab="notifications" onclick="switchTab('notifications')">
-    ðŸ”” ThÃ´ng BÃ¡o <span id="notifBadge" class="tab-badge">0</span>
+    🔔 Thông Báo <span id="notifBadge" class="tab-badge">0</span>
   </button>
-  <button class="tab-btn" data-tab="analysis" onclick="switchTab('analysis')">ðŸ§  PhÃ¢n TÃ­ch</button>
-  <button class="tab-btn" data-tab="trade-analysis" onclick="switchTab('trade-analysis')">ðŸ“Š Analysis</button>
-  <button class="tab-btn" data-tab="scanner" onclick="switchTab('scanner')">ðŸ“‹ Scanner</button>
-  <button class="tab-btn" data-tab="status" onclick="switchTab('status')">âš¡ System</button>
+  <button class="tab-btn" data-tab="analysis" onclick="switchTab('analysis')">🧠 Phân Tích</button>
+  <button class="tab-btn" data-tab="trade-analysis" onclick="switchTab('trade-analysis')">📊 Analysis</button>
+  <button class="tab-btn" data-tab="scanner" onclick="switchTab('scanner')">📋 Scanner</button>
+  <button class="tab-btn" data-tab="status" onclick="switchTab('status')">⚡ System</button>
 </nav>
 
 <main class="container">
 
-  <!-- â•â•â• TAB: OVERVIEW â•â•â• -->
+  <!-- ═══ TAB: OVERVIEW ═══ -->
   <div id="tab-overview" class="tab-panel active">
 
-    <!-- â”€â”€ KPI STRIP â”€â”€ -->
+    <!-- ── KPI STRIP ── -->
     <div id="kpiGrid" class="kpi-grid"></div>
 
-    <!-- â”€â”€ MAIN 2-COL GRID â”€â”€ -->
+    <!-- ── MAIN 2-COL GRID ── -->
     <div class="overview-grid">
 
       <!-- LEFT COLUMN -->
@@ -158,29 +158,29 @@
         <!-- Live Market Ticker -->
         <section class="glass-section overview-ticker-section">
           <div class="section-header">
-            <div class="section-title">ðŸ“¡ Live Market</div>
+            <div class="section-title">📡 Live Market</div>
             <span class="live-dot-wrap"><span class="live-dot"></span> LIVE</span>
           </div>
           <div class="ticker-grid" id="tickerGrid">
             <div class="ticker-card" id="ticker-BTCUSDT">
               <div class="ticker-sym">BTCUSDT</div>
-              <div class="ticker-price" id="tp-BTCUSDT">â€”</div>
-              <div class="ticker-chg" id="tc-BTCUSDT">â€”</div>
+              <div class="ticker-price" id="tp-BTCUSDT">—</div>
+              <div class="ticker-chg" id="tc-BTCUSDT">—</div>
             </div>
             <div class="ticker-card" id="ticker-ETHUSDT">
               <div class="ticker-sym">ETHUSDT</div>
-              <div class="ticker-price" id="tp-ETHUSDT">â€”</div>
-              <div class="ticker-chg" id="tc-ETHUSDT">â€”</div>
+              <div class="ticker-price" id="tp-ETHUSDT">—</div>
+              <div class="ticker-chg" id="tc-ETHUSDT">—</div>
             </div>
             <div class="ticker-card" id="ticker-SOLUSDT">
               <div class="ticker-sym">SOLUSDT</div>
-              <div class="ticker-price" id="tp-SOLUSDT">â€”</div>
-              <div class="ticker-chg" id="tc-SOLUSDT">â€”</div>
+              <div class="ticker-price" id="tp-SOLUSDT">—</div>
+              <div class="ticker-chg" id="tc-SOLUSDT">—</div>
             </div>
             <div class="ticker-card" id="ticker-BNBUSDT">
               <div class="ticker-sym">BNBUSDT</div>
-              <div class="ticker-price" id="tp-BNBUSDT">â€”</div>
-              <div class="ticker-chg" id="tc-BNBUSDT">â€”</div>
+              <div class="ticker-price" id="tp-BNBUSDT">—</div>
+              <div class="ticker-chg" id="tc-BNBUSDT">—</div>
             </div>
           </div>
         </section>
@@ -188,7 +188,7 @@
         <!-- Equity Curve -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸ“ˆ Equity Curve</div>
+            <div class="section-title">📈 Equity Curve</div>
             <div class="flex-gap-6" >
               <button class="eq-range-btn active" onclick="setEquityRange('7d',this)">7D</button>
               <button class="eq-range-btn" onclick="setEquityRange('30d',this)">30D</button>
@@ -201,7 +201,7 @@
         <!-- Trade History -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸ“‹ Trade History</div>
+            <div class="section-title">📋 Trade History</div>
             <span id="tradeCount" class="muted-label"></span>
           </div>
           <div class="overflow-x-auto" >
@@ -224,25 +224,25 @@
 
         <!-- Quick Actions -->
         <section class="glass-section overview-actions-section">
-          <div class="section-title">âš¡ Quick Actions</div>
+          <div class="section-title">⚡ Quick Actions</div>
           <div class="action-grid">
             <button class="action-btn action-trade" onclick="openOrderModal()">
-              <span class="action-icon">âš¡</span>
-              <span class="action-label">Äáº·t Lá»‡nh</span>
+              <span class="action-icon">⚡</span>
+              <span class="action-label">Đặt Lệnh</span>
               <span class="action-sub">Market / Limit</span>
             </button>
             <button class="action-btn action-vision" onclick="triggerVisionCapture()">
-              <span class="action-icon">ðŸ‘</span>
+              <span class="action-icon">👁</span>
               <span class="action-label">Capture Chart</span>
               <span class="action-sub">Stealth + AI</span>
             </button>
             <button class="action-btn action-brief" onclick="triggerBrief()">
-              <span class="action-icon">ðŸŒ…</span>
+              <span class="action-icon">🌅</span>
               <span class="action-label">Morning Brief</span>
               <span class="action-sub">AI Scan All</span>
             </button>
             <button class="action-btn action-scan" onclick="triggerScan()">
-              <span class="action-icon">ðŸ”</span>
+              <span class="action-icon">🔍</span>
               <span class="action-label">Run Scanner</span>
               <span class="action-sub">SEPA Filter</span>
             </button>
@@ -252,8 +252,8 @@
         <!-- Recent Signals -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸ”” Recent Signals</div>
-            <button class="qbtn qbtn-scan btn-sm-1" onclick="loadNotifications()">â†»</button>
+            <div class="section-title">🔔 Recent Signals</div>
+            <button class="qbtn qbtn-scan btn-sm-1" onclick="loadNotifications()">↻</button>
           </div>
           <div id="overviewSignals" class="overview-signals-list">
             <div class="loading"><div class="spinner"></div></div>
@@ -263,12 +263,12 @@
         <!-- Last Vision Analysis -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸ§  Last AI Analysis</div>
+            <div class="section-title">🧠 Last AI Analysis</div>
             <button class="qbtn qbtn-vision btn-sm-1" onclick="triggerVisionCapture()">+ New</button>
           </div>
           <div id="overviewVision">
             <div class="empty-state p-24" >
-              <div class="icon">ðŸ‘</div>
+              <div class="icon">👁</div>
               <h3>No analysis yet</h3>
               <p>Capture a chart to start</p>
             </div>
@@ -277,7 +277,7 @@
 
         <!-- System Health Mini -->
         <section class="glass-section overview-health-section">
-          <div class="section-title">ðŸ–¥ System</div>
+          <div class="section-title">🖥 System</div>
           <div class="health-grid" id="overviewHealth">
             <div class="health-item">
               <span class="health-dot ok" id="hd-server"></span>
@@ -304,16 +304,16 @@
   </div>
 
 
-  <!-- â•â•â• TAB: SIGNALS (Indicator Signal Feed) â•â•â• -->
+  <!-- ═══ TAB: SIGNALS (Indicator Signal Feed) ═══ -->
   <div id="tab-signals" class="tab-panel">
 
-    <!-- â”€â”€ SIGNAL COMMAND BAR â”€â”€ -->
+    <!-- ── SIGNAL COMMAND BAR ── -->
     <div class="sig-command-bar">
       <div class="sig-brand">
-        <span class="sig-icon-pulse">ðŸ“¡</span>
+        <span class="sig-icon-pulse">📡</span>
         <div>
           <div class="sig-brand-title">Indicator Signal Feed</div>
-          <div class="sig-brand-sub">TradingView Pine Script â†’ ATR Risk Engine â†’ Sovereign Node</div>
+          <div class="sig-brand-sub">TradingView Pine Script → ATR Risk Engine → Sovereign Node</div>
         </div>
       </div>
       <div class="sig-filters">
@@ -334,64 +334,64 @@
           <label class="sig-label">Indicator</label>
           <input id="sigNameFilter" type="text" class="form-input sig-input-sm" placeholder="SuperTrend..." oninput="debounceLoadSignals()" title="Filter by indicator name">
         </div>
-        <button class="sig-refresh-btn" onclick="loadSignals()" title="Refresh signals">ðŸ”„ Refresh</button>
+        <button class="sig-refresh-btn" onclick="loadSignals()" title="Refresh signals">🔄 Refresh</button>
       </div>
     </div>
 
-    <!-- â”€â”€ KPI STRIP â”€â”€ -->
+    <!-- ── KPI STRIP ── -->
     <div class="sig-kpi-strip" id="sigKpiStrip">
       <div class="sig-kpi-card">
-        <div class="sig-kpi-icon">ðŸ“¡</div>
+        <div class="sig-kpi-icon">📡</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiTotal">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiTotal">—</div>
           <div class="sig-kpi-label">Total Signals</div>
         </div>
       </div>
       <div class="sig-kpi-card entry-kpi">
-        <div class="sig-kpi-icon">ðŸŸ¢</div>
+        <div class="sig-kpi-icon">🟢</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiEntry">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiEntry">—</div>
           <div class="sig-kpi-label">Entry</div>
         </div>
       </div>
       <div class="sig-kpi-card exit-kpi">
-        <div class="sig-kpi-icon">ðŸ”´</div>
+        <div class="sig-kpi-icon">🔴</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiExit">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiExit">—</div>
           <div class="sig-kpi-label">Exit</div>
         </div>
       </div>
       <div class="sig-kpi-card info-kpi">
-        <div class="sig-kpi-icon">ðŸ”µ</div>
+        <div class="sig-kpi-icon">🔵</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiInfo">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiInfo">—</div>
           <div class="sig-kpi-label">Info</div>
         </div>
       </div>
       <div class="sig-kpi-card urgent-kpi">
-        <div class="sig-kpi-icon">ðŸ”´</div>
+        <div class="sig-kpi-icon">🔴</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiUrgent">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiUrgent">—</div>
           <div class="sig-kpi-label">High Priority 24h</div>
         </div>
       </div>
       <div class="sig-kpi-card conf-kpi">
-        <div class="sig-kpi-icon">ðŸŽ¯</div>
+        <div class="sig-kpi-icon">🎯</div>
         <div class="sig-kpi-body">
-          <div class="sig-kpi-val" id="sigKpiConf">â€”</div>
+          <div class="sig-kpi-val" id="sigKpiConf">—</div>
           <div class="sig-kpi-label">Avg Confidence</div>
         </div>
       </div>
     </div>
 
-    <!-- â”€â”€ 2-COL LAYOUT â”€â”€ -->
+    <!-- ── 2-COL LAYOUT ── -->
     <div class="sig-workspace">
 
       <!-- LEFT: Signal Feed -->
       <div class="sig-feed-col">
         <section class="glass-section sig-feed-section">
           <div class="section-header">
-            <div class="section-title">ðŸ“‹ Signal Feed</div>
+            <div class="section-title">📋 Signal Feed</div>
             <span id="sigFeedCount" class="muted-label"></span>
           </div>
           <div id="sigFeedList" class="sig-feed-list">
@@ -407,7 +407,7 @@
         <!-- Confidence Distribution Chart -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸ“Š Signal Type Mix</div>
+            <div class="section-title">📊 Signal Type Mix</div>
             <span class="muted-label" id="sigChartLabel"></span>
           </div>
           <div class="sig-donut-wrap">
@@ -417,7 +417,7 @@
 
         <!-- Top Indicators -->
         <section class="glass-section">
-          <div class="section-title mb-12">ðŸ† Top Indicators</div>
+          <div class="section-title mb-12">🏆 Top Indicators</div>
           <div id="sigTopIndicators" class="sig-top-list">
             <div class="loading"><div class="spinner"></div></div>
           </div>
@@ -425,7 +425,7 @@
 
         <!-- Top Symbols -->
         <section class="glass-section">
-          <div class="section-title mb-12">ðŸ’¹ Active Symbols</div>
+          <div class="section-title mb-12">💹 Active Symbols</div>
           <div id="sigTopSymbols" class="sig-symbol-grid">
             <div class="loading"><div class="spinner"></div></div>
           </div>
@@ -433,7 +433,7 @@
 
         <!-- Live ATR Risk Panel (last entry signal) -->
         <section class="glass-section sig-risk-panel-hidden" id="sigRiskPanel">
-          <div class="section-title mb-12">âš¡ Last ATR Risk Params</div>
+          <div class="section-title mb-12">⚡ Last ATR Risk Params</div>
           <div class="sig-risk-grid" id="sigRiskGrid"></div>
         </section>
 
@@ -456,14 +456,14 @@
     <!-- Trend Template Score Card -->
     <div class="ind-grid">
       <div class="ind-card score-card" id="cardTrendScore">
-        <div class="ind-card-title">ðŸŽ¯ Trend Template Score</div>
+        <div class="ind-card-title">🎯 Trend Template Score</div>
         <div class="score-ring-wrap">
           <svg class="score-ring" viewBox="0 0 120 120">
             <circle class="ring-bg" cx="60" cy="60" r="50"/>
             <circle class="ring-fill" id="ringFill" cx="60" cy="60" r="50" stroke-dasharray="0 314"/>
           </svg>
           <div class="score-text">
-            <span id="scoreNum">â€”</span>
+            <span id="scoreNum">—</span>
             <small>/8</small>
           </div>
         </div>
@@ -471,21 +471,21 @@
       </div>
 
       <div class="ind-card" id="cardMAs">
-        <div class="ind-card-title">ðŸ“ˆ Moving Averages</div>
+        <div class="ind-card-title">📈 Moving Averages</div>
         <div class="ma-list" id="maList">
           <div class="loading"><div class="spinner"></div></div>
         </div>
       </div>
 
       <div class="ind-card" id="cardVCP">
-        <div class="ind-card-title">ðŸ”º VCP Signal</div>
+        <div class="ind-card-title">🔺 VCP Signal</div>
         <div id="vcpContent">
           <div class="loading"><div class="spinner"></div></div>
         </div>
       </div>
 
       <div class="ind-card" id="cardRS">
-        <div class="ind-card-title">ðŸ’ª Relative Strength</div>
+        <div class="ind-card-title">💪 Relative Strength</div>
         <div id="rsContent">
           <div class="loading"><div class="spinner"></div></div>
         </div>
@@ -494,7 +494,7 @@
 
     <!-- Trend Template Criteria Detail -->
     <section class="glass-section">
-      <div class="section-title">ðŸ“‹ 8 TiÃªu Chuáº©n Trend Template</div>
+      <div class="section-title">📋 8 Tiêu Chuẩn Trend Template</div>
       <div id="condGrid" class="cond-grid">
         <div class="loading"><div class="spinner"></div></div>
       </div>
@@ -502,10 +502,10 @@
 
     <!-- Pine Scripts List -->
     <section class="glass-section">
-      <div class="section-title">ðŸŒ² Pine Scripts</div>
+      <div class="section-title">🌲 Pine Scripts</div>
       <div class="pine-list" id="pineList">
         <div id="pine-v1-group" class="pine-group">
-          <div class="pine-group-label">V1 â€” Minervini Trend Template</div>
+          <div class="pine-group-label">V1 — Minervini Trend Template</div>
           <div class="pine-scripts-row">
             <div class="pine-chip active">indicator_MTT_v1.001</div>
             <div class="pine-chip">indicator_MTT_v1.005</div>
@@ -516,7 +516,7 @@
           </div>
         </div>
         <div id="pine-v2-group" class="pine-group d-none" >
-          <div class="pine-group-label">V2 â€” Minervini Strategy V2</div>
+          <div class="pine-group-label">V2 — Minervini Strategy V2</div>
           <div class="pine-scripts-row">
             <div class="pine-chip active">minervini_strategy</div>
           </div>
@@ -525,31 +525,31 @@
     </section>
   </div>
 
-  <!-- â•â•â• TAB: NOTIFICATIONS â•â•â• -->
+  <!-- ═══ TAB: NOTIFICATIONS ═══ -->
   <div id="tab-notifications" class="tab-panel">
     <div class="notif-toolbar">
       <select id="notifFilter" class="form-input w-160" onchange="filterNotifs()" title="Filter Notifications">
-        <option value="all">Táº¥t cáº£</option>
+        <option value="all">Tất cả</option>
         <option value="WEBHOOK">Webhook Alert</option>
-        <option value="TRADE">Lá»‡nh khá»›p</option>
+        <option value="TRADE">Lệnh khớp</option>
         <option value="VISION">Vision Capture</option>
         <option value="BRIEF">Morning Brief</option>
       </select>
-      <button class="qbtn qbtn-scan btn-sm-3" onclick="loadNotifications()">ðŸ”„ Refresh</button>
-      <button class="qbtn btn-danger-soft" onclick="clearNotifs()">ðŸ—‘ Clear All</button>
+      <button class="qbtn qbtn-scan btn-sm-3" onclick="loadNotifications()">🔄 Refresh</button>
+      <button class="qbtn btn-danger-soft" onclick="clearNotifs()">🗑 Clear All</button>
     </div>
     <div id="notifList" class="notif-list">
       <div class="loading"><div class="spinner"></div></div>
     </div>
   </div>
 
-  <!-- â•â•â• TAB: ANALYSIS (AI Vision Capture Studio) â•â•â• -->
+  <!-- ═══ TAB: ANALYSIS (AI Vision Capture Studio) ═══ -->
   <div id="tab-analysis" class="tab-panel">
 
-    <!-- â”€â”€ CONTROL BAR (horizontal, full-width) â”€â”€ -->
+    <!-- ── CONTROL BAR (horizontal, full-width) ── -->
     <div class="cs-control-bar">
       <div class="cs-brand">
-        <span class="capture-icon-pulse">ðŸ‘</span>
+        <span class="capture-icon-pulse">👁</span>
         <div>
           <div class="cs-brand-title">Stealth Capture Studio</div>
           <div class="cs-brand-sub">AI Vision Analysis Pipeline</div>
@@ -578,55 +578,69 @@
             <option value="W">1W</option>
           </select>
         </div>
+        <div class="cs-control-group">
+          <label class="cs-label">Chart phụ</label>
+          <select id="showParentChart" class="form-input cs-select-sm" title="Show Parent Inset Chart">
+            <option value="yes" selected>Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="cs-control-group">
+          <label class="cs-label">Vị trí</label>
+          <select id="insetPosition" class="form-input cs-select-sm" title="Inset Chart Position">
+            <option value="bottom-right" selected>Bottom-Right</option>
+            <option value="top-left">Top-Left</option>
+          </select>
+        </div>
         <button id="captureBtn" class="btn-capture" onclick="runStealthCapture()">
-          <span id="captureBtnIcon">ðŸ“¸</span>
+          <span id="captureBtnIcon">📸</span>
           <span id="captureBtnText">Capture + Analyze</span>
         </button>
       </div>
 
       <!-- Stats pills inline -->
       <div class="cs-stats-pills">
-        <div class="cs-pill"><span id="cstat-total">â€”</span><small>Total</small></div>
-        <div class="cs-pill"><span id="cstat-stealth">â€”</span><small>Stealth</small></div>
-        <div class="cs-pill accent"><span id="cstat-conf">â€”</span><small>Avg Conf</small></div>
-        <div class="cs-pill"><span id="cstat-last">â€”</span><small>Last</small></div>
+        <div class="cs-pill"><span id="cstat-total">—</span><small>Total</small></div>
+        <div class="cs-pill"><span id="cstat-stealth">—</span><small>Stealth</small></div>
+        <div class="cs-pill accent"><span id="cstat-conf">—</span><small>Avg Conf</small></div>
+        <div class="cs-pill"><span id="cstat-last">—</span><small>Last</small></div>
       </div>
     </div>
 
-    <!-- â”€â”€ PROGRESS PIPELINE â”€â”€ -->
+    <!-- ── PROGRESS PIPELINE ── -->
     <div id="captureProgress" class="cs-pipeline d-none" >
       <div class="cs-pipe-step" id="step-mcp">
-        <div class="cs-pipe-icon">ðŸ”Œ</div>
+        <div class="cs-pipe-icon">🔌</div>
         <div class="step-dot"></div>
         <div class="cs-pipe-label">CDP Connect</div>
       </div>
-      <div class="cs-pipe-arrow">â†’</div>
+      <div class="cs-pipe-arrow">→</div>
       <div class="cs-pipe-step" id="step-shot">
-        <div class="cs-pipe-icon">ðŸ“¸</div>
+        <div class="cs-pipe-icon">📸</div>
         <div class="step-dot"></div>
         <div class="cs-pipe-label">Screenshot</div>
       </div>
-      <div class="cs-pipe-arrow">â†’</div>
+      <div class="cs-pipe-arrow">→</div>
       <div class="cs-pipe-step" id="step-crop">
-        <div class="cs-pipe-icon">âœ‚ï¸</div>
+        <div class="cs-pipe-icon">✂️</div>
         <div class="step-dot"></div>
         <div class="cs-pipe-label">Auto-Crop</div>
       </div>
-      <div class="cs-pipe-arrow">â†’</div>
+      <div class="cs-pipe-arrow">→</div>
       <div class="cs-pipe-step" id="step-ai">
-        <div class="cs-pipe-icon">ðŸ§ </div>
+        <div class="cs-pipe-icon">🧠</div>
         <div class="step-dot"></div>
         <div class="cs-pipe-label">AI Vision</div>
       </div>
-      <div class="cs-pipe-arrow">â†’</div>
+      <div class="cs-pipe-arrow">→</div>
       <div class="cs-pipe-step" id="step-save">
-        <div class="cs-pipe-icon">ðŸ’¾</div>
+        <div class="cs-pipe-icon">💾</div>
         <div class="step-dot"></div>
         <div class="cs-pipe-label">Save + TG</div>
       </div>
     </div>
 
-    <!-- â”€â”€ MAIN WORKSPACE â”€â”€ -->
+    <!-- ── MAIN WORKSPACE ── -->
     <div class="cs-workspace">
 
       <!-- Left: Chart Canvas + Latest Result -->
@@ -635,7 +649,7 @@
         <div class="cs-chart-frame" id="csChartFrame">
           <div class="cs-chart-placeholder" id="csChartPlaceholder">
             <div class="cs-chart-watermark">
-              <span class="fs-3rem op-15" >ðŸ“ˆ</span>
+              <span class="fs-3rem op-15" >📈</span>
               <div class="op-30 fs-0_85rem mt-8" >Chart will appear after capture</div>
             </div>
           </div>
@@ -650,15 +664,15 @@
         <div class="cs-verdict-card d-none" id="csVerdictCard" >
           <div class="cs-verdict-row">
             <div>
-              <div class="cs-verdict-sym" id="csVerdictSym">â€”</div>
-              <div class="cs-verdict-val" id="csVerdictVal">â€”</div>
+              <div class="cs-verdict-sym" id="csVerdictSym">—</div>
+              <div class="cs-verdict-val" id="csVerdictVal">—</div>
             </div>
             <div class="cs-conf-ring">
               <svg viewBox="0 0 44 44" class="cs-conf-svg">
                 <circle cx="22" cy="22" r="18" class="cs-conf-bg"/>
                 <circle cx="22" cy="22" r="18" class="cs-conf-fill" id="csConfCircle" stroke-dasharray="0 113"/>
               </svg>
-              <div class="cs-conf-num" id="csConfNum">â€”</div>
+              <div class="cs-conf-num" id="csConfNum">—</div>
             </div>
           </div>
           <div class="cs-patterns" id="csPatterns"></div>
@@ -672,21 +686,21 @@
         <!-- Capture History -->
         <section class="glass-section cs-history-section">
           <div class="section-header">
-            <div class="section-title">ðŸŽž History</div>
+            <div class="section-title">🎞 History</div>
             <div class="flex-gap-6-center" >
               <select id="captureFilter" class="form-input w-110 fs-0_75rem" onchange="loadVisionHistory()" title="Filter Capture History">
                 <option value="all">All</option>
                 <option value="stealth">Stealth</option>
                 <option value="brief">Brief</option>
               </select>
-              <button class="qbtn qbtn-brief btn-sm-2" onclick="loadBriefs()">â†»</button>
+              <button class="qbtn qbtn-brief btn-sm-2" onclick="loadBriefs()">↻</button>
             </div>
           </div>
           <div id="visionHistory" class="cs-history-list">
             <div class="empty-state p-30-16" >
-              <div class="icon">ðŸ‘</div>
-              <h3>ChÆ°a cÃ³ phÃ¢n tÃ­ch</h3>
-              <p>Nháº¥n Capture + Analyze</p>
+              <div class="icon">👁</div>
+              <h3>Chưa có phân tích</h3>
+              <p>Nhấn Capture + Analyze</p>
             </div>
           </div>
         </section>
@@ -694,23 +708,23 @@
         <!-- Morning Brief -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">ðŸŒ… Morning Brief</div>
-            <button class="qbtn qbtn-brief btn-sm-2" onclick="triggerBrief()">â–¶ Run</button>
+            <div class="section-title">🌅 Morning Brief</div>
+            <button class="qbtn qbtn-brief btn-sm-2" onclick="triggerBrief()">▶ Run</button>
           </div>
           <div id="briefContent" class="brief-content max-h-180 overflow-y-auto" >
             <div class="empty-state p-16" >
-              <div class="icon fs-1_5rem" >ðŸŒ…</div>
-              <p class="fs-0_8rem" >Click Run Ä‘á»ƒ táº¡o</p>
+              <div class="icon fs-1_5rem" >🌅</div>
+              <p class="fs-0_8rem" >Click Run để tạo</p>
             </div>
           </div>
         </section>
 
         <!-- RAG Query -->
         <section class="glass-section">
-          <div class="section-title mb-10" >ðŸ“š RAG Query</div>
+          <div class="section-title mb-10" >📚 RAG Query</div>
           <div class="rag-search">
-            <input id="ragQuery" type="text" class="form-input flex-1 fs-0_8rem" placeholder="Há»i vá» SEPA, VCP..." >
-            <button class="qbtn qbtn-scan btn-sm-4" onclick="submitRagQuery()" >ðŸ”</button>
+            <input id="ragQuery" type="text" class="form-input flex-1 fs-0_8rem" placeholder="Hỏi về SEPA, VCP..." >
+            <button class="qbtn qbtn-scan btn-sm-4" onclick="submitRagQuery()" >🔍</button>
           </div>
           <div id="ragResults" class="rag-results"></div>
         </section>
@@ -726,13 +740,13 @@
   </div>
 
 
-  <!-- â•â•â• TAB: TRADE ANALYSIS â•â•â• -->
+  <!-- ═══ TAB: TRADE ANALYSIS ═══ -->
   <div id="tab-trade-analysis" class="tab-panel">
 
-    <!-- â”€â”€ FILTER BAR â”€â”€ -->
+    <!-- ── FILTER BAR ── -->
     <div class="ta-filter-bar">
       <div class="ta-filter-brand">
-        <span class="ta-icon-pulse">ðŸ“Š</span>
+        <span class="ta-icon-pulse">📊</span>
         <div>
           <div class="ta-brand-title">Trade Analysis</div>
           <div class="ta-brand-sub">Advanced Filtering & Performance Breakdown</div>
@@ -764,73 +778,73 @@
           </div>
         </div>
         <button class="ta-apply-btn" onclick="loadTradeAnalysis()">
-          <span>ðŸ”</span> Apply
+          <span>🔍</span> Apply
         </button>
       </div>
     </div>
 
-    <!-- â”€â”€ KPI SUMMARY â”€â”€ -->
+    <!-- ── KPI SUMMARY ── -->
     <div class="ta-kpi-grid" id="taKpiGrid">
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">ðŸŽ¯</div>
+        <div class="ta-kpi-icon">🎯</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiWinRate">â€”</div>
+          <div class="ta-kpi-val" id="taKpiWinRate">—</div>
           <div class="ta-kpi-label">Win Rate</div>
         </div>
       </div>
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">ðŸ’°</div>
+        <div class="ta-kpi-icon">💰</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiPnl">â€”</div>
+          <div class="ta-kpi-val" id="taKpiPnl">—</div>
           <div class="ta-kpi-label">Total P&L</div>
         </div>
       </div>
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">ðŸ“Š</div>
+        <div class="ta-kpi-icon">📊</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiTrades">â€”</div>
+          <div class="ta-kpi-val" id="taKpiTrades">—</div>
           <div class="ta-kpi-label">Trades</div>
         </div>
       </div>
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">âš¡</div>
+        <div class="ta-kpi-icon">⚡</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiPF">â€”</div>
+          <div class="ta-kpi-val" id="taKpiPF">—</div>
           <div class="ta-kpi-label">Profit Factor</div>
         </div>
       </div>
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">ðŸ†</div>
+        <div class="ta-kpi-icon">🏆</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiStreak">â€”</div>
+          <div class="ta-kpi-val" id="taKpiStreak">—</div>
           <div class="ta-kpi-label">Best Streak</div>
         </div>
       </div>
       <div class="ta-kpi-card">
-        <div class="ta-kpi-icon">ðŸ“ˆ</div>
+        <div class="ta-kpi-icon">📈</div>
         <div class="ta-kpi-body">
-          <div class="ta-kpi-val" id="taKpiAvgWin">â€”</div>
+          <div class="ta-kpi-val" id="taKpiAvgWin">—</div>
           <div class="ta-kpi-label">Avg Win</div>
         </div>
       </div>
     </div>
 
-    <!-- â”€â”€ CHARTS ROW â”€â”€ -->
+    <!-- ── CHARTS ROW ── -->
     <div class="ta-charts-row">
       <section class="glass-section ta-chart-section">
-        <div class="section-title">ðŸ“Š Win/Loss Distribution</div>
+        <div class="section-title">📊 Win/Loss Distribution</div>
         <div class="ta-chart-container"><canvas id="taWinLossChart"></canvas></div>
       </section>
       <section class="glass-section ta-chart-section">
-        <div class="section-title">ðŸ’¹ P&L per Trade</div>
+        <div class="section-title">💹 P&L per Trade</div>
         <div class="ta-chart-container"><canvas id="taPnlChart"></canvas></div>
       </section>
     </div>
 
-    <!-- â”€â”€ FILTERED TRADE TABLE â”€â”€ -->
+    <!-- ── FILTERED TRADE TABLE ── -->
     <section class="glass-section">
       <div class="section-header">
-        <div class="section-title">ðŸ“‹ Filtered Trades</div>
+        <div class="section-title">📋 Filtered Trades</div>
         <span id="taTradeCount" class="muted-label"></span>
       </div>
       <div class="overflow-x-auto">
@@ -842,7 +856,7 @@
             </tr>
           </thead>
           <tbody id="taTradesBody">
-            <tr><td colspan="9"><div class="empty-state"><div class="icon">ðŸ“Š</div><h3>Apply filters to load</h3></div></td></tr>
+            <tr><td colspan="9"><div class="empty-state"><div class="icon">📊</div><h3>Apply filters to load</h3></div></td></tr>
           </tbody>
         </table>
       </div>
@@ -852,12 +866,12 @@
   </div>
 
 
-  <!-- â•â•â• TAB: SCANNER â•â•â• -->
+  <!-- ═══ TAB: SCANNER ═══ -->
   <div id="tab-scanner" class="tab-panel">
     <section class="glass-section">
       <div class="section-header">
-        <div class="section-title">ðŸ“Š Watchlist Scan</div>
-        <button id="scanBtn" class="qbtn qbtn-scan" onclick="triggerScan()">ðŸ” Run Scan</button>
+        <div class="section-title">📊 Watchlist Scan</div>
+        <button id="scanBtn" class="qbtn qbtn-scan" onclick="triggerScan()">🔍 Run Scan</button>
       </div>
       <div id="scanStatus" class="muted-label mb-12" ></div>
       <div class="overflow-x-auto" >
@@ -869,14 +883,14 @@
             </tr>
           </thead>
           <tbody id="scanBody">
-            <tr><td colspan="8"><div class="empty-state"><div class="icon">ðŸ“Š</div><h3>No data</h3><p>Click "Run Scan"</p></div></td></tr>
+            <tr><td colspan="8"><div class="empty-state"><div class="icon">📊</div><h3>No data</h3><p>Click "Run Scan"</p></div></td></tr>
           </tbody>
         </table>
       </div>
     </section>
   </div>
 
-  <!-- â•â•â• TAB: SYSTEM â•â•â• -->
+  <!-- ═══ TAB: SYSTEM ═══ -->
   <div id="tab-status" class="tab-panel">
     <div id="statusGrid" class="status-grid">
       <div class="loading"><div class="spinner"></div></div>
@@ -885,7 +899,7 @@
     <!-- CDP Vision Status -->
     <section class="glass-section mt-20" >
       <div class="section-header">
-        <div class="section-title">ðŸ‘ Vision Capture Status</div>
+        <div class="section-title">👁 Vision Capture Status</div>
         <a href="http://127.0.0.1.nip.io:5000/daemon_dashboard" target="_blank" rel="noopener" class="qbtn qbtn-scan btn-sm-3 daemon-studio-link">🚀 Daemon Studio</a>
       </div>
       <div id="visionStatus" class="vision-status-grid">
@@ -896,8 +910,8 @@
     <!-- Webhook Log -->
     <section class="glass-section mt-20" >
       <div class="section-header">
-        <div class="section-title">ðŸ“¡ Webhook Log (Live)</div>
-        <button class="qbtn btn-sm-5" onclick="loadWebhookLog()">ðŸ”„ Refresh</button>
+        <div class="section-title">📡 Webhook Log (Live)</div>
+        <button class="qbtn btn-sm-5" onclick="loadWebhookLog()">🔄 Refresh</button>
       </div>
       <div id="webhookLog" class="webhook-log">
         <div class="loading"><div class="spinner"></div></div>

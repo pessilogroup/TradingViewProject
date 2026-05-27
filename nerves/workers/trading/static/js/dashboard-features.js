@@ -191,9 +191,12 @@ async function runStealthCapture() {
   // Step 2: Screenshot
   _setStep('step-shot', 'active');
 
+  const tf = document.getElementById('captureTimeframe')?.value || '1H';
+  const showParent = document.getElementById('showParentChart')?.value || 'yes';
+  const insetPos = document.getElementById('insetPosition')?.value || 'bottom-right';
   let result;
   try {
-    result = await apiFetch(`/api/vision/capture?symbol=${encodeURIComponent(sym)}`, {
+    result = await apiFetch(`/api/vision/capture?symbol=${encodeURIComponent(sym)}&timeframe=${encodeURIComponent(tf)}&show_parent=${encodeURIComponent(showParent)}&inset_position=${encodeURIComponent(insetPos)}`, {
       method: 'POST'
     });
   } catch (e) {

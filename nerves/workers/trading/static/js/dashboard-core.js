@@ -465,7 +465,16 @@ async function init() {
   loadTrades();
   loadEquityChart();
   loadCDPStatus();
-  setInterval(() => { loadKPIs(); loadCDPStatus(); }, 30000);
+  if (typeof loadSignalStats === 'function') {
+    loadSignalStats();
+  }
+  setInterval(() => {
+    loadKPIs();
+    loadCDPStatus();
+    if (typeof loadSignalStats === 'function') {
+      loadSignalStats();
+    }
+  }, 30000);
 }
 
 ['orderPrice', 'orderSL', 'orderTP'].forEach(id => {

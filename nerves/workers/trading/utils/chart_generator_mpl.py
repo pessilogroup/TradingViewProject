@@ -18,6 +18,8 @@ def generate_chart_mpl(
     drawings: Optional[List[Dict[str, Any]]] = None,
     strategy_table: Optional[Dict[str, Any]] = None,
     save_path: Optional[Union[str, Path]] = None,
+    parent_timeframe: Optional[str] = None,
+    parent_ohlcv: Optional[Union[List[List[Any]], List[Dict[str, Any]]]] = None,
 ) -> Path:
     """
     Renders a candlestick chart locally using mplfinance/matplotlib.
