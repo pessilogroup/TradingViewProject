@@ -27,9 +27,99 @@ async def _run_morning_brief_job():
         logger.error(f"[Scheduler] Morning brief job failed: {e}", exc_info=True)
 
 
+async def check_and_keep_alive_tv_cdp():
+    """
+    Checks responsiveness of the TradingView Desktop tab via CDP port 9222.
+    If the connection is down, page is crashed, or does not respond within 30 seconds,
+    trigger a reload command of the TradingView tab via CDP.
+    """
+    import aiohttp
+    import asyncio
+    import websockets
+    import json
+    
+    cdp_port = 9222
+    url = f"http://localhost:{cdp_port}/json/list"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    raise Exception(f"HTTP status {resp.status}")
+                targets = await resp.json()
+        
+        # Find tradingview chart page
+        target = None
+        for t in targets:
+            url_str = t.get("url", "")
+            if t.get("type") == "page" and ("tradingview.com/chart" in url_str or "tradingview" in url_str):
+                target = t
+                break
+        
+        if not target:
+            raise Exception("No TradingView chart page found in CDP targets list")
+            
+        ws_url = target.get("webSocketDebuggerUrl")
+        if not ws_url:
+            raise Exception("No webSocketDebuggerUrl in target info")
+            
+        # Check responsiveness: connect and evaluate
+        async with asyncio.timeout(30):
+            async with websockets.connect(ws_url) as ws:
+                msg = {
+                    "id": 1,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "1",
+                        "returnByValue": True
+                    }
+                }
+                await ws.send(json.dumps(msg))
+                res = await ws.recv()
+                res_data = json.loads(res)
+                if "error" in res_data or res_data.get("result", {}).get("result", {}).get("value") != 1:
+                    raise Exception("Invalid Runtime.evaluate response")
+        logger.info("[Scheduler] CDP Keep-Alive: TradingView page is responsive.")
+        
+    except Exception as e:
+        logger.warning(f"[Scheduler] CDP Keep-Alive check failed: {e}. Attempting reload.")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as resp:
+                    targets = await resp.json()
+            target = None
+            for t in targets:
+                url_str = t.get("url", "")
+                if t.get("type") == "page" and ("tradingview.com/chart" in url_str or "tradingview" in url_str):
+                    target = t
+                    break
+            if target and target.get("webSocketDebuggerUrl"):
+                async with websockets.connect(target.get("webSocketDebuggerUrl")) as ws:
+                    reload_msg = {
+                        "id": 2,
+                        "method": "Page.reload",
+                        "params": {"ignoreCache": True}
+                    }
+                    await ws.send(json.dumps(reload_msg))
+                    logger.info("[Scheduler] CDP Keep-Alive: Reload command sent successfully.")
+            else:
+                logger.error("[Scheduler] CDP Keep-Alive: Cannot reload, no target found.")
+        except Exception as reload_err:
+            logger.error(f"[Scheduler] CDP Keep-Alive: Failed to reload page: {reload_err}")
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Create and configure the APScheduler instance."""
     scheduler = AsyncIOScheduler(timezone=ICT)
+
+    scheduler.add_job(
+        check_and_keep_alive_tv_cdp,
+        trigger="interval",
+        minutes=5,
+        id="tv_cdp_keepalive",
+        name="TradingView CDP Keepalive Check",
+        replace_existing=True
+    )
+    logger.info("[Scheduler] TradingView CDP Keepalive scheduled every 5 minutes")
 
     if config.BRIEF_ENABLED:
         # Parse HH:MM from config
