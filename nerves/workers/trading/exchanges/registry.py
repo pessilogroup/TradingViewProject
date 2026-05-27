@@ -71,7 +71,7 @@ def init_registry() -> None:
     from .binance_adapter import BinanceAdapter
     from .bybit_adapter import BybitAdapter
     
-    if config.BINANCE_API_KEY:
+    if config.BINANCE_API_KEY or getattr(config, 'BINANCE_DRY_RUN', True):
         binance = BinanceAdapter(
             api_key=config.BINANCE_API_KEY,
             api_secret=config.BINANCE_API_SECRET,
@@ -80,10 +80,10 @@ def init_registry() -> None:
         )
         _registry.register(binance)
         
-    if getattr(config, 'BYBIT_API_KEY', None):
+    if getattr(config, 'BYBIT_API_KEY', None) or getattr(config, 'BYBIT_DRY_RUN', True):
         bybit = BybitAdapter(
-            api_key=config.BYBIT_API_KEY,
-            api_secret=config.BYBIT_API_SECRET,
+            api_key=getattr(config, 'BYBIT_API_KEY', ''),
+            api_secret=getattr(config, 'BYBIT_API_SECRET', ''),
             testnet=getattr(config, 'BYBIT_TESTNET', True),
             dry_run=getattr(config, 'BYBIT_DRY_RUN', True)
         )
