@@ -190,3 +190,38 @@ Integrity mode: development
 - [ ] Querying `/api/vision/capture` for `15m` timeframe concurrently fetches `15m` and `1H` data, and renders both charts on the returned image with a directional arrow.
 - [ ] Single timeframes like `4H`, `1D`, or `1W` render a single chart without nested insets.
 - [ ] Fallback matplotlib rendering succeeds as a single chart without exceptions if Playwright fails.
+
+## 2026-05-27T19:12:33+07:00
+
+Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development (Forbidden to read test source code or hardcode verification assertion responses)
+
+## Requirements
+
+### R1. TradingView CDP Auto-Launch & Discovery
+- Attempt to connect to port 9222. If disconnected, automatically locate and launch TradingView Desktop with `--remote-debugging-port=9222`.
+- Resolve MSIX / Windows Store installations of TradingView using PowerShell `Get-AppxPackage` if standard program directories are empty.
+- Verify connectivity to the Chrome DevTools Protocol server before proceeding.
+
+### R2. Dynamic Symbol & Study Value Extraction
+- Dynamically parse the active symbol name directly from the open TradingView DOM layout. 
+- Use `BTCUSDT` or `TAOUSDT` as fallback tickers only if the active symbol name cannot be parsed from the DOM.
+- Extract the current chart parameters, including the latest close price, timeframe interval, and study indicators (SMA50, SMA150, SMA200, and ATR14).
+
+### R3. Webhook E2E Simulation
+- Assemble a valid indicator payload matching the schema requirements of `/webhook`.
+- Populate it with the dynamically extracted symbol, price, and ATR parameters.
+- POST the payload to `/webhook` with `"source": "indicator"` and confirm it is successfully accepted (HTTP 200) and persisted in the local SQLite database.
+
+## Acceptance Criteria
+
+### Connection & Discovery
+- [ ] Script successfully launches and connects to TradingView CDP (port 9222).
+- [ ] Dynamically parses the currently active ticker from the TradingView interface.
+- [ ] Dynamic extraction successfully returns non-empty stats for price, interval, and ATR.
+
+### Webhook Verification
+- [ ] Successfully sends the dynamic payload to `/webhook` and receives a HTTP 200/202 confirmation.
+- [ ] A query on `/api/indicator-signals` confirms the dynamically fetched symbol, price, and ATR metadata have been persisted in the `indicator_signals` table.

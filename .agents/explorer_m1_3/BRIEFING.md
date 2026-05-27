@@ -1,45 +1,41 @@
-# BRIEFING — 2026-05-26T23:37:30+07:00
+# BRIEFING — 2026-05-27T12:18:00Z
 
 ## Mission
-Investigate FastAPI router and Telegram bot command registration to design the integration of a new `/scan_all` Telegram command.
+Analyze the TradingView webhook ingress and persistence layers to identify validation, schema requirements, and SQLite database storage details.
 
 ## 🔒 My Identity
-- Archetype: Codebase Explorer
-- Roles: API and Telegram Integration specialist
+- Archetype: Webhook Integration Explorer
+- Roles: Researcher
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3
-- Original parent: 7efa8c3e-7692-4aaf-a41b-1289870f9172
-- Milestone: Milestone 1 - Explorer Investigation
+- Original parent: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Milestone: webhook-analysis
 
 ## 🔒 Key Constraints
 - Read-only investigation — do NOT implement
-- Must follow Handoff Protocol and generate handoff.md
-- Operating in CODE_ONLY network mode (no external services/crawls)
+- Inspect payload schema, validation rules (secrets, IP limits), SQLite db location, and `indicator_signals` schema.
 
 ## Current Parent
-- Conversation ID: 7efa8c3e-7692-4aaf-a41b-1289870f9172
-- Updated: 2026-05-26T23:37:30+07:00
+- Conversation ID: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Updated: not yet
 
 ## Investigation State
 - **Explored paths**:
-  - `nerves/workers/trading/main.py` — Main entry point & FastAPI application router registrations
-  - `nerves/workers/trading/auth/routes.py` — FastAPI routes for `/auth/*`
-  - `nerves/workers/trading/gateway/webhook.py` — FastAPI webhook ingress route (`/webhook`)
-  - `nerves/workers/trading/telegram_bot.py` — Interactive Telegram Bot logic & command mappings
-  - `nerves/workers/trading/claude_cli/telegram_commands.py` — Telegram commands for Claude SDK integration
-  - `nerves/workers/trading/watchlist.py` — Watchlist retrieval logic
-  - `nerves/workers/trading/analysis.py` — Scoring Trend Template & VCP logic
-  - `nerves/workers/trading/mcp_client.py` — TradingView Desktop MCP Client logic
+  - `nerves/workers/trading/gateway/webhook.py` (webhook ingress endpoint)
+  - `nerves/workers/trading/data/tv_models.py` (Pydantic schema definition)
+  - `nerves/workers/trading/database.py` (SQLite schema definitions)
+  - `nerves/workers/trading/data/indicator_persistence.py` & `persistence_store.py` (persistence layers)
+  - `nerves/workers/trading/tests/unit/test_webhook_gateway.py` (unit tests)
 - **Key findings**:
-  - FastAPI routers are registered on `app = FastAPI(...)` in `main.py` using `app.include_router()`.
-  - Telegram bot commands are registered via `app.add_handler(CommandHandler(...))` in `start_bot()`.
-  - For long-running commands, calling `asyncio.create_task(...)` inside the CommandHandler creates a non-blocking background task, allowing the command handler to respond immediately and avoid Telegram polling timeout.
-  - Formatted top setups filter is designed using `trend_template.score >= 6 or vcp.detected`, formatted with HTML tags and code tables.
-- **Unexplored areas**: None
+  - Webhook endpoint: `/webhook` in `webhook.py` using `TradingViewAlertPayload` from `tv_models.py`.
+  - Secret verification: Timing-safe digest check from headers, query-params, or JSON payload; bypassed by valid DASHBOARD_TOKEN.
+  - IP rate limit: 15 req/min per IP using local cache in `webhook.py`. Real IP extracted safely from the rightmost hop of `X-Forwarded-For` header.
+  - IP whitelist: Whitelisting of TV IPs implemented in `main.py` middleware.
+  - Persistence: Indicator signals are inserted asynchronously via parallel EventBus subscriber in `indicator_persistence.py`.
+- **Unexplored areas**: None, the entire scope of the task is complete.
 
 ## Key Decisions Made
-- Created a proposed patch file `proposed_scan_all.patch` that showcases how to register and run the background scan.
+- Map all webhook ingress & persistence components, verify exact schema fields, rate limit thresholds, and persistence code flow, and run unit and integration tests.
 
 ## Artifact Index
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3\original_prompt.md — Original User Prompt
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3\proposed_scan_all.patch — Proposed code changes for Telegram Bot
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3\handoff.md — Final investigation report
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3\analysis.md — Webhook Ingress & Persistence report
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_3\handoff.md — Handoff report following 5-component protocol

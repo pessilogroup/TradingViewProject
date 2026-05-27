@@ -1,114 +1,66 @@
-# Handoff Report - Exchange Adapters Dynamic Symbol Discovery Investigation
+# Handoff Report — TV CDP Discovery
 
 ## 1. Observation
-
-Direct observations made in the workspace files:
-
-- **Weex Adapter** (`nerves/workers/trading/exchanges/weex_adapter.py`):
-  - Line 29: Base URL is `self.TESTNET_URL if testnet else self.MAINNET_URL`, mapping to `https://api-demo.weex.com` or `https://api.weex.com`.
-  - Lines 150-156: `get_symbol_info` makes a `GET` request to `/api/v2/contract/public/symbols`:
-    ```python
-    async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
-        if self.dry_run:
-            return {"symbol": symbol, "status": "Trading"}
-            
-        # Weex Contract V2 symbol info
-        data = await self._request("GET", "/api/v2/contract/public/symbols", {"symbol": symbol})
-        return data.get("data", {})
-    ```
-  - Lines 270-271: Suffix normalisation for `_UMCBL` exists:
-    ```python
-    if not symbol_clean.endswith("_UMCBL"):
-        symbol_clean += "_UMCBL"
-    ```
-
-- **Binance Adapter & Client** (`nerves/workers/trading/exchanges/binance_adapter.py` and `nerves/workers/trading/binance_client.py`):
-  - `BinanceAdapter` wraps `BinanceClient`.
-  - `BinanceClient` defines `base_url` as Spot endpoints (`https://testnet.binance.vision` or `https://api.binance.com`).
-  - Lines 103-121 in `binance_client.py` show `get_symbol_info` calling `/api/v3/exchangeInfo`:
-    ```python
-    async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
-        ...
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}/api/v3/exchangeInfo"
-            async with session.get(url, params={"symbol": symbol}) as resp:
-                data = await resp.json()
-                symbols = data.get("symbols", [])
-                if symbols:
-                    return symbols[0]
-                raise Exception(f"Symbol {symbol} not found on Binance")
-    ```
-  - For linear futures (USDⓈ-M Futures), the standard Binance endpoint is `GET /fapi/v1/exchangeInfo` on base URL `https://fapi.binance.com` or `https://testnet.binancefuture.com`.
-
-- **Bybit Adapter** (`nerves/workers/trading/exchanges/bybit_adapter.py`):
-  - Lines 123-128: `get_symbol_info` calls `/v5/market/instruments-info` with hardcoded `category: "spot"`:
-    ```python
-    async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
-        if self.dry_run:
-            return {"symbol": symbol, "status": "Trading"}
-            
-        data = await self._request("GET", "/v5/market/instruments-info", {"category": "spot", "symbol": symbol})
-        return data.get("result", {}).get("list", [{}])[0]
-    ```
-
-- **Unified Interface / Protocol** (`nerves/workers/trading/exchanges/base.py`):
-  - Lines 97-153 show that the `ExchangeAdapter` protocol defines no method to query active symbols or retrieve all symbols. It only has `get_symbol_info(self, symbol: str)`.
-
----
+We observed the following files and command outputs:
+1. **MSIX Launcher Script (`scripts/launch_tv_msix_cdp.ps1`)**:
+   - Uses `Get-AppxPackage -Name "TradingView.Desktop"` to query installer info.
+   - Launches via `Invoke-CommandInDesktopPackage` (which has a comment `#Requires -RunAsAdministrator`).
+2. **MCP Client Wrapper (`nerves/workers/trading/mcp_client.py`)**:
+   - The health check runs: `result = await self._run("status", timeout=5)` (Line 104).
+3. **Core Health Modules (`tradingview-mcp/src/core/health.js` and `connection.js`)**:
+   - Win32 paths candidates array (Line 172-176):
+     ```javascript
+     win32: [
+       `${process.env.LOCALAPPDATA}\\TradingView\\TradingView.exe`,
+       `${process.env.PROGRAMFILES}\\TradingView\\TradingView.exe`,
+       `${process.env['PROGRAMFILES(X86)']}\\TradingView\\TradingView.exe`,
+     ]
+     ```
+   - CDP Port hardcoding (Line 6 in `connection.js`):
+     ```javascript
+     const CDP_PORT = 9222;
+     ```
+4. **AppxPackage Verification Output**:
+   Running `Get-AppxPackage -Name *TradingView*` returned:
+   ```
+   Name              : TradingView.Desktop
+   Version           : 3.1.0.7818
+   InstallLocation   : C:\Program Files\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj
+   PackageFamilyName : TradingView.Desktop_n534cwy3pjxzj
+   ```
+5. **Direct Run without Admin Privileges**:
+   - Executing `Start-Process 'C:\Program Files\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe' -ArgumentList '--remote-debugging-port=9222'` succeeded immediately without triggering UAC prompt.
+   - Process list successfully showed multiple `TradingView` processes.
+   - `Invoke-RestMethod -Uri 'http://localhost:9222/json/version'` successfully returned:
+     ```
+     Browser  : Chrome/120.0.6099.291
+     Protocol-Version : 1.3
+     User-Agent : Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) TradingView/3.1.0 Chrome/120.0.6099.291 Electron/28.2.1 Safari/537.36
+     ```
 
 ## 2. Logic Chain
-
-1. **Listing Active Linear Symbols Requirements**:
-   - We need to fetch all active USDT-M (linear) futures contract pairs.
-   - For Weex: USDT-M futures contract symbols end with the suffix `_UMCBL` (per `lobes/knowledge/weex/weex_contract_v2_api.md`).
-   - For Bybit: Instruments must be retrieved under category `linear`.
-   - For Binance: Instruments should be retrieved either under Spot `/api/v3/exchangeInfo` (if Spot is simulated/used) or USDⓈ-M Futures `/fapi/v1/exchangeInfo` (if real linear futures are traded).
-
-2. **Limitations of `get_symbol_info`**:
-   - `get_symbol_info` requires a specific `symbol` query parameter.
-   - `get_symbol_info` in `BybitAdapter` is hardcoded to query `category="spot"`.
-   - Performing lookup in a loop for all possible symbols would cause high latency and risk rate limits.
-   - Thus, `get_symbol_info` **cannot** be used to retrieve the list of active symbols dynamically.
-
-3. **Defining a Unified Interface**:
-   - Since no unified function exists in `ExchangeAdapter` to query active symbols, we must add a new method signature to the `ExchangeAdapter` protocol:
-     ```python
-     async def get_active_linear_symbols(self) -> List[str]:
-         """Retrieve list of active linear trading symbols (e.g. USDT perps/spot)."""
-         ...
-     ```
-   - Each adapter will implement this method according to the specific exchange's REST API details.
-
----
+- **Step 1**: The user's system only has the MSIX store version installed, as proved by `Get-AppxPackage` returning details while standard directories (`AppData` and `Program Files`) returned `False` during path existence tests.
+- **Step 2**: The standard `scripts/launch_tv_msix_cdp.ps1` script relies on `Invoke-CommandInDesktopPackage` which traditionally requires administrator rights.
+- **Step 3**: By extracting `InstallLocation` dynamically, we can run the target `TradingView.exe` directly under the WindowsApps package folder. This action succeeded as a normal user.
+- **Step 4**: Querying `http://localhost:9222/json/version` confirms that launching the MSIX binary directly with the flag `--remote-debugging-port=9222` successfully enables the CDP server on port 9222.
+- **Step 5**: To automate this in Python or PowerShell, we check for a listening socket on port `9222` using `http://localhost:9222/json/version`, locate the binary dynamically via standard candidates and `Get-AppxPackage`, kill stale processes if CDP is down, and launch in a detached state.
 
 ## 3. Caveats
-
-- **Binance Spot vs Futures**: The current `BinanceClient` and `BinanceAdapter` are configured for Spot trading. If the user expects USDⓈ-M Futures (linear contracts) for Binance as well, the `BinanceClient` base URL needs to support the futures subdomain (`fapi.binance.com`), and the endpoint must use `/fapi/v1/exchangeInfo`.
-- **API Status Fields**: Status field values and formatting might differ across exchanges. In the proposed implementation:
-  - Weex status is assumed to be `"Trading"` (matching dry-run mock and standard responses).
-  - Bybit status is checked against `"Trading"`.
-  - Binance status is checked against `"TRADING"`.
-- **Dry-run Behavior**: In dry-run modes, the adapters should return a curated, representative list of active symbols (e.g., `["BTCUSDT", "ETHUSDT", "SOLUSDT"]` for Binance/Bybit, and `["BTCUSDT_UMCBL", "ETHUSDT_UMCBL", "SOLUSDT_UMCBL"]` for Weex) rather than attempting real network calls.
-
----
+- Direct execution from `C:\Program Files\WindowsApps` works for Centennial-style MSIX apps (like TradingView Desktop, which is an Electron app wrapped in an MSIX container). This may not work for native UWP apps, but it is valid for TradingView.
+- The version string in `TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj` changes whenever the Microsoft Store updates the app. Therefore, we must dynamically lookup `InstallLocation` using PowerShell at runtime rather than hardcoding the folder path.
 
 ## 4. Conclusion
-
-To implement dynamic symbol discovery for active linear contract pairs across the three exchanges, we must:
-1. Define a new unified method `async def get_active_linear_symbols(self) -> List[str]:` in the `ExchangeAdapter` protocol.
-2. Implement `get_active_linear_symbols` in each adapter using the following endpoints and parameters:
-   - **Weex**: `GET /api/v2/contract/public/symbols` (no params). Filter for symbol suffix `_UMCBL` and status `"Trading"`.
-   - **Bybit**: `GET /v5/market/instruments-info` with query parameter `{"category": "linear"}`. Filter for status `"Trading"`.
-   - **Binance**: `GET /api/v3/exchangeInfo` (Spot) or `GET /fapi/v1/exchangeInfo` (Futures). Filter for status `"TRADING"` and quote asset `"USDT"`.
-
----
+We successfully mapped the standard installation locations, analyzed the health-check connection protocol (which queries `/json/list` and `/json/version` on port 9222), and verified that a normal user can bypass the administrative requirement of `Invoke-CommandInDesktopPackage` by launching the wrapped binary inside the MSIX `InstallLocation` directly with `--remote-debugging-port=9222`.
 
 ## 5. Verification Method
-
-To verify the dynamic discovery logic independently once implemented:
-1. **Mock Tests (Unit Tests)**:
-   - Create unit tests mock responses for each of the target endpoints.
-   - Run `pytest nerves/workers/trading/tests/unit/` to verify that `get_active_linear_symbols` returns the parsed symbol list correctly.
-2. **Integration Test / Trial Script**:
-   - Run an integration command/script (similar to `nerves/workers/trading/scripts/test_weex_trial.py`) to hit the endpoints on the respective testnet/mainnet with real network requests (when `dry_run=False`).
-   - Validate that Weex returns symbols matching `*_UMCBL`, Bybit returns linear instruments (e.g., `BTCUSDT`, `ETHUSDT`), and Binance returns USDT pairs.
+1. Ensure TradingView Desktop is closed.
+2. In PowerShell, execute:
+   ```powershell
+   $path = (Get-AppxPackage -Name "TradingView.Desktop").InstallLocation
+   Start-Process "$path\TradingView.exe" -ArgumentList "--remote-debugging-port=9222"
+   ```
+3. Test that the port has opened:
+   ```powershell
+   Invoke-RestMethod -Uri "http://localhost:9222/json/version"
+   ```
+4. Verify the response contains the `webSocketDebuggerUrl` field and `TradingView` User-Agent.

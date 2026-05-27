@@ -1,127 +1,199 @@
-# Analysis Report: Angati Binary Location and Dynamic Path Retrieval
+# TradingView Desktop CDP Discovery & Integration Analysis
 
-This report details the physical locations of the local project-specific `angati.exe` and the main EAIS Brain-level `angati.exe`, and outlines a robust Python-based mechanism to retrieve these paths dynamically.
+## Executive Summary
+This analysis details how to detect, locate, and launch **TradingView Desktop** on Windows with Chrome DevTools Protocol (CDP) enabled on port `9222`. 
 
----
-
-## 1. Exact Physical Locations
-
-Through comprehensive read-only filesystem searches, the exact locations of the `angati.exe` binaries have been identified:
-
-| Component | Physical Path | Existence Status | Purpose / Context |
-| :--- | :--- | :--- | :--- |
-| **Local Project Binary** | `c:\Users\pesil\working\mj_trading\TradingViewProject\angati.exe` | **Verified** | Intercepts tool calls via local `hook_service.py` to run KG Guard and compile memory statistics. |
-| **Main Brain Binary** | `C:\Users\pesil\EAIS\test_scaffold\angati.exe` | **Verified** | Represents the main Go-native Daemon running the hub, satellite protocol, and central cognitive loop. |
-
-### Diagnostic Details & Observations
-
-1. **Local Binary Resolution**:
-   - Inside `nerves/core/hook_service.py`, the path is resolved relative to `AGENTS_ROOT` (the project root):
-     ```python
-     angati_exe = AGENTS_ROOT / "tools" / "angati" / "angati.exe"
-     if not angati_exe.exists():
-         angati_exe = AGENTS_ROOT / "angati.exe"
-     ```
-   - Our search confirmed that `tools/angati/angati.exe` does not exist in the local workspace, but `angati.exe` is located at the root of `TradingViewProject`.
-
-2. **Main Brain Binary Resolution**:
-   - The EAIS system structure uses `C:\Users\pesil\EAIS` as the base directory.
-   - The active daemon executes from `C:\Users\pesil\EAIS\test_scaffold\angati.exe` and outputs state logs/PIDs under `C:\Users\pesil\EAIS\.agents\memory\`.
-   - No `angati.exe` exists under the App Data folders (`C:\Users\pesil\.gemini\antigravity\tools\angati` or similar). App Data only holds configurations, SQLite databases, and schemas.
+Our findings indicate:
+1. **MSIX App Store Version** is the exclusive installation type on this system. Direct execution of the binary from `C:\Program Files\WindowsApps\...` using the resolved path from `Get-AppxPackage` succeeds **without administrator elevation**, bypassing the need for `Invoke-CommandInDesktopPackage`.
+2. **Standard installation paths** (under `Local AppData` or `Program Files`) do not exist on this environment but are documented for completeness.
+3. The health check mechanism of the Node-based `tradingview-mcp` connects to `http://localhost:9222/json/list` and filters for targets referencing `tradingview.com/chart` to establish a CDP session.
 
 ---
 
-## 2. Dynamic Retrieval in Python
+## 1. Path Analysis for TradingView Desktop on Windows
+TradingView Desktop can be installed via two primary methods on Windows: standard desktop installers or the MSIX/Microsoft Store package.
 
-To dynamically resolve both paths under varying user environments (e.g., changes in the Windows username or workspace structures), Python code should query system variables (`USERPROFILE`, `Path.home()`) and fall back gracefully.
+### Standard Desktop Installation Paths
+When installed using a traditional `.exe` or `.msi` installer, TradingView places its executable in one of the following directories:
+* **User-local Install:**
+  * `%LOCALAPPDATA%\Programs\TradingView\TradingView.exe`
+  * `%LOCALAPPDATA%\TradingView\TradingView.exe`
+* **System-wide (All Users) Install:**
+  * `%PROGRAMFILES%\TradingView\TradingView.exe` (64-bit)
+  * `%PROGRAMFILES(X86)%\TradingView\TradingView.exe` (32-bit)
 
-### Python Path Resolution Helper
+### MSIX / Microsoft Store Installation Path
+When installed from the Microsoft Store, TradingView is deployed as a packaged app:
+* **Package Name:** `TradingView.Desktop`
+* **Publisher ID:** `n534cwy3pjxzj` (Package Family Name: `TradingView.Desktop_n534cwy3pjxzj`)
+* **Installation Directory:** `C:\Program Files\WindowsApps\TradingView.Desktop_<Version>_<Architecture>__n534cwy3pjxzj`
 
+#### Dynamic Resolution via PowerShell
+Since the version number in the MSIX path changes dynamically, the path must be resolved at runtime using the `Get-AppxPackage` cmdlet:
+```powershell
+(Get-AppxPackage -Name "TradingView.Desktop").InstallLocation
+```
+Adding `\TradingView.exe` to this directory gives the absolute path to the executable:
+`C:\Program Files\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe`
+
+---
+
+## 2. Examination of nerves MCP Client Health Check
+The connection health check is defined in `nerves/workers/trading/mcp_client.py` and delegates to the Node.js CLI tool:
+
+### Health Check Sequence
+1. **Command Execution:** The Python wrapper invokes `node tradingview-mcp/src/cli/index.js status --json`.
+2. **CLI Router Delegation:** The CLI router delegates to `core.healthCheck()` in `tradingview-mcp/src/core/health.js`.
+3. **CDP Target Query:** The JavaScript core requests `http://localhost:9222/json/list` to find target pages.
+4. **Target Selection:** It searches for target pages matching `tradingview.com/chart` (or fallback `tradingview`).
+5. **WebSocket Verification:** It establishes a WebSocket session to the selected page's debugger URL, and executes a runtime script to check if `window.TradingViewApi` is loaded and active.
+6. **JSON Response:** The CLI outputs JSON including `cdp_connected: true` and the active symbol.
+
+---
+
+## 3. Auto-Detection and Launch Logic
+To automate this, we formulate a Python implementation that detects, resolves, and launches the app with `--remote-debugging-port=9222`.
+
+### Python Implementation (`tv_launcher.py` sketch)
 ```python
 import os
-import sys
-from pathlib import Path
+import subprocess
+import time
+import urllib.request
+import json
 
-def get_local_angati_path(workspace_root: Path = None) -> Path:
-    """
-    Dynamically resolves the path to the local project-specific angati.exe.
+CDP_PORT = 9222
+CDP_URL = f"http://localhost:{CDP_PORT}/json/version"
+
+def is_cdp_responding() -> bool:
+    """Check if the CDP port is open and responding to version queries."""
+    try:
+        with urllib.request.urlopen(CDP_URL, timeout=1.5) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                return "webSocketDebuggerUrl" in data
+    except Exception:
+        pass
+    return False
+
+def is_process_running(process_name="TradingView.exe") -> bool:
+    """Check if the TradingView process is active in the task list."""
+    try:
+        cmd = f'tasklist /FI "IMAGENAME eq {process_name}" /FO CSV'
+        output = subprocess.check_output(cmd, shell=True, text=True)
+        return process_name.lower() in output.lower()
+    except Exception:
+        return False
+
+def kill_tradingview():
+    """Kill any running TradingView instances to clear the path for CDP relaunch."""
+    try:
+        subprocess.run("taskkill /F /IM TradingView.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.0)
+    except Exception:
+        pass
+
+def resolve_tv_executable() -> str:
+    """Resolve the path to the TradingView executable (both Standard and MSIX)."""
+    # 1. Standard Paths
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("PROGRAMFILES", "")
+    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", "")
     
-    Resolution order:
-    1. Environment override `ANGATI_LOCAL_EXE`.
-    2. Derived workspace root / tools / angati / angati.exe.
-    3. Derived workspace root / angati.exe.
-    """
-    # 1. Check for environmental override
-    env_path = os.environ.get("ANGATI_LOCAL_EXE")
-    if env_path:
-        p = Path(env_path)
-        if p.exists() and p.is_file():
-            return p
-
-    # 2. Determine workspace root dynamically if not supplied
-    if not workspace_root:
-        # Traverse upward from current file to find the project root (.agents or .git)
-        curr = Path(__file__).resolve()
-        for parent in curr.parents:
-            if (parent / ".agents").is_dir() or (parent / ".git").is_dir() or (parent / "angati.exe").is_file():
-                workspace_root = parent
-                break
-        # Fallback to sys.path[0] or current directory
-        if not workspace_root:
-            workspace_root = Path(sys.path[0])
-
-    # 3. Search standard workspace relative paths
     candidates = [
-        workspace_root / "tools" / "angati" / "angati.exe",
-        workspace_root / "angati.exe",
+        os.path.join(local_app_data, "Programs", "TradingView", "TradingView.exe"),
+        os.path.join(local_app_data, "TradingView", "TradingView.exe"),
+        os.path.join(program_files, "TradingView", "TradingView.exe"),
+        os.path.join(program_files_x86, "TradingView", "TradingView.exe")
     ]
-    for p in candidates:
-        if p.exists() and p.is_file():
-            return p
-
-    return None
-
-
-def get_brain_angati_path() -> Path:
-    """
-    Dynamically resolves the path to the main EAIS Brain-level angati.exe.
     
-    Resolution order:
-    1. Environment override `ANGATI_BRAIN_EXE`.
-    2. Environmental override `EAIS_ROOT` path mapping.
-    3. Path.home() / "EAIS" / "test_scaffold" / "angati.exe".
-    4. Path.home() / "EAIS" / "spine" / "angati" / "angati.exe" (source location).
-    5. Path.home() / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe" (App Data fallback).
-    """
-    # 1. Check for explicit environmental override
-    env_path = os.environ.get("ANGATI_BRAIN_EXE")
-    if env_path:
-        p = Path(env_path)
-        if p.exists() and p.is_file():
-            return p
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
 
-    home = Path.home()  # Resolves to C:\Users\<username> on Windows
-    userprofile = Path(os.environ.get("USERPROFILE", str(home)))
+    # 2. MSIX Package Path Resolution (via PowerShell)
+    try:
+        ps_cmd = "powershell -Command \"(Get-AppxPackage -Name 'TradingView.Desktop').InstallLocation\""
+        result = subprocess.run(ps_cmd, capture_output=True, text=True, shell=True)
+        install_dir = result.stdout.strip()
+        if install_dir:
+            msix_exe = os.path.join(install_dir, "TradingView.exe")
+            if os.path.exists(msix_exe):
+                return msix_exe
+    except Exception:
+        pass
+        
+    return ""
 
-    # 2. Resolve EAIS root
-    eais_root = Path(os.environ.get("EAIS_ROOT", str(userprofile / "EAIS")))
-
-    # 3. Search candidates
-    candidates = [
-        eais_root / "test_scaffold" / "angati.exe",
-        eais_root / "spine" / "angati" / "angati.exe",
-        userprofile / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe",
-    ]
-
-    for p in candidates:
-        if p.exists() and p.is_file():
-            return p
-
-    return None
+def launch_and_connect(timeout_sec=15) -> bool:
+    """Locate, launch with CDP, and wait for connection."""
+    # Step A: Check if already running and responding
+    if is_cdp_responding():
+        print("[+] TradingView is already running and connected to CDP.")
+        return True
+        
+    # Step B: If running but CDP is unresponsive, we must restart it
+    if is_process_running():
+        print("[-] TradingView is running but CDP is unresponsive. Restarting...")
+        kill_tradingview()
+        
+    # Step C: Locate the binary
+    exe_path = resolve_tv_executable()
+    if not exe_path:
+        print("[!] Error: Could not locate TradingView Desktop binary.")
+        return False
+        
+    print(f"[+] Found TradingView binary at: {exe_path}")
+    print(f"[+] Launching with --remote-debugging-port={CDP_PORT}...")
+    
+    # Step D: Launch process in background (detached to prevent blocking)
+    try:
+        # DETACHED_PROCESS flag prevents the spawned process from inheriting terminal session
+        subprocess.Popen(
+            [exe_path, f"--remote-debugging-port={CDP_PORT}"],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    except Exception as e:
+        print(f"[!] Failed to launch process: {e}")
+        return False
+        
+    # Step E: Poll CDP endpoint
+    start_time = time.time()
+    while time.time() - start_time < timeout_sec:
+        if is_cdp_responding():
+            print(f"[+] Successfully connected to TradingView CDP on port {CDP_PORT}!")
+            return True
+        time.sleep(1.0)
+        
+    print("[!] Timeout: TradingView launched but CDP did not respond within limit.")
+    return False
 ```
 
-### Key Considerations for Windows Implementation
+---
 
-- **`Path.home()` vs `os.environ['USERPROFILE']`**: `Path.home()` is the standard cross-platform approach in modern Python (PEP 428). In Windows environments, it consistently reads the `USERPROFILE` environment registry, mapping to `C:\Users\<username>`.
-- **Slashing Conventions**: Python `pathlib` automatically handles directory delimiters (converting forward slashes `/` to Windows backslashes `\`), which avoids manual escaping bugs.
-- **Robust Path Auditing**: Always perform `.exists() and is_file()` checks to avoid path mismatch/missing binary exceptions.
+## 4. Verified Commands for Verification & Diagnostics
+
+### Retrieve MSIX Package Info
+```powershell
+Get-AppxPackage -Name "TradingView.Desktop"
+```
+
+### Retrieve Installation Directory directly
+```powershell
+(Get-AppxPackage -Name "TradingView.Desktop").InstallLocation
+```
+
+### Kill Running Instances
+```powershell
+taskkill /F /IM TradingView.exe
+```
+
+### Direct launch without elevation (MSIX Executable)
+```powershell
+Start-Process "C:\Program Files\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe" -ArgumentList "--remote-debugging-port=9222"
+```
+
+### Verify CDP Port Status
+```powershell
+Invoke-RestMethod -Uri "http://localhost:9222/json/version"
+```

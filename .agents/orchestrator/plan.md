@@ -1,41 +1,22 @@
-# Plan - Multi-Timeframe (MTF) Nested Chart Inset Layouts
+# Plan - CDP & Webhook Integration
 
-## Objectives
-Implement concurrent fetching of nested parent timeframes (`15m` -> `1H`, `1H` -> `4H`) in the capture pipeline, support PiP inset layouts in `chart_template.html` with glassmorphism styling and directional arrows, and ensure robust single-chart Matplotlib fallback rendering.
+## Mission
+Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
 
-## Step-by-Step Execution Plan
+## Milestones
 
-### Step 1: Exploration
-- **Goal**: Understand current candle fetching, template context construction, rendering logic, and Matplotlib fallback in `main.py` and `chart_template.html`.
-- **Worker**: Explorer subagent.
-- **Verification**: Handoff containing relevant code locations and planned structure.
+### Milestone 1: Explorer Phase (Analysis & Extraction Research)
+- Task: Analyze the existing `tradingview-mcp` code, standard/MSIX paths of TradingView Desktop on Windows, HTML/DOM structure of TradingView Desktop for symbol and study values, and `/webhook` ingress payload constraints.
+- Done when: Handoff file created detailing paths, selectors, and payload schema.
 
-### Step 2: Implement Concurrent Fetching and Payload Structure
-- **Goal**: Implement mappings for nested timeframes and concurrent fetching of both target and parent candles (if mapped).
-- **Details**:
-  - Define `NESTED_TIMEFRAMES = {"15m": "1H", "1H": "4H"}`.
-  - Concurrently fetch candles for both timeframe and parent timeframe using `asyncio.gather`.
-  - Pass `parent_candles` and `parent_timeframe` to the HTML rendering payload.
-- **Worker**: Worker subagent.
-- **Verification**: Unit tests proving that calling the capture flow for `1H` concurrently requests both `1H` and `4H` data.
+### Milestone 2: Implementation Phase (Script Development)
+- Task: Create/extend a script (e.g. `nerves/workers/trading/scripts/tv_cdp_webhook.py`) that:
+  1. Auto-launches TradingView Desktop (handling standard paths and MSIX via `Get-AppxPackage`) with `--remote-debugging-port=9222`.
+  2. Establishes CDP connection to port 9222 and parses the active symbol.
+  3. Extracts latest close price, timeframe interval, and study indicators (SMA50, SMA150, SMA200, ATR14) from the chart.
+  4. Assembles the webhook payload, POSTs it to the `/webhook` ingress, and verifies HTTP 200.
+- Done when: Implementation passes basic manual tests and code is clean.
 
-### Step 3: Implement HTML PiP Inset Rendering
-- **Goal**: Update `chart_template.html` to render the inset chart using Lightweight Charts (or the library in use) when `parent_candles` are present.
-- **Details**:
-  - Add nested container with glassmorphism styling (`#1e222d` background, `8px` border radius, `rgba(255,255,255,0.08)` border).
-  - Label indicating the parent timeframe.
-  - SVG arrow indicator pointing from inset chart to main chart area (color `#2962ff`).
-- **Worker**: Worker subagent.
-- **Verification**: Verify inset chart displays correctly in rendered image.
-
-### Step 4: Ensure Matplotlib Fallback
-- **Goal**: Re-verify that Matplotlib fallback renders a single chart without nested insets or exceptions if Playwright fails.
-- **Details**:
-  - Verify that the Matplotlib fallback logic does not break when `parent_candles` are present. It should simply ignore them and draw a single chart.
-- **Worker**: Worker subagent.
-- **Verification**: Integration smoke test running without Playwright.
-
-### Step 5: Testing and Forensic Auditing
-- **Goal**: Verify robustness, functionality, and clean audit verdict.
-- **Worker**: Reviewers, Challenger, Forensic Auditor.
-- **Verification**: Successful test runs and CLEAN audit verdict.
+### Milestone 3: Verification & Auditing Phase (Test Suite & Verification)
+- Task: Add integration test/automated verification to run the script and check database persistence. Run the Forensic Auditor.
+- Done when: All tests pass, E2E validation succeeds, and Forensic Auditor reports clean.

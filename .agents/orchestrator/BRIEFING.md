@@ -1,22 +1,22 @@
-# BRIEFING — 2026-05-27T13:06:55Z
+# BRIEFING — 2026-05-27T19:20:00+07:00
 
 ## Mission
-Coordinate the implementation of Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio.
+Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
 
 ## 🔒 My Identity
-- Archetype: teamwork_preview_orchestrator
+- Archetype: Project Orchestrator
 - Roles: orchestrator, user_liaison, human_reporter, successor
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator
 - Original parent: main agent
-- Original parent conversation ID: afaa841a-c8b0-457e-bafa-73080b8fab50
+- Original parent conversation ID: c3bb402f-7c4c-4891-9027-38332cba1e45
 
 ## 🔒 My Workflow
-- **Pattern**: Project Pattern
-- **Scope document**: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md
-1. **Decompose**: Decompose the project into Exploration, Concurrent Fetching, HTML PiP Inset Rendering, Matplotlib Fallback, and E2E Testing & Audit.
+- **Pattern**: Project
+- **Scope document**: c:\Users\pesil\working\mj_trading\TradingViewProject\PROJECT.md
+1. **Decompose**: Split work into M1_Explorer, M2_Implementer, M3_Verification milestones.
 2. **Dispatch & Execute**:
-   - **Direct (iteration loop)**: Direct delegate to Explorer, Worker, Reviewer, Challenger, and Auditor.
-   - **Delegate (sub-orchestrator)**: None.
+   - **Direct (iteration loop)**: Explorer → Worker → Reviewer → test → gate
+   - **Delegate (sub-orchestrator)**: None needed for this medium task scope.
 3. **On failure** (in this order):
    - Retry: nudge stuck agent or re-send task
    - Replace: spawn fresh agent with partial progress
@@ -24,64 +24,50 @@ Coordinate the implementation of Multi-Timeframe (MTF) Nested Chart Inset Layout
    - Redistribute: split stuck agent's remaining work
    - Redesign: re-partition decomposition
    - Escalate: report to parent (sub-orchestrators only, last resort)
-4. **Succession**: Self-succeed at 16 subagent spawns.
+4. **Succession**: Self-succeed when spawn count >= 16.
 - **Work items**:
-  - Milestone 1: Exploration & Architecture [done]
-  - Milestone 2: Concurrent Fetching & Payload [done]
-  - Milestone 3: HTML PiP Inset Rendering [done]
-  - Milestone 4: Matplotlib Fallback [done]
-  - Milestone 5: E2E Testing & Audit [done]
-  - Final Report & Synthesis [done]
-- **Current phase**: 4
-- **Current focus**: Final Reporting & Synthesis
+  1. M1_Explorer [done]
+  2. M2_Implementer [in-progress]
+  3. M3_Verification [pending]
+- **Current phase**: 2
+- **Current focus**: M2_Implementer
 
 ## 🔒 Key Constraints
-- DO NOT write code directly.
-- DO NOT run build/test commands directly.
-- All implementations must be genuine (no hardcoding, no dummy logic).
-- Never reuse a subagent after it has delivered its handoff.
+- Never write, modify, or create source code files directly.
+- Never run build/test commands yourself — require workers to do so.
+- You MAY use file-editing tools ONLY for metadata/state files (.md) in your .agents/ folder.
+- Never reuse a subagent after it has delivered its handoff — always spawn fresh
 
 ## Current Parent
-- Conversation ID: afaa841a-c8b0-457e-bafa-73080b8fab50
-- Updated: not yet
+- Conversation ID: c3bb402f-7c4c-4891-9027-38332cba1e45
+- Updated: 2026-05-27T19:15:00+07:00
 
 ## Key Decisions Made
-- Transitioned project scope to MTF Nested Chart Inset Layouts.
-- Started the heartbeat cron for liveness tracking.
+- Decomposed into 3 sequential milestones using the Project pattern with direct iteration loops (no sub-orchestrators due to medium complexity).
+- Explorer phase (Milestone 1) is completed. Discovered direct execution from MSIX install location, DOM selectors for active symbol and indicators, and webhook schema details.
 
 ## Team Roster
 | Agent | Type | Work Item | Status | Conv ID |
 |-------|------|-----------|--------|---------|
-| Explorer 1 | teamwork_preview_explorer | Explore capture and layout rendering codebase | completed | f99ee351-88bb-4f4b-b529-3593eca2793a |
-| Worker 1 | teamwork_preview_worker | Implement concurrent fetching, template layouts, and fallback | completed | e4653adf-1129-4be2-8a34-f19d09fced7d |
-| Reviewer 1 | teamwork_preview_reviewer | Review code correctness and HTML rendering | completed | 3c3256c6-fc0e-4a90-bc9c-2c3d3983d420 |
-| Reviewer 2 | teamwork_preview_reviewer | Review edge cases and CSS glassmorphism overlay | completed | de914536-20f2-4ebe-954b-c59db0dd1bbd |
-| Challenger 1 | teamwork_preview_challenger | Adversarially test concurrent fetching & fallback | completed | 156ff07d-2902-4cd5-901b-95731f1b1cc2 |
-| Auditor 1 | teamwork_preview_auditor | Forensic integrity verification of codebase | completed | fa331ddb-43c8-4124-a602-ad019c91a328 |
-| Worker (fixes) | teamwork_preview_worker | Implement resilience fixes for parent timeframe fetching | completed | 7e353fe6-da00-4f30-baba-c9f1789e1b5f |
-| Reviewer (fixes 1) | teamwork_preview_reviewer | Review resilience fixes and unit tests | completed | 28f70aab-0ea8-4e42-a9e5-9a942245c7c8 |
-| Reviewer (fixes 2) | teamwork_preview_reviewer | Review error fallback handling edge cases | completed | be6c6b30-70c2-449b-a20e-ced2d97ffaa0 |
-| Challenger (fixes 1) | teamwork_preview_challenger | Adversarially verify parent fetching error path | completed | 3b7a5cd8-d0f9-4e82-a23d-d873cf7033aa |
-| Auditor (fixes 1) | teamwork_preview_auditor | Forensic integrity verification of fixes | completed | 51508069-3dd3-4aff-b02d-61f9f412aca8 |
-| Worker (fixes 2) | teamwork_preview_worker | Update obsolete adversarial test assertions | completed | f2bd818e-3c3c-4c73-9ff2-7aebefd8e911 |
-| Reviewer (fixes 3) | teamwork_preview_reviewer | Review updated adversarial test assertions | completed | f5aa8be9-269a-41cb-926d-5156a48bdec3 |
-| Reviewer (fixes 4) | teamwork_preview_reviewer | Verify test suite compilation and runs | completed | 32ab7a04-6fbf-47f1-8116-4d488304951c |
-| Challenger (fixes 2) | teamwork_preview_challenger | Adversarially test final test assertions | completed | d8db0897-c2c2-46a3-8fdb-be829d1b87ea |
-| Auditor (fixes 2) | teamwork_preview_auditor | Final forensic integrity audit | completed | b98e289a-1970-45d7-81f4-f954fe88ca79 |
+| Explorer_1 | teamwork_preview_explorer | TV CDP Discovery Explorer | completed | 890b524f-4290-4f81-bb6a-8ea0e15a09fc |
+| Explorer_2 | teamwork_preview_explorer | TV Study Extractor Explorer | completed | 91a4d93c-aa35-470a-b7f5-426bc7be0735 |
+| Explorer_3 | teamwork_preview_explorer | Webhook Integration Explorer | completed | 00b944aa-7725-4bc1-beb4-c804a874b28f |
+| Implementer_1 | teamwork_preview_worker | TV CDP Webhook Implementer | in-progress | d3e82b18-fb2a-4b76-b0be-91929385d699 |
 
 ## Succession Status
-- Succession required: yes
-- Spawn count: 16 / 16
+- Succession required: no
+- Spawn count: 4 / 16
 - Pending subagents: none
-- Predecessor: 80863619-92a6-4dc0-886d-635ca9b57b61 (predecessor orchestrator)
-- Successor: e67bb666-f4d5-492e-a161-3694cca9b06c
+- Predecessor: none
+- Successor: not yet spawned
 
 ## Active Timers
-- Heartbeat cron: none
+- Heartbeat cron: task-53
 - Safety timer: none
+- On succession: kill all timers before spawning successor
+- On context truncation: run `manage_task(Action="list")` — re-create if missing
 
 ## Artifact Index
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\BRIEFING.md — Persistent memory
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md — Heartbeat and progress log
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md — Project plan
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md — Scope document
+- c:\Users\pesil\working\mj_trading\TradingViewProject\PROJECT.md — Scope and architecture definition
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md — Specific execution plan
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md — Tracking status and logs

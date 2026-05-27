@@ -1,15 +1,17 @@
-# BRIEFING — 2026-05-27T06:27:08Z
+# BRIEFING — 2026-05-27T19:12:33+07:00
 
 ## Mission
-Implement Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio.
+Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222, dynamic symbol/study extraction, and webhook integration simulation.
 
 ## 🔒 My Identity
 - Archetype: sentinel
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\sentinel
-- Orchestrator: 7efa8c3e-7692-4aaf-a41b-1289870f9172
-- Victory Auditor: 4420efd6-dfab-4403-b92c-717e4093c780
-- Active Orchestrator: e67bb666-f4d5-492e-a161-3694cca9b06c
-- Active Victory Auditor: 919ccef3-d006-4d75-b521-7d3a89a1e85e
+- Orchestrator: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Victory Auditor: TBD
+- Active Orchestrator: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Active Victory Auditor: TBD
+- Progress Cron Task: c3bb402f-7c4c-4891-9027-38332cba1e45/task-29
+- Liveness Cron Task: c3bb402f-7c4c-4891-9027-38332cba1e45/task-31
 
 ## 🔒 Key Constraints
 - No technical decisions — relay only
@@ -17,19 +19,18 @@ Implement Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Captur
 - respect ConsensusEngine verdicts
 
 ## User Context
-- **Last user request**: Implement Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio.
+- **Last user request**: Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
 - **Pending clarifications**: none
-- **Delivered results**: MTF Nested Chart Inset Layouts implemented and verified via independent Victory Audit.
+- **Delivered results**: none
 
 ## Project Status
-- **Phase**: complete
+- **Phase**: in progress (explorers dispatched)
 
 ## Victory Audit Status
-- **Triggered**: yes
-- **Verdict**: VICTORY CONFIRMED
+- **Triggered**: no
+- **Verdict**: pending
 - **Retry count**: 0
 
 ## Artifact Index
 - c:\Users\pesil\working\mj_trading\TradingViewProject\ORIGINAL_REQUEST.md — Verbatim user request.
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\original_prompt.md — Sentinel prompt history.
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\victory_auditor\victory_audit_report.md — Victory Audit report.

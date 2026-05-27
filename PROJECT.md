@@ -8,8 +8,8 @@
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | M1_Explorer | Analyze CDP target, standard/MSIX paths, DOM selectors, webhook payload | none | DONE |
-| 2 | M2_Implementer | Implement auto-launcher, CDP symbol/indicator extractor, and E2E webhook poster | M1 | IN_PROGRESS |
+| 1 | M1_Explorer | Analyze CDP target, standard/MSIX paths, DOM selectors, webhook payload | none | IN_PROGRESS (890b524f, 91a4d93c, 00b944aa) |
+| 2 | M2_Implementer | Implement auto-launcher, CDP symbol/indicator extractor, and E2E webhook poster | M1 | PLANNED |
 | 3 | M3_Verification | Verify E2E run against live server and SQLite DB, perform forensic audit | M2 | PLANNED |
 
 ## Interface Contracts

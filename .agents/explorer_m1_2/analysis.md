@@ -1,224 +1,127 @@
-# Analysis Report: Scanner Concurrency, Rate Limiting, and Scoring Engine
+# TradingView Study Extractor Investigation Report
 
-## 1. Executive Summary
-This report analyzes the existing scoring engine (Trend Template & VCP) in `nerves/workers/trading/analysis.py` and the market data fetching mechanisms in `nerves/workers/trading/mcp_client.py`. 
-Key findings show that:
-1. **Trend Template and VCP Scores** are correctly computed via mathematical heuristics based on 8 Minervini criteria and 3 volatility contraction metrics.
-2. **Subprocess/CDP Overhead**: The scanner launches at least 4 node subprocesses sequentially per symbol, opening and closing CDP connections to the active TradingView Desktop chart tab.
-3. **State Contamination Hazard**: The active symbol and timeframe on TradingView Desktop is a stateful global parameter. Running concurrent scans will lead to race conditions where one symbol's quote matches another symbol's indicator study values.
-4. **Lack of Rate Limiting**: There is no rate limit control, throttling, or retry handler, making the scanner vulnerable to 429 errors from TradingView's servers or browser loading timeouts.
-5. **Robust Design Proposal**: We propose the `RobustScanner` architecture with an async mutex lock to serialize chart switching, a Token Bucket rate-limiter, an exponential back-off retry loop, and a 5-minute memory caching layer. We also explore CDP multiplexing using multiple browser tabs to scan 100+ active pairs concurrently.
+This report presents findings from the investigation of symbol and study values extraction (including SMA50, SMA150, SMA200, and ATR14) from the TradingView Desktop interface using the Chrome DevTools Protocol (CDP) and the `tradingview-mcp` codebase.
 
 ---
 
-## 2. Score Computation Engine
-In `nerves/workers/trading/analysis.py`, the scanner computes two primary metrics: the **Trend Template Score** and the **VCP Result**.
+## 1. Examination of `tradingview-mcp` Code
 
-### A. Minervini Trend Template (8 Criteria)
-The function `score_trend_template` scores each symbol on a scale of **0 to 8** using the following rules:
-1. **price_above_ma150_200**: Price > SMA150 AND Price > SMA200.
-2. **ma150_above_ma200**: SMA150 > SMA200 (proves a long-term uptrend).
-3. **ma200_trending_up**: SMA200 slope is positive (slope > 0, requiring a trend of at least 20 daily bars / 1 month).
-4. **ma50_above_ma150_200**: SMA50 > SMA150 AND SMA50 > SMA200.
-5. **price_above_ma50**: Price is above the 50-day simple moving average.
-6. **above_52w_low_130pct**: Price >= 52-week low × 1.30 (price is at least 30% off its lows).
-7. **within_25pct_of_52w_high**: Price >= 52-week high × 0.75 (price is within 25% of its yearly highs).
-8. **rs_outperforming**: Relative Strength ratio vs S&P500/Benchmark is > 1.0.
+The `tradingview-mcp` package acts as a bridge connecting an automation client to the running TradingView Desktop instance. 
 
-#### Stage Classification
-Based on the Trend Template score, assets are classified into market stages:
-*   **Score >= 7**: `Stage 2 ⭐` (Minervini's prime accumulation and buying stage)
-*   **Score >= 5**: `Stage 1/2 Transition` (Bottoming out, transitioning into Stage 2)
-*   **Score >= 3**: `Stage 1 (Base)` (Sideways consolidation)
-*   **Score < 3**: `Stage 3/4 (Avoid)` (Topping out or in a downtrend)
+### `tradingview-mcp/src/connection.js`
+- **CDP Connection**: Establishes a session with the local Chrome DevTools Protocol (CDP) server running on port `9222`.
+- **Target Discovery**: Scans target pages to find an active TradingView chart using the regular expressions `/tradingview\.com\/chart/i` and `/tradingview/i` via the endpoint `http://localhost:9222/json/list`.
+- **JS Evaluation**: Evaluates JS code snippets in the chart window context using `CDP.Runtime.evaluate()` with `returnByValue: true`.
+- **Key API Path Mapping**:
+  - `chartApi`: `'window.TradingViewApi._activeChartWidgetWV.value()'`
+  - `mainSeriesBars`: `'window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars()'`
 
-### B. Volatility Contraction Pattern (VCP)
-The function `detect_vcp` identifies volatility contraction zones where "smart money" accumulates shares, drying up liquidity before a breakout:
-1. **Volume Contraction** (`vol_contracting`): Current volume is less than 50% of its 20-period average (`volume / volume_avg20 < 0.5`).
-2. **Range Contraction** (`range_contracting`): High-to-low price range is less than 50% of the ATR14 (`(high - low) / atr14 < 0.5`).
-3. **Breakout Zone** (`near_high`): Price is within 10% of the 52-week high (`price >= high_52w * 0.90`).
-4. **Volume Breakout** (`vol_breakout`): Vol ratio > 1.2 (for breakout confirmation).
+### `tradingview-mcp/src/core/indicators.js`
+- **Study Interaction**: Interacts with studies on the chart.
+- **Set Inputs**: Features `setInputs({ entity_id, inputs })` which uses JavaScript to locate a study via `chart.getStudyById(entity_id)` and update its inputs using `.getInputValues()` and `.setInputValues()`.
+- **Toggle Visibility**: Features `toggleVisibility({ entity_id, visible })` which calls `.setVisible(visible)` on the study object.
 
-*   **VCP is Detected** if and only if **both volume and price range are contracting** concurrently.
-*   **Breakout Pivot Level**: Estimated as `round(high * 1.005, 2)` if VCP is detected.
+### `tradingview-mcp/src/cli/commands/indicator.js`
+- **CLI Registration**: Hooks subcommands to the `router` under the `indicator` command group:
+  - `add`: Calls `chartCore.manageIndicator` with action `add`.
+  - `remove`: Calls `chartCore.manageIndicator` with action `remove`.
+  - `toggle`: Calls `indCore.toggleVisibility`.
+  - `set`: Calls `indCore.setInputs`.
+  - `get`: Calls `dataCore.getIndicator` to fetch current configuration and values.
 
 ---
 
-## 3. Analysis of the Data-Fetching Pipeline
-The current `scan_symbols` fetches data by invoking `mcp_client.batch_run(symbols)`. 
+## 2. DOM Selectors and JS Expressions for Extraction
 
-### A. Subprocess Overhead
-`MCPClient._run` executes `node src/cli/index.js <args> --json` via `asyncio.create_subprocess_exec`. For a single symbol:
-1. `_run("symbol", sym)` (switches active chart symbol)
-2. `_run("quote")` (gets quote prices)
-3. `_run("values")` (reads visible studies/indicators from data window)
-4. `_run("ohlcv", "--summary")` (gets ATR14 and volume averages)
+To extract data directly from the active TradingView chart page, we can use either internal JS expressions evaluated via CDP (preferred for performance and accuracy) or query the HTML DOM selectors directly.
 
-This represents **4 subprocess spawns per symbol**. For 100 symbols, this requires **400 node process executions**, creating immense CPU and file handle overhead.
+### A. JS Expressions (via CDP on the global window context)
+- **Active Symbol Name**: 
+  - `window.TradingViewApi._activeChartWidgetWV.value().symbol()` -> Returns a string containing the current exchange/symbol (e.g. `"BINANCE:BTCUSDT"`).
+  - `window.TradingViewApi._activeChartWidgetWV.value().symbolExt().symbol` -> Returns only the symbol part (e.g., `"BTCUSDT"`).
+- **Price (Latest Close)**:
+  - `window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars().valueAt(window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars().lastIndex())[4]` -> Returns the closing price of the current bar (index `4` in the bar array).
+- **Timeframe Interval**:
+  - `window.TradingViewApi._activeChartWidgetWV.value().resolution()` -> Returns the timeframe/resolution string (e.g., `"D"`, `"1D"`, `"240"`, `"60"`, `"15"`).
+- **Indicator Values (via Data Window View)**:
+  - Iterating over `window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().model().dataSources()` and retrieving values from the Data Window View:
+    ```javascript
+    (function() {
+      var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+      var sources = chart.model().model().dataSources();
+      var results = [];
+      for (var si = 0; si < sources.length; si++) {
+        var s = sources[si];
+        if (!s.metaInfo) continue;
+        try {
+          var meta = s.metaInfo();
+          var name = meta.description || meta.shortDescription || '';
+          if (!name) continue;
+          var values = {};
+          var dwv = s.dataWindowView();
+          if (dwv) {
+            var items = dwv.items();
+            if (items) {
+              for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                if (item._value && item._value !== '∅' && item._title) {
+                  values[item._title] = item._value;
+                }
+              }
+            }
+          }
+          if (Object.keys(values).length > 0) results.push({ name: name, values: values });
+        } catch(e) {}
+      }
+      return results;
+    })()
+    ```
 
-### B. Stateful CDP Concurrency Hazards
-`MCPClient` controls the GUI chart widget via CDP (`window.TradingViewApi._activeChartWidgetWV.value()`).
-*   **Symbol switching is global**: Switching the symbol switches the single active chart view.
-*   **Data contamination**: If multiple async tasks run `scan_symbols` or `set_symbol` in parallel, their commands will overlap. For example, Task 1 switches symbol to `BTCUSDT`, but before it can run `get_quote`, Task 2 switches the symbol to `ETHUSDT`. Task 1 then reads the quote and indicators of `ETHUSDT` but records it under the symbol `BTCUSDT`.
-*   **Lack of locks**: There is no synchronization lock protecting access to the `MCPClient` or its underlying CDP instance.
-
-### C. Rate Limits and Waiting Time
-The TradingView Desktop chart must download historical data whenever a symbol is switched.
-*   `waitForChartReady` polls the DOM every 200ms to ensure the loader spinner is gone, the header matches the target symbol, and the bar count is stable for at least 400ms.
-*   This introduces a minimum delay of **400ms–1000ms+ per symbol**.
-*   **Network Rate Limits**: Switching symbols rapidly causes TradingView Desktop to send dozens of WebSocket requests to TradingView servers. TradingView's cloud backend will eventually throttle the client (silent data load failure or empty charts), leading to 10s timeouts in `waitForChartReady`.
-
----
-
-## 4. Proposed Robust Concurrency Queue & Rate Limiter Design
-
-To support scanning 100+ active pairs concurrently without rate limits or state contamination, we propose the following design:
-
-### 1. Persistent HTTP Daemon Communication
-Eliminate subprocess overhead by routing all data queries to the existing `CaptureDaemon` (Node.js Express server) or extending it to support data queries (`/quote`, `/study-values`, `/ohlcv`) alongside `/capture`. The daemon maintains a long-lived CDP session.
-
-### 2. Chart Access Serialization (Mutex Lock)
-Since the TV Desktop active chart is a single shared resource, we must use an `asyncio.Lock` to ensure only one symbol is switched and queried at any time.
-
-### 3. Token Bucket Rate Limiter
-Throttle chart switching to a safe rate (e.g., 1 symbol switch per 1.2 seconds) to prevent TradingView servers from rate-limiting the desktop application.
-
-### 4. Exponential Back-off on 429 or Timeout
-If a symbol switch fails, the loader hangs, or a network request fails, catch the error, release the lock, and retry with exponential back-off (`delay * 2`).
-
-### 5. Multi-Tab CDP Multiplexing (For True Concurrency)
-Instead of a single active chart, we can open multiple tabs in TradingView Desktop (CDP supports multiple page targets). By allocating a pool of tabs (e.g., 5 tabs), we can scan 5 symbols concurrently, each having its own lock.
-
-### Implementation Architecture (Proposed Python Class)
-
-```python
-import asyncio
-import time
-import logging
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-
-logger = logging.getLogger(__name__)
-
-class TokenBucketLimiter:
-    """Async Token Bucket rate limiter to throttle requests."""
-    def __init__(self, rate: float, capacity: float):
-        self.rate = rate          # Tokens added per second
-        self.capacity = capacity  # Maximum burst capacity
-        self.tokens = capacity
-        self.last_update = time.time()
-        self._lock = asyncio.Lock()
-
-    async def acquire(self, tokens: float = 1.0):
-        async with self._lock:
-            while True:
-                now = time.time()
-                elapsed = now - self.last_update
-                self.last_update = now
-                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-                
-                if self.tokens >= tokens:
-                    self.tokens -= tokens
-                    return
-                
-                wait_time = (tokens - self.tokens) / self.rate
-                await asyncio.sleep(wait_time)
-
-class RobustScanner:
-    """
-    Queue-based scanner that serializes access to the stateful TradingView Desktop chart,
-    applies rate limiting, caching, and handles rate-limits with back-off.
-    """
-    def __init__(self, mcp_client, cache_ttl_seconds: int = 300):
-        self.mcp = mcp_client
-        self.lock = asyncio.Lock()  # Prevents state contamination
-        self.limiter = TokenBucketLimiter(rate=0.8, capacity=2.0)  # Throttles symbol switching
-        self.cache: Dict[str, Dict[str, Any]] = {}
-        self.cache_ttl = cache_ttl_seconds
-        
-        # Exponential back-off config
-        self.base_delay = 1.5
-        self.backoff_factor = 2.0
-        self.max_retries = 3
-
-    def _get_cached_result(self, symbol: str, timeframe: str) -> Optional[Dict[str, Any]]:
-        key = f"{symbol}_{timeframe}"
-        if key in self.cache:
-            entry = self.cache[key]
-            if time.time() - entry["timestamp"] < self.cache_ttl:
-                logger.debug(f"Cache hit for {key}")
-                return entry["data"]
-        return None
-
-    def _set_cached_result(self, symbol: str, timeframe: str, data: Dict[str, Any]):
-        key = f"{symbol}_{timeframe}"
-        self.cache[key] = {
-            "timestamp": time.time(),
-            "data": data
-        }
-
-    async def scan_single_symbol(self, symbol: str, timeframe: str = "D") -> Dict[str, Any]:
-        # 1. Check local cache
-        cached = self._get_cached_result(symbol, timeframe)
-        if cached:
-            return cached
-
-        # 2. Acquire serialization lock to switch chart
-        async with self.lock:
-            retries = 0
-            current_delay = self.base_delay
-
-            while retries <= self.max_retries:
-                try:
-                    # Rate limit symbol switches to avoid TV server block (429)
-                    await self.limiter.acquire(1.0)
-                    
-                    # Switch chart symbol and timeframe
-                    # set_symbol blocks until waitForChartReady confirms DOM stability
-                    success = await self.mcp.set_symbol(symbol, timeframe)
-                    if not success:
-                        raise RuntimeError("TradingView chart load timeout or incorrect symbol name")
-
-                    # Fetch quote + indicators + ohlcv within the locked session
-                    quote = await self.mcp.get_quote(symbol)
-                    studies = await self.mcp.get_study_values(symbol, timeframe)
-                    ohlcv = await self.mcp.get_ohlcv_summary(symbol, timeframe)
-
-                    result = {
-                        "symbol": symbol,
-                        "quote": quote,
-                        "studies": studies,
-                        "ohlcv_summary": ohlcv,
-                        "error": None
-                    }
-                    self._set_cached_result(symbol, timeframe, result)
-                    return result
-
-                except Exception as e:
-                    logger.warning(f"Scan error for {symbol} (Attempt {retries+1}/{self.max_retries+1}): {e}")
-                    retries += 1
-                    if retries > self.max_retries:
-                        return {"symbol": symbol, "error": f"Failed after max retries: {str(e)}"}
-                    
-                    # Exponential back-off delay before releasing lock or retrying
-                    await asyncio.sleep(current_delay)
-                    current_delay *= self.backoff_factor
-
-    async def scan_batch(self, symbols: List[str], timeframe: str = "D") -> List[Dict[str, Any]]:
-        """Scans multiple symbols. Lock ensures they run sequentially without state collision."""
-        tasks = [self.scan_single_symbol(sym, timeframe) for sym in symbols]
-        return await asyncio.gather(*tasks)
-```
+### B. DOM Selectors (Alternative Fallbacks)
+If the internal TradingView API is not loaded or has changed, DOM selectors can extract visual elements from the page:
+- **Active Symbol Name**:
+  - `document.querySelector('[data-name="legend-source-title"]')`
+  - `document.querySelector('[class*="title"] [class*="apply-common-tooltip"]')`
+  - `document.querySelector('.legend-item-title__text')`
+- **Price**:
+  - `document.querySelector('[class*="headerRow"] [class*="last-"]')`
+  - `document.querySelector('[class*="bid"] [class*="price"], [class*="dom-"] [class*="bid"]')`
+  - Parser for `document.title` (e.g., `"BTCUSDT 67450.50 ... - TradingView"`).
+- **Timeframe Interval**:
+  - `document.querySelector('[data-name="header-toolbar-intervals"] [class*="selected-"]')`
+  - `document.querySelector('button[class*="isActive-"]')`
+- **Indicator Values (from Pane Legend)**:
+  - Select pane legend rows: `document.querySelectorAll('[class*="legendItem-"], .legend-item')`
+  - Under each legend row:
+    - Study Name: `row.querySelector('[class*="title-"], .legend-item__title')`
+    - Study Values: `row.querySelectorAll('[class*="value-"], .legend-item__value')` (parsing title and textual values inside the legend).
 
 ---
 
-## 5. Dynamic Symbol Scoring (Weex, Binance, Bybit)
-To scan dynamic symbols from multiple exchanges:
+## 3. Retrieval of Study Values (SMA50, SMA150, SMA200, ATR14)
 
-1.  **TV-Compatible Formatting**: Dynamic symbols must be converted into the standard TradingView format.
-    *   **Binance Spot/Futures**: `BINANCE:BTCUSDT` or `BINANCE:BTCUSDT.P`
-    *   **Bybit Spot/Futures**: `BYBIT:BTCUSDT` or `BYBIT:BTCUSDT.P`
-    *   **Weex**: If Weex is supported on TradingView, use the corresponding exchange prefix (e.g. `WEEX:BTCUSDT`). If not natively supported, the system maps the ticker to a correlated major feed (e.g. `BINANCE:BTCUSDT`) to compute general Trend Template / VCP scores, which are identical across feeds due to arbitrage.
-2.  **Dynamic Chart Switch**: The scanner passes the formatted exchange ticker to `chart_set_symbol`.
-3.  **Automatic Indicator Updates**: Once TradingView Desktop loads the chart, the indicators (SMA, Vol MA, ATR) adapt to the new ticker data.
-4.  **Flexible Scoring**: The `MCPClient` retrieves study values from the data window, passing them to `score_trend_template` and `detect_vcp`. This ensures scores are computed accurately regardless of the underlying exchange.
+In `nerves/workers/trading/mcp_client.py`, the `get_study_values(self, symbol, timeframe)` method handles study values retrieval:
+1. It navigates to the target symbol: `await self._run("symbol", symbol)`
+2. It changes to the target timeframe: `await self._run("timeframe", timeframe)`
+3. It fetches active indicators and their data window values: `raw = await self._run("values")`
+4. The `"values"` command in `tradingview-mcp` executes `core.getStudyValues()`, returning a list of `{ name: study_name, values: { title: value } }`.
+5. It then searches the `indicators` dictionary using a fuzzy matching function `_find(keys)`:
+   - **SMA50**: Looks for `"sma 50"`, `"sma50"`, `"ma 50"`, or `"ma50"` (case-insensitive substring matches).
+   - **SMA150**: Looks for `"sma 150"`, `"sma150"`, `"ma 150"`, or `"ma150"`.
+   - **SMA200**: Looks for `"sma 200"`, `"sma200"`, `"ma 200"`, or `"ma200"`.
+   - **ATR14**: Looks for `"atr"` or `"average true range"`.
+   - **Volume MA20**: Looks for `"vol ma"`, `"volume ma"`, `"vol avg"`, or `"vma"`.
+   - **52w High/Low**: Looks for `"52w high"`, `"52 week high"`, `"yearly high"`, etc.
+
+---
+
+## 4. Fallback Strategy if DOM/API Extraction Fails
+
+If both DOM selectors and the JS-based API parsing fail to retrieve the active symbol name (e.g. due to connection issues, slow loading, or breaking changes in the TradingView DOM layouts), the system implements the following fallback strategy:
+
+1. **Active Ticker Resolution Fallback**:
+   - When resolving the target chart context or generating screenshots, if the parsed ticker string is empty or invalid, the client falls back to using **`BTCUSDT`** or **`TAOUSDT`** as the default tickers.
+   - For example, in local capture clients or integration harnesses, a request for `"active"` symbol that fails DOM lookup is directed to `"BTCUSDT"` or `"TAOUSDT"`.
+2. **Graceful Error Recovery**:
+   - If study indicators (SMA50, SMA150, SMA200, ATR14) cannot be found, `_find()` returns `None`.
+   - Missing indicator values are bypassed in Pydantic validation (since Pydantic fields in `TradingViewAlertPayload` are defined as `Optional[Any]`), allowing the system to log a warning, register the signal as a base quote, and proceed without crashing the event loop or the FastAPI webhook receiver.

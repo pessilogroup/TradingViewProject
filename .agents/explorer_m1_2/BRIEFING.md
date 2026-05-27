@@ -1,33 +1,42 @@
-# BRIEFING — 2026-05-26T23:35:49+07:00
+# BRIEFING — 2026-05-27T19:14:01+07:00
 
 ## Mission
-Investigate Trend Template and VCP score computations in `nerves/workers/trading/analysis.py`, analyze `scan_symbols` rate limiting and data fetching, design a robust concurrency queue and rate-limiting handler for 100+ active pairs, and explain score computation for dynamic Weex/Binance/Bybit symbols.
+Investigate active symbol and study value extraction (SMA50, SMA150, SMA200, ATR14) from TradingView Desktop interface.
 
 ## 🔒 My Identity
-- Archetype: explorer
-- Roles: Teamwork explorer, Read-only investigator
+- Archetype: Explorer
+- Roles: [Explorer, Researcher]
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_2
-- Original parent: f9a6e2d4-6528-484a-bafe-a42f09a8e3e7
-- Milestone: Hook Service Startup Analysis & Test Design
-- Milestone (Update 2026-05-26): Concurrency and Scanning Specialist
-- Parent Conversation ID (Update 2026-05-26): 7efa8c3e-7692-4aaf-a41b-1289870f9172
+- Original parent: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Milestone: explorer_m1_2
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement or modify source code.
-- Save report as analysis.md in c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_2.
-- Write findings to handoff.md in working directory.
+- Read-only investigation — do NOT implement
+- In CODE_ONLY network mode: do not access external websites or services
 
 ## Current Parent
-- Conversation ID: 7efa8c3e-7692-4aaf-a41b-1289870f9172
-- Updated: 2026-05-26T23:35:49+07:00
+- Conversation ID: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
+- Updated: not yet
 
 ## Investigation State
-- **Explored paths**: None
-- **Key findings**: None
-- **Unexplored areas**: Trend Template and VCP score computation in `nerves/workers/trading/analysis.py`, `scan_symbols` implementation, concurrency/rate-limiting design, dynamic exchange symbol score computation.
+- **Explored paths**:
+  - `tradingview-mcp/src/connection.js`
+  - `tradingview-mcp/src/core/indicators.js`
+  - `tradingview-mcp/src/cli/commands/indicator.js`
+  - `tradingview-mcp/src/core/data.js`
+  - `tradingview-mcp/src/core/chart.js`
+  - `nerves/workers/trading/mcp_client.py`
+  - `nerves/workers/trading/gateway/webhook.py`
+- **Key findings**:
+  - `tradingview-mcp` uses CDP port 9222 to connect to TradingView Desktop.
+  - Active symbol is parsed via JS API (`chart.symbolExt().symbol` / `chart.symbol()`) or DOM fallback (`[data-name="legend-source-title"]`).
+  - Study values are parsed using fuzzy key search (`_find`) over data window view items returned by `core.getStudyValues()`.
+  - Fallback tickers are `BTCUSDT` or `TAOUSDT`.
+- **Unexplored areas**: none (investigation complete).
 
 ## Key Decisions Made
-- None
+- Organized findings under four key requested sections in `analysis.md`.
+
 
 ## Artifact Index
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_2\handoff.md — Final investigation handoff report.
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\explorer_m1_2\analysis.md — Main analysis and findings of TV study extraction

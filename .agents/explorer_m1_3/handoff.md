@@ -1,122 +1,116 @@
-# Investigation Report: FastAPI Router and Telegram Bot Command Setup
-
-This report contains findings on how FastAPI routes and Telegram bot commands are structured in the codebase, and proposes a design for a new `/scan_all` Telegram command that runs in the background.
-
----
+# Handoff Report — Webhook Ingress and Persistence Layers Analysis
 
 ## 1. Observation
+We observed the following exact file locations, code blocks, and execution results during the read-only investigation:
 
-Direct code observations from the workspace:
-
-### FastAPI Router Setup
-* **Main Application Setup**: In `nerves/workers/trading/main.py`:
-  * Line 265: `app = FastAPI(title="TradingView Webhook Server", version="7.6", lifespan=lifespan)`
-  * Line 272: `app.include_router(_webhook_router)` (where `_webhook_router` is imported at line 44: `from gateway.webhook import router as _webhook_router`)
-  * Line 275-276:
+- **Webhook Ingress Implementation**: 
+  - File: `nerves/workers/trading/gateway/webhook.py` (lines 45–230)
+  - Endpoint path: `/webhook` via `@router.post("/webhook")`
+  - Integration: Registered in `nerves/workers/trading/main.py` (lines 41, 273):
     ```python
-    from auth.routes import auth_router as _auth_router
-    app.include_router(_auth_router)
-    ```
-  * Middleware is registered at lines 280 (AuthMiddleware) and 300 (ip_whitelist_middleware).
-  * Direct route definitions exist for GET `/health`, `/dashboard`, `/daemon_dashboard`, `/`, `/tv_health_check`, `/api/mcp/status`, `/api/watchlist` (GET/POST/DELETE/PUT), `/api/scan/watchlist`, `/api/brief/trigger`, `/api/brief/latest`, `/api/indicator-signals`, `/api/indicator-signals/stats`, `/api/rag/query`, `/api/rag/status`, `/trades` (GET/stats/equity/analysis).
-
-* **Webhook Ingress Route**: In `nerves/workers/trading/gateway/webhook.py`:
-  * Line 45: `@router.post("/webhook")` parses incoming JSON payload, performs security checks (webhook secret + optional dashboard token bypass), verifies rate limits, and persists the signal.
-
-* **Auth Router Structure**: In `nerves/workers/trading/auth/routes.py`:
-  * Line 19: `auth_router = APIRouter(prefix="/auth", tags=["auth"])`
-  * Line 27: `@auth_router.get("/login")` serves the login page or instructions.
-  * Line 58: `@auth_router.get("/callback")` exchanges a one-time code for a session token, sets a signed `tg_session` cookie, and redirects to dashboard.
-  * Line 143: `@auth_router.post("/telegram-callback")` handles Telegram Widget callback login verification.
-  * Line 225: `@auth_router.get("/logout")` invalidates the session.
-
-### Telegram Bot Setup
-* **Bot Thread and Initialization**: In `nerves/workers/trading/telegram_bot.py`:
-  * Line 2019-2021:
-    ```python
-    _bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
-    _bot_thread.start()
-    ```
-  * Line 2017: `app.run_polling(drop_pending_updates=True, close_loop=False)` runs the python-telegram-bot application inside a daemon thread.
-  * Line 1931: `_sender = TelegramSender(app)` instantiates a global `TelegramSender` singleton for outbound messages.
-  * Line 1952-1987: `post_init(application)` registers bot commands in the Telegram menu via:
-    ```python
-    await application.bot.set_my_commands(commands)
-    ```
-  * Line 1990-2008: Command handlers are added:
-    ```python
-    app.add_handler(CommandHandler("start",     cmd_start))
-    app.add_handler(CommandHandler("help",      cmd_help))
+    from gateway.webhook import router as _webhook_router
     ...
-    app.add_handler(CommandHandler("positions", cmd_positions))
+    app.include_router(_webhook_router)
     ```
-  * Claude SDK CLI telegram commands are registered separately if enabled (line 245 in `main.py` calls `_claude_tg.register_commands(_app, _claude_service)` which registers `/claude`, `/analyze`, `/claude_reset`, and `/claude_status` mapping to `claude_cli/telegram_commands.py`).
 
-* **Interactive Scan Logic**:
-  * Line 759: `async def cmd_scan_enhanced(update, context)` is registered as the handler for `/scan`.
-  * Line 768: Symbols are retrieved from watchlist: `symbols = get_watchlist()`.
-  * Line 781: Symbols are analyzed: `results = await scan_symbols(symbols, mcp)`.
-  * Lines 787-825: Formats results and replies to the message.
+- **Pydantic Data Model**:
+  - File: `nerves/workers/trading/data/tv_models.py` (lines 9–42)
+  - Model class: `class TradingViewAlertPayload(BaseModel)`
+  - Model config: `model_config = ConfigDict(populate_by_name=True, extra="allow")` (line 42)
+  - Key fields (with aliases/defaults):
+    - `secret`: `Optional[str]`
+    - `action`: `Optional[str]` (alias `side`)
+    - `symbol`: `Optional[str]`
+    - `price`: `Optional[Any]`
+    - `volume`: `Optional[Any]`
+    - `quoteQty`: `Optional[Any]` (alias `size`, default `10.0`)
+    - `time`: `Optional[str]`
+    - `interval`: `Optional[str]`
+    - `sl`: `Optional[str]`
+    - `tp`: `Optional[str]`
+    - `exchange`: `Optional[str]`
+    - `indicator`: `Optional[str]`
+    - `strategy`: `Optional[str]`
+    - `message`: `Optional[str]`
+
+- **Security Validation Logic**:
+  - Timing-attack safe comparison (lines 76–80 in `webhook.py`):
+    ```python
+    if not is_dashboard_user and not secrets.compare_digest(
+        str(secret), str(config.WEBHOOK_SECRET)
+    ):
+    ```
+  - IP Whitelisting (lines 286–308 in `main.py`): Real client IP extracted from rightmost hop of `X-Forwarded-For` header. Checks against `config.TV_WHITELIST_IPS`.
+  - Rate Limiting (lines 113–122 in `webhook.py`): 15 requests per minute limit tracked in `_WEBHOOK_RATE_LIMITS` keyed by IP.
+
+- **Persistence Layer**:
+  - Database Path: `config.DB_PATH` defaulting to `trades.db` in project root directory (lines 19 in `config.py`).
+  - SQLite Schema for `indicator_signals` (lines 108–122 in `database.py`):
+    ```sql
+    CREATE TABLE IF NOT EXISTS indicator_signals (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        signal_id        INTEGER NOT NULL REFERENCES signals(id),
+        created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+        symbol           TEXT    NOT NULL,
+        indicator_name   TEXT    NOT NULL,
+        signal_type      TEXT    NOT NULL DEFAULT 'info',
+        interval         TEXT,
+        price            REAL,
+        confidence_score INTEGER DEFAULT 0,
+        conditions_met   TEXT,
+        metadata         TEXT,
+        source_ip        TEXT,
+        exchange         TEXT    DEFAULT 'binance'
+    );
+    ```
+  - Insertion logic: Main signal insertion occurs in `persistence_store.py` (lines 14–32), followed by a background event `IndicatorSignalReceived` if `is_indicator` is true (lines 201–213 in `webhook.py`). The listener in `nerves/workers/trading/data/indicator_persistence.py` executes `insert_indicator_signal` in `persistence_store.py` (lines 43–72) inside a `try/except` block (Design Invariant DI-1) so database errors do not block the trading pipeline.
+
+- **Test Suite Results**:
+  - Ran unit tests in `nerves/workers/trading/tests/unit/test_webhook_gateway.py` (15/15 PASSED in 1.35s).
+  - Ran integration tests in `nerves/workers/trading/tests/integration/test_webhook.py` (2/2 PASSED in 2.90s).
 
 ---
 
 ## 2. Logic Chain
-
-1. **Timeout Prevention**: 
-   * Calling `analysis.scan_symbols` queries market data sequentially for each symbol via the local MCP client (which spawns subprocess Node.js instances).
-   * For large watchlists, this sequential execution will take tens of seconds to minutes.
-   * If a command handler runs synchronously in the Telegram polling flow, it block-waits for `scan_symbols`. This runs the risk of timing out python-telegram-bot's polling connection or resulting in an unresponsive bot.
-   * *Conclusion*: We must launch the scanning logic asynchronously as a background task. In Python's asyncio, this is achieved by calling `asyncio.create_task(run_scan_all_background(chat_id))` inside the command handler `cmd_scan_all`. The command handler immediately replies to notify the user, freeing up the handler thread.
-
-2. **Setup Filtering**:
-   * To identify top setups from the scanned results, we must evaluate each symbol's Trend Template score and VCP status.
-   * In `nerves/workers/trading/analysis.py`, the Trend Template score goes from `0` to `8` (`trend_template.score`), and VCP status is a boolean (`vcp.detected`).
-   * *Conclusion*: We filter the results with the condition `score >= 6 or vcp_detected`.
-
-3. **Broadcasting results**:
-   * Once the background scan finishes, the bot should send the formatted message to the user who triggered the command.
-   * In addition, it must broadcast the setups to the channel subscribers. In `telegram_bot.py`, `config.TELEGRAM_CHAT_IDS` contains the list of configured target chat IDs.
-   * *Conclusion*: The background task will call `app.bot.send_message(chat_id, text, parse_mode="HTML")` for the initiating chat, and then loop through `config.TELEGRAM_CHAT_IDS` (skipping the initiating chat to avoid double-sending) to broadcast to other channels.
+1. **Endpoint Routing**: The main FastAPI instance `app` in `main.py` imports and mounts the `_webhook_router` from `gateway.webhook`. Therefore, any POST request to `/webhook` routes directly to the `webhook(request: Request)` handler in `webhook.py`.
+2. **Payload Parsing & Model Injection**: The incoming request body is parsed as JSON, and parsed into the Pydantic class `TradingViewAlertPayload` using `model_validate`. This handles snake_case to camelCase conversion (e.g. `size` -> `quoteQty`).
+3. **Multi-layer Security**: 
+   - Requests are verified against whitelisted TradingView IPs using global middleware if enabled (`config.ENABLE_IP_WHITELIST`). Client IP is resolved using the rightmost hop of `X-Forwarded-For` to prevent IP header spoofing.
+   - The token secret is compared using timing-attack safe `secrets.compare_digest` with `config.WEBHOOK_SECRET`. A Bearer token matching `config.DASHBOARD_TOKEN` acts as a bypass.
+   - Client IPs are rate-limited to 15 req/min via an in-memory sliding window cache.
+4. **Data Isolation and DB Persistence**:
+   - The secret is stripped (`payload.pop("secret", None)`) prior to storing in the database to prevent credential leakage.
+   - `is_indicator` is evaluated to check if the payload originates from an indicator. If so, a sanity check requires both `symbol` and `indicator_name` to be present (raising a HTTP 400 bad request if missing).
+   - If validation passes, a parent signal record is saved to the `signals` table via `database.insert_signal`.
+   - For indicator signals, `IndicatorSignalReceived` event is emitted. The subscriber in `indicator_persistence.py` handles asynchronously inserting the corresponding indicator metadata and parameters into the `indicator_signals` table via a robust, non-blocking try-except wrapper.
 
 ---
 
 ## 3. Caveats
-
-* **MCP Dependency**: The VCP and Trend Template scanner requires the local TradingView Desktop MCP Client to be connected (via CDP port 9222). If TradingView Desktop is closed or the CDP port is not accessible, the background scan will fail or return errors.
-* **Scan Duration**: The scan executes symbols sequentially using `batch_run`. If the watchlist grows very large (e.g. 50+ symbols), it may take several minutes to complete. An optimization would be parallel execution, but currently, TradingView MCP client serializes commands.
-* **Rate Limits**: Spamming `/scan_all` could overload the MCP CDP interface. A cooldown mechanism should be implemented in production if users abuse the command.
+- **IP Whitelist Status**: IP Whitelisting is controlled by the environment variable `ENABLE_IP_WHITELIST` (defaulting to `false` in development). If disabled, requests from any IP can reach the webhook authentication.
+- **In-Memory Rate Limiting**: The rate-limit cache `_WEBHOOK_RATE_LIMITS` is in-memory. In a distributed/multi-process server environment, this cache is isolated to each process.
+- **Async DB Lock**: While database operations are asynchronous using `aiosqlite`, SQLite has a database-level lock during write transactions. High concurrency of webhook signals could cause transactional queuing.
 
 ---
 
 ## 4. Conclusion
-
-A new Telegram bot command `/scan_all` should be added to `telegram_bot.py`. The design consists of:
-1. **CommandHandler Registration**: Registering `/scan_all` pointing to `cmd_scan_all` and adding the command metadata to the `post_init` list.
-2. **Non-Blocking Trigger**: `cmd_scan_all` immediately sends a "scanning..." placeholder message and executes `asyncio.create_task(run_scan_all_background(chat_id))`.
-3. **Background Scanner**: `run_scan_all_background` runs the analysis, filters setups with `trend_template.score >= 6` or `vcp.detected`, formats the findings in a clean HTML preformatted table, and broadcasts to allowed chats in `config.TELEGRAM_CHAT_IDS`.
-
-The detailed changes are proposed in `.agents/explorer_m1_3/proposed_scan_all.patch`.
+The webhook ingress and persistence layers are robustly implemented with strong security guards (timing-safe token validation, IP-spoofing-resistant whitelisting, and in-memory rate limiting). The expected payload schema is highly flexible, utilizing Pydantic's alias matching and `extra="allow"` configuration. Database persistence enforces proper normalization across `signals` and `indicator_signals` tables, executing database writes asynchronously and isolating potential DB errors from blocking the core execution pipeline (DI-1).
 
 ---
 
 ## 5. Verification Method
-
-To verify the implementation once applied:
-1. **Verify Syntax and Registration**:
-   * Run the python syntax check:
-     ```powershell
-     python -m py_compile nerves/workers/trading/telegram_bot.py
-     ```
-2. **Execute Tests**:
-   * Run the project test suite using pytest to ensure no regressions in the telegram bot module:
-     ```powershell
-     pytest nerves/workers/trading/tests/unit/test_telegram_bot_p8.py
-     ```
-3. **Manual Verification**:
-   * Ensure TradingView Desktop is running and connected via CDP.
-   * Launch the FastAPI server: `python nerves/workers/trading/main.py`.
-   * Open the Telegram bot and trigger `/scan_all`.
-   * Verify that:
-     * Bot immediately responds with: "🔄 Bắt đầu quét toàn bộ watchlist trong background..."
-     * Bot remains responsive to other commands (like `/status`) during the scan.
-     * Within 1-2 minutes, the bot sends the final scan result containing only setups with TT >= 6 or VCP detected.
+To verify the webhook validation, parsing, and persistence layers independently:
+1. Run the test suite:
+   ```powershell
+   pytest nerves/workers/trading/tests/unit/test_webhook_gateway.py
+   pytest nerves/workers/trading/tests/integration/test_webhook.py
+   ```
+2. Manually test webhook routing and validation using PowerShell:
+   ```powershell
+   # Send an unauthorized payload (returns 401)
+   Invoke-RestMethod -Method Post -Uri "http://localhost:5000/webhook" -ContentType "application/json" -Body '{"symbol": "BTCUSDT", "side": "BUY"}'
+   ```
+3. Inspect database schema structure directly using SQLite CLI on the target db:
+   ```powershell
+   sqlite3 trades.db ".schema indicator_signals"
+   ```

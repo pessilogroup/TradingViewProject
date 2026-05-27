@@ -1,295 +1,150 @@
-# Analysis: Angati.exe Version Checking and Warning Mechanism Design
+# Webhook Ingress and Persistence Layers Analysis
 
-## 1. Executive Summary
-This report analyzes the design and implementation of a boot-time version checker for `angati.exe` inside the `hook_service.py` component. The design outlines a robust, non-blocking check function that uses a background daemon thread to resolve the file paths, compute and compare SHA-256 hashes in a chunked manner, handle missing files gracefully without warning or crashing, and print a warning message to `sys.stderr` when a mismatch is detected.
+This report documents the detailed investigation of the TradingView webhook ingress, security validation, Pydantic schema models, and SQLite persistence layers within the TradingViewProject codebase.
 
-## 2. Problem Statement & Context
-The hook server `nerves/core/hook_service.py` is a crucial asset that intercepts agent tools to evaluate security policies (KG Guard) and failure recovery states (Scar Memory). Both policies rely on executing a binary named `angati.exe`. If the local version of `angati.exe` differs from the main Brain version (situated in the user's App Data directory), inconsistencies might arise.
-Therefore, on hook server boot, we must compare the two files:
-- **Local `angati.exe`**: situated at project root or `tools/angati/angati.exe`.
-- **Brain `angati.exe`**: situated under the user's App Data directory (e.g. `C:\Users\pesil\.gemini\antigravity\tools\angati\angati.exe` or `~/.gemini/antigravity/tools/angati/angati.exe`).
+---
 
-Because `hook_service.py` runs a blocking HTTP server (`serve_forever()`), the check must run **non-blocking** on boot to prevent delaying server startup.
+## 1. Webhook Ingress Implementation
 
-## 3. Path Resolution Strategy
-To ensure robustness, the paths to both binaries are resolved dynamically:
-- For the local binary, we look at several common project layout locations relative to the `AGENTS_ROOT` directory.
-- For the brain binary, we resolve the user's home directory (e.g., via `Path.home()` or the `USERPROFILE` environment variable on Windows).
+The `/webhook` endpoint is implemented inside the **FastAPI** web application. 
 
-```python
-from pathlib import Path
-import os
+* **File Location**: `nerves/workers/trading/gateway/webhook.py` (lines 45–230)
+* **Function**: `async def webhook(request: Request)`
+* **Route Mapping**: Registered via the APIRouter instance `router = APIRouter()` and decorated with `@router.post("/webhook")`.
+* **Server Setup & Mount**: In `nerves/workers/trading/main.py` (lines 41 and 273), the router is imported and mounted onto the core `FastAPI` instance:
+  ```python
+  from gateway.webhook import router as _webhook_router
+  ...
+  app.include_router(_webhook_router)
+  ```
 
-def resolve_local_angati_path(agents_root: Path) -> Path:
-    """Dynamically resolve the local angati.exe path within the project workspace."""
-    local_paths = [
-        agents_root / "angati.exe",
-        agents_root / "tools" / "angati" / "angati.exe",
-        agents_root / "spine" / "angati" / "angati.exe"
-    ]
-    for path in local_paths:
-        if path.is_file():
-            return path
-    return agents_root / "angati.exe"  # Default fallback path
+---
 
-def resolve_brain_angati_path() -> Path:
-    """Dynamically resolve the brain's angati.exe path under App Data directory."""
-    # 1. Environment variable override (good for testing)
-    env_override = os.environ.get("ANGATI_BRAIN_PATH")
-    if env_override:
-        return Path(env_override)
-        
-    # 2. Standard location based on user profile / home directory
-    home_dir = Path.home()
-    standard_path = home_dir / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe"
-    if standard_path.is_file():
-        return standard_path
-        
-    # 3. Explicit check on Windows fallback environment variable
-    userprofile = os.environ.get("USERPROFILE")
-    if userprofile:
-        win_path = Path(userprofile) / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe"
-        if win_path.is_file():
-            return win_path
-            
-    return standard_path
+## 2. Expected Pydantic Schema & Payload Requirements
+
+The Pydantic data model validates and parses incoming payloads into structured python objects.
+
+* **File Location**: `nerves/workers/trading/data/tv_models.py`
+* **Model Class**: `TradingViewAlertPayload(BaseModel)`
+* **Model Configuration**: `model_config = ConfigDict(populate_by_name=True, extra="allow")`. This configuration maps incoming payload keys (which may use snake_case or camelCase aliases) and allows additional custom keys to be parsed without raising validation exceptions.
+
+### Table of Expected Payload Fields:
+
+| Field Name | Type | Alias | Default | Description / Expected Values |
+| :--- | :--- | :--- | :--- | :--- |
+| `secret` | `Optional[str]` | — | `None` | Authentication secret key. |
+| `action` | `Optional[str]` | `side` | `None` | The trade action, typically `"buy"`, `"sell"`, or `"alert"`. |
+| `symbol` | `Optional[str]` | — | `None` | Trading pair symbol, e.g., `"BTCUSDT"`, `"ETHUSDT"`. |
+| `price` | `Optional[Any]` | — | `None` | Market price at the time of the alert (coerced safely downstream). |
+| `volume` | `Optional[Any]` | — | `None` | Transaction volume at the time of the alert. |
+| `quoteQty` | `Optional[Any]` | `size` | `10.0` | Quote quantity for trade execution (capped at `MAX_QUOTE_QTY`). |
+| `time` | `Optional[str]` | — | `None` | Timestamp of the signal event from TradingView. |
+| `interval` | `Optional[str]` | — | `None` | Timeframe/interval of the chart (e.g., `"1m"`, `"5m"`, `"1h"`, `"D"`). |
+| `sl` | `Optional[str]` | — | `None` | Stop Loss trigger price or percentage. |
+| `tp` | `Optional[str]` | — | `None` | Take Profit trigger price or percentage. |
+| `exchange` | `Optional[str]` | — | `None` | Target exchange (e.g., `"binance"`, `"bybit"`, `"weex"`). |
+| `indicator` | `Optional[str]` | — | `None` | Name of the indicator triggering the alert (e.g., `"MTT"`). |
+| `strategy` | `Optional[str]` | — | `None` | Name of the strategy. |
+| `message` | `Optional[str]` | — | `None` | Custom text alert details from TradingView. |
+
+---
+
+## 3. Webhook Signal Validation Logic
+
+Incoming webhook requests undergo a multi-layered security validation process to check credentials, IP rate limits, and whitelisting.
+
+### A. Authentication and Secrets
+Validation is processed in `nerves/workers/trading/gateway/webhook.py` (lines 59–80):
+1. **Secret Lookup**: The webhook endpoint tries to retrieve the authentication secret from three distinct sources in order:
+   - Header: `X-TV-Secret`
+   - Query Parameter: `?secret=...`
+   - JSON Payload: `payload["secret"]`
+2. **Dashboard Bypass**: If the request contains a valid `Authorization` header with a Bearer token matching `config.DASHBOARD_TOKEN`, the webhook secret check is bypassed.
+3. **Comparison**: If not bypassed, it performs a timing-attack safe comparison using `secrets.compare_digest(str(secret), str(config.WEBHOOK_SECRET))`. Failing checks reject with `HTTP 401 Unauthorized`.
+4. **Secret Stripping**: Once validated, the `secret` key is popped from the payload dict (`payload.pop("secret", None)`) so it is never logged or stored in the database.
+
+### B. IP Whitelisting
+IP whitelisting is handled globally by the HTTP middleware `ip_whitelist_middleware` in `nerves/workers/trading/main.py` (lines 298–308):
+* **State Check**: Enabled if `config.ENABLE_IP_WHITELIST` is `True`.
+* **Client IP Extraction (Anti-Spoofing Fix SEC-001)**: The client IP is extracted via a helper function `_get_real_client_ip(request)` (lines 289–295) that parses the `X-Forwarded-For` header and extracts the **rightmost** IP entry. This rightmost entry is appended by the trusted reverse proxy, preventing clients from spoofing their IP address via custom headers.
+* **IP Restriction**: If the extracted IP is not `"127.0.0.1"` and is not in the set of whitelisted TradingView IPs (`config.TV_WHITELIST_IPS`), the request is rejected with `HTTP 403 Forbidden`. The default whitelisted IPs are:
+  - `"52.89.214.238"`
+  - `"34.212.75.30"`
+  - `"54.218.53.128"`
+  - `"52.32.178.7"`
+
+### C. Rate Limiting
+Rate limiting is evaluated directly within the `/webhook` endpoint in `nerves/workers/trading/gateway/webhook.py` (lines 113–122):
+* **Limit**: Standard rate limit of **15 requests per minute** per client IP.
+* **Mechanism**: State is held in a module-level dictionary `_WEBHOOK_RATE_LIMITS = {}` storing `(count, window_start_timestamp)` keyed by the source IP.
+* **Limiting**: If the current request time is within 60 seconds of `window_start_timestamp` and the count is $\ge 15$, it rejects with `HTTP 429 Too Many Requests`. Otherwise, it updates the count or resets the window.
+
+### D. Safe Parsing and Input Sanitization
+To avoid parsing issues and potential denial-of-service/overflow vulnerabilities (TVP-001 / CWE-20 & TVP-002 / CWE-770), the webhook performs safe type coercion:
+* **Price Parsing**: Removes commas from string values and converts to float: `float(str(price).replace(',', ''))`. If parsing fails, it defaults to `None`.
+* **Quantity Parsing**: Converts `quoteQty` to a float. If missing or invalid, it defaults to `10.0`. If it exceeds `config.MAX_QUOTE_QTY`, it is capped at that limit.
+
+---
+
+## 4. Database Persistence Structure
+
+### A. Database Location
+The SQLite database path is resolved using the `DB_PATH` environment variable, managed through `config.py` (lines 19 and 23):
+* **Default Location**: `trades.db` in the workspace root path (or `/app/data/trades.db` in the production Docker container).
+* **Current Workspace File**: `c:\Users\pesil\working\mj_trading\TradingViewProject\trades.db`
+
+### B. SQLite Schema of the `indicator_signals` Table
+The schema is defined in `nerves/workers/trading/database.py` (lines 108–127):
+
+```sql
+CREATE TABLE IF NOT EXISTS indicator_signals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id        INTEGER NOT NULL REFERENCES signals(id),
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    symbol           TEXT    NOT NULL,
+    indicator_name   TEXT    NOT NULL,
+    signal_type      TEXT    NOT NULL DEFAULT 'info',
+    interval         TEXT,
+    price            REAL,
+    confidence_score INTEGER DEFAULT 0,
+    conditions_met   TEXT,
+    metadata         TEXT,
+    source_ip        TEXT,
+    exchange         TEXT    DEFAULT 'binance'
+);
+
+-- Index Definitions
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_symbol ON indicator_signals(symbol);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_name   ON indicator_signals(indicator_name);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_type   ON indicator_signals(signal_type);
+CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(created_at);
 ```
 
-## 4. Hashing & Graceful Failure Handling Design
-To handle large files efficiently and minimize memory overhead, the hashing logic processes files in chunk sizes (e.g. 64 KB) using Python's `hashlib.sha256()`.
-
-If either the local or brain `angati.exe` is missing:
-- The check function **must not crash** (by catching exceptions).
-- The check function **must not issue warnings** (it exits silently).
-This ensures that systems without local or brain binaries (e.g. clean checkouts, non-Windows environments without full daemon installations) run without any friction.
-
-```python
-import hashlib
-import sys
-
-def get_file_sha256(file_path: Path) -> str:
-    """Calculate SHA-256 of a file using memory-efficient chunking."""
-    sha256 = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(65536):  # Read in 64KB chunks
-            sha256.update(chunk)
-    return sha256.hexdigest()
-
-def check_angati_version_sync(local_path: Path, brain_path: Path) -> None:
-    """Synchronous core logic comparing file hashes and logging mismatches."""
-    try:
-        # Graceful handling of missing files: exit silently
-        if not local_path.is_file() or not brain_path.is_file():
-            return
-            
-        local_hash = get_file_sha256(local_path)
-        brain_hash = get_file_sha256(brain_path)
-        
-        if local_hash != brain_hash:
-            # Print version mismatch warning to stderr
-            print(
-                "[SRA Server] WARNING: Local angati.exe version mismatch detected! "
-                "Please manually restart the hook server to synchronize the binary.",
-                file=sys.stderr,
-                flush=True
-            )
-    except Exception:
-        # Prevent any exceptions from crashing the hook server boot process
-        pass
-```
-
-## 5. Threading vs. Async Design
-Since `hook_service.py` is implemented using a synchronous multi-threaded HTTP server (`ThreadingHTTPServer` with `serve_forever()`), a daemon thread is the safest and most standard pattern for non-blocking operations. An `asyncio` event loop is not run by default in `hook_service.py`, making thread execution the clear choice.
-
-### Thread-based implementation:
-```python
-import threading
-
-def check_angati_version_async(agents_root: Path) -> None:
-    """Launches the version checking logic inside a daemon thread on boot."""
-    def run_check():
-        local_path = resolve_local_angati_path(agents_root)
-        brain_path = resolve_brain_angati_path()
-        check_angati_version_sync(local_path, brain_path)
-        
-    thread = threading.Thread(target=run_check, name="AngatiVersionChecker", daemon=True)
-    thread.start()
-```
-
-### Asyncio task design (alternative for async event loop environments):
-If the hook server were migrated to an async framework (e.g. FastAPI/Uvicorn), blocking file operations should run in an executor:
-```python
-import asyncio
-
-async def check_angati_version_asyncio(agents_root: Path) -> None:
-    """Asynchronous version check running blocking I/O in a thread pool executor."""
-    loop = asyncio.get_running_loop()
-    local_path = resolve_local_angati_path(agents_root)
-    brain_path = resolve_brain_angati_path()
-    
-    # Run synchronous hash check in thread executor
-    await loop.run_in_executor(
-        None, 
-        check_angati_version_sync, 
-        local_path, 
-        brain_path
-    )
-```
-
-## 6. Draft Implementation
-Below is the draft implementation of version checking, to be placed inside `hook_service.py` and run on boot during `main()`.
-
-### Code Draft snippet for `nerves/core/hook_service.py`
-```python
-# Insert at imports section:
-# import os
-# import hashlib
-# import threading
-# from pathlib import Path
-
-def get_file_sha256(file_path: Path) -> str:
-    """Computes the SHA-256 hash of a file in 64KB chunks."""
-    sha = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            while chunk := f.read(65536):
-                sha.update(chunk)
-        return sha.hexdigest()
-    except Exception:
-        return ""
-
-def check_angati_version_async(agents_root: Path) -> None:
-    """Starts a non-blocking background thread to check angati.exe version match."""
-    def _run():
-        try:
-            # 1. Resolve local path
-            local_paths = [
-                agents_root / "angati.exe",
-                agents_root / "tools" / "angati" / "angati.exe",
-                agents_root / "spine" / "angati" / "angati.exe"
-            ]
-            local_path = None
-            for p in local_paths:
-                if p.is_file():
-                    local_path = p
-                    break
-            
-            # 2. Resolve brain path
-            env_override = os.environ.get("ANGATI_BRAIN_PATH")
-            if env_override:
-                brain_path = Path(env_override)
-            else:
-                brain_path = Path.home() / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe"
-                if not brain_path.is_file():
-                    userprofile = os.environ.get("USERPROFILE")
-                    if userprofile:
-                        win_path = Path(userprofile) / ".gemini" / "antigravity" / "tools" / "angati" / "angati.exe"
-                        if win_path.is_file():
-                            brain_path = win_path
-            
-            # Graceful check for missing files (neither exists -> exit silently)
-            if not local_path or not local_path.is_file() or not brain_path.is_file():
-                return
-                
-            local_hash = get_file_sha256(local_path)
-            brain_hash = get_file_sha256(brain_path)
-            
-            if local_hash and brain_hash and local_hash != brain_hash:
-                print(
-                    "[SRA Server] WARNING: Local angati.exe version mismatch detected! "
-                    "Please manually restart the hook server to synchronize the binary.",
-                    file=sys.stderr,
-                    flush=True
-                )
-        except Exception:
-            pass  # Ensure server never crashes due to background checking logic
-
-    thread = threading.Thread(target=_run, name="AngatiVersionChecker", daemon=True)
-    thread.start()
-```
-
-### Integration in hook_service main()
-```python
-def main():
-    port = 9105
-    server_address = ('', port)
-    
-    # Run version checking in background thread on boot
-    check_angati_version_async(AGENTS_ROOT)
-    
-    httpd = ThreadingHTTPServer(server_address, SRAHookHandler)
-    print(f"[SRA Server] Running SRA Hybrid Hook Server on port {port}...", file=sys.stderr)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    print("[SRA Server] Stopping server...", file=sys.stderr)
-```
-
-## 7. Integration & Mock Testing Design
-To support Automated Testing (Milestone 3), we can design unit test scenarios in `nerves/workers/trading/test_angati_integration.py` to verify the warning behavior. Because standard execution does not have a real mismatch environment, we mock the path resolution and capture stderr.
-
-```python
-import io
-import sys
-import unittest
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
-
-class TestAngatiVersionChecking(unittest.TestCase):
-    def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.dir_path = Path(self.temp_dir.name)
-        self.local_exe = self.dir_path / "local_angati.exe"
-        self.brain_exe = self.dir_path / "brain_angati.exe"
-
-    def tearDown(self):
-        self.temp_dir.cleanup()
-
-    @patch('hook_service.resolve_local_angati_path')
-    @patch('hook_service.resolve_brain_angati_path')
-    def test_matching_version(self, mock_brain, mock_local):
-        # Create identical mock files
-        self.local_exe.write_bytes(b"version_1.0_binary")
-        self.brain_exe.write_bytes(b"version_1.0_binary")
-        mock_local.return_value = self.local_exe
-        mock_brain.return_value = self.brain_exe
-
-        captured_stderr = io.StringIO()
-        with patch('sys.stderr', captured_stderr):
-            # Run sync core checks directly
-            hook_service.check_angati_version_sync(self.local_exe, self.brain_exe)
-            
-        self.assertEqual(captured_stderr.getvalue(), "")
-
-    @patch('hook_service.resolve_local_angati_path')
-    @patch('hook_service.resolve_brain_angati_path')
-    def test_mismatched_version(self, mock_brain, mock_local):
-        # Create different mock files
-        self.local_exe.write_bytes(b"version_1.0_binary")
-        self.brain_exe.write_bytes(b"version_2.0_binary")
-        mock_local.return_value = self.local_exe
-        mock_brain.return_value = self.brain_exe
-
-        captured_stderr = io.StringIO()
-        with patch('sys.stderr', captured_stderr):
-            hook_service.check_angati_version_sync(self.local_exe, self.brain_exe)
-            
-        self.assertIn("WARNING: Local angati.exe version mismatch detected!", captured_stderr.getvalue())
-
-    @patch('hook_service.resolve_local_angati_path')
-    @patch('hook_service.resolve_brain_angati_path')
-    def test_missing_files_silent(self, mock_brain, mock_local):
-        # Local exe missing, brain exists
-        self.brain_exe.write_bytes(b"version_2.0_binary")
-        mock_local.return_value = self.local_exe  # Exe is missing
-        mock_brain.return_value = self.brain_exe
-
-        captured_stderr = io.StringIO()
-        with patch('sys.stderr', captured_stderr):
-            hook_service.check_angati_version_sync(self.local_exe, self.brain_exe)
-            
-        # Verify silent exit (no error printed)
-        self.assertEqual(captured_stderr.getvalue(), "")
-```
+### C. Step-by-Step Data Persistence Flow
+1. **General Signal Storage**:
+   The `/webhook` endpoint first inserts the incoming request payload details into the main `signals` table via `database.insert_signal(...)` (written in `nerves/workers/trading/data/persistence_store.py`). This returns a new `signal_id`.
+2. **Indicator Signal Identification**:
+   The endpoint checks if the signal is from an indicator. It parses custom keys like `source` and `indicator_name` (lines 136–140):
+   ```python
+   source = payload.get("source", "")
+   indicator_name = payload.get("indicator_name", "") or payload.get("indicator", "") or ""
+   is_indicator = source == "indicator" or (indicator_name and action not in {"buy", "sell", "alert"})
+   ```
+3. **Payload Guard**:
+   If identified as an indicator signal, the webhook performs a sanity check: both `symbol` and `indicator_name` must be present. If missing, it immediately rejects with `HTTP 400` without inserting database entries.
+4. **Asynchronous Event Dispatch**:
+   If the indicator checks pass, the webhook issues a background event dispatch via the `EventBus`:
+   ```python
+   await _event_bus.emit_background(IndicatorSignalReceived(
+       signal_id=signal_id,
+       symbol=symbol,
+       indicator_name=indicator_name,
+       signal_type=signal_type,
+       ...
+   ))
+   ```
+5. **Parallel Listener Persistence (Design Invariant DI-1)**:
+   The `IndicatorPersistence` listener (defined in `nerves/workers/trading/data/indicator_persistence.py`) subscribes to the `IndicatorSignalReceived` event.
+   - It intercepts the event and executes `insert_indicator_signal(...)` using the `aiosqlite` asynchronous driver.
+   - Values are serialized (e.g., `conditions_met` and `metadata` are stored as JSON strings).
+   - **Fault Isolation**: A try/except block wraps the entire database insert inside the listener. If database operations fail, errors are logged but not re-raised. This ensures that persistence failures do not block the active trade pipeline.
