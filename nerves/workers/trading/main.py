@@ -1028,29 +1028,56 @@ async def api_vision_analyze(symbol: str = Query(...), image_path: str = Query(.
 
 
 @app.post("/api/vision/capture")
-async def api_vision_capture(symbol: str = Query("BTCUSDT", description="Symbol to capture")):
+async def api_vision_capture(
+    symbol: str = Query("BTCUSDT", description="Symbol to capture"),
+    timeframe: str = Query("1h", description="Timeframe to capture"),
+    show_parent: str = Query("yes", description="Show parent timeframe inset chart"),
+    inset_position: str = Query("bottom-right", description="Position of inset chart: bottom-right or top-left")
+):
     """
     Dashboard-callable Stealth Capture endpoint.
-    Combines: MCP CDP screenshot → crop → AI Vision → DB persist.
+    Combines: MCP CDP screenshot or local rendering → crop → AI Vision → DB persist.
     Returns structured result with screenshot_url for immediate display.
     """
     import json as _json
     from pathlib import Path
 
     sym = symbol.upper()
+    tf = timeframe.upper()
 
-    # ── Step 1: MCP Screenshot ───────────────────────────────────
-    if not config.MCP_ENABLED:
-        raise HTTPException(status_code=503, detail="MCP_ENABLED=false — TradingView CDP not configured")
+    # ── Step 1: Screenshot Capture ───────────────────────────────
+    screenshot_path = None
+    mcp_connected = False
+    
+    if config.MCP_ENABLED:
+        try:
+            mcp = _mcp_module.get_mcp_client()
+            health = await mcp.health_check()
+            if health.get("connected"):
+                mcp_connected = True
+                screenshot_path = await mcp.capture_screenshot(symbol=sym, timeframe=tf)
+        except Exception as e:
+            log.warning(f"MCP CDP capture failed, attempting fallback: {e}")
 
-    mcp = _mcp_module.get_mcp_client()
-    health = await mcp.health_check()
-    if not health.get("connected"):
-        raise HTTPException(status_code=503, detail="TradingView CDP not connected — launch_tv_msix_cdp.ps1 phải đang chạy")
-
-    screenshot_path = await mcp.capture_screenshot(symbol=sym)
     if not screenshot_path or not screenshot_path.exists():
-        raise HTTPException(status_code=500, detail="Screenshot capture failed — CDP may be busy")
+        log.info("CDP/MCP capture not available or failed. Falling back to native local capture...")
+        try:
+            from capture_client import get_capture_client
+            client = get_capture_client()
+            res = await client.capture_screenshot(
+                symbol=sym,
+                timeframe=tf,
+                method="lightweight-charts",  # Fallback to local rendering
+                show_parent_chart=(show_parent.lower() == "yes"),
+                inset_position=inset_position.lower()
+            )
+            if res.success and res.file_path:
+                screenshot_path = Path(res.file_path)
+        except Exception as e:
+            log.error(f"Local capture failed: {e}")
+
+    if not screenshot_path or not screenshot_path.exists():
+        raise HTTPException(status_code=500, detail="Chart capture failed — both CDP and local rendering are unavailable")
 
     # ── Step 2: AI Vision Analysis ───────────────────────────────
     try:

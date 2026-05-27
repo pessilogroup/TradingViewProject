@@ -147,3 +147,58 @@ async def test_weex_ohlcv_fetch():
         assert ohlcv[1][0] == 1779807600000
         assert ohlcv[1][1] == 76873.5
 
+
+@pytest.mark.asyncio
+async def test_weekly_ohlcv_fetch_and_resample():
+    client = PythonCaptureClient()
+    
+    daily_candles = [
+        [1716163200000, 100, 110, 90, 105, 1000],  # Monday May 20, 2026
+        [1716249600000, 105, 115, 95, 110, 1000],  # Tuesday May 21, 2026
+    ]
+    
+    async def mock_fetch_raw(symbol, interval, limit, exchange=None):
+        if interval == "1w":
+            raise RuntimeError("Direct weekly fetch failed")
+        return daily_candles
+        
+    with patch.object(client, "_fetch_raw_ohlcv", side_effect=mock_fetch_raw):
+        ohlcv = await client._fetch_ohlcv_from_exchange("BTCUSDT", "W", limit=1)
+        assert len(ohlcv) == 1
+        assert ohlcv[0][0] == 1716163200000
+        assert ohlcv[0][1] == 100
+        assert ohlcv[0][2] == 115
+        assert ohlcv[0][3] == 90
+        assert ohlcv[0][4] == 110
+        assert ohlcv[0][5] == 2000
+
+
+def test_weekly_ohlcv_resample_logic():
+    client = PythonCaptureClient()
+    
+    daily_candles = [
+        [1779062400000, 100, 105, 95, 101, 100],  # Mon May 18, 2026
+        [1779148800000, 101, 110, 100, 108, 150], # Tue May 19, 2026
+        [1779235200000, 108, 109, 90, 95, 200],   # Wed May 20, 2026
+        [1779667200000, 95, 105, 92, 103, 300],   # Mon May 25, 2026
+        [1779753600000, 103, 104, 100, 102, 250], # Tue May 26, 2026
+    ]
+    
+    resampled = client._resample_daily_to_weekly(daily_candles)
+    
+    assert len(resampled) == 2
+    assert resampled[0][0] == 1779062400000 # Mon May 18, 2026
+    assert resampled[0][1] == 100            # open
+    assert resampled[0][2] == 110            # high
+    assert resampled[0][3] == 90             # low
+    assert resampled[0][4] == 95             # close
+    assert resampled[0][5] == 450            # volume
+    
+    assert resampled[1][0] == 1779667200000 # Mon May 25, 2026
+    assert resampled[1][1] == 95             # open
+    assert resampled[1][2] == 105            # high
+    assert resampled[1][3] == 92             # low
+    assert resampled[1][4] == 102            # close
+    assert resampled[1][5] == 550            # volume
+
+

@@ -21,9 +21,14 @@ TIMEFRAME_MAP = {
     "1": "1m",
     "5": "5m",
     "15": "15m",
+    "15m": "15m",
     "30": "30m",
     "60": "1h",
+    "1h": "1h",
+    "1H": "1h",
     "240": "4h",
+    "4h": "4h",
+    "4H": "4h",
     "D": "1d",
     "d": "1d",
     "W": "1w",
@@ -117,6 +122,8 @@ class PythonCaptureClient:
         drawings: Optional[List[Dict[str, Any]]] = None,
         strategy_table: Optional[Dict[str, Any]] = None,
         method: Optional[str] = None,
+        show_parent_chart: bool = True,
+        inset_position: str = "bottom-right",
     ) -> CaptureResult:
         """
         Capture a chart screenshot. Resolves capture method hierarchically:
@@ -165,7 +172,9 @@ class PythonCaptureClient:
             ohlcv_data=ohlcv_data,
             drawings=drawings,
             strategy_table=strategy_table,
-            method=capture_method
+            method=capture_method,
+            show_parent_chart=show_parent_chart,
+            inset_position=inset_position
         )
         
         latency = (time.monotonic() - start_time) * 1000
@@ -356,15 +365,49 @@ class PythonCaptureClient:
         drawings: Optional[List[Dict[str, Any]]],
         strategy_table: Optional[Dict[str, Any]],
         method: str,
+        show_parent_chart: bool = True,
+        inset_position: str = "bottom-right",
     ) -> CaptureResult:
         """Executes native rendering locally using lightweight-charts or mplfinance."""
         self._fallback_mode = True
+        
+        # Mappings for nested timeframes: 15m (parent 1H) and 1H (parent 4H)
+        tf_lower = timeframe.lower()
+        parent_timeframe = None
+        if show_parent_chart:
+            if tf_lower in ("15m", "15"):
+                parent_timeframe = "1H"
+            elif tf_lower in ("1h", "60"):
+                parent_timeframe = "4H"
+            
+        parent_ohlcv = None
         
         # 1. Fetch OHLCV data if not provided
         if not ohlcv_data:
             try:
                 candles_count = config.CHART_CANDLES_COUNT
-                ohlcv_data = await self._get_ohlcv_data(symbol, timeframe, candles_count)
+                if parent_timeframe:
+                    # Concurrent fetching using asyncio.gather
+                    results = await asyncio.gather(
+                        self._get_ohlcv_data(symbol, timeframe, candles_count),
+                        self._get_ohlcv_data(symbol, parent_timeframe, candles_count),
+                        return_exceptions=True
+                    )
+                    
+                    # If primary timeframe fetch fails, raise the exception
+                    if isinstance(results[0], Exception):
+                        raise results[0]
+                    ohlcv_data = results[0]
+                    
+                    # If parent timeframe fetch fails, log warning, set parent_ohlcv and parent_timeframe to None
+                    if isinstance(results[1], Exception):
+                        logger.warning(f"Failed to retrieve parent OHLCV data concurrently: {results[1]}")
+                        parent_ohlcv = None
+                        parent_timeframe = None
+                    else:
+                        parent_ohlcv = results[1]
+                else:
+                    ohlcv_data = await self._get_ohlcv_data(symbol, timeframe, candles_count)
             except Exception as e:
                 logger.error(f"Cannot perform local rendering: failed to retrieve OHLCV: {e}")
                 return CaptureResult(
@@ -372,6 +415,15 @@ class PythonCaptureClient:
                     error=f"OHLCV data retrieval failed: {e}",
                     method=method
                 )
+        else:
+            if parent_timeframe:
+                try:
+                    candles_count = config.CHART_CANDLES_COUNT
+                    parent_ohlcv = await self._get_ohlcv_data(symbol, parent_timeframe, candles_count)
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve parent OHLCV data: {e}")
+                    parent_ohlcv = None
+                    parent_timeframe = None
 
         # 2. Render via Lightweight Charts (Playwright)
         if method == "lightweight-charts":
@@ -383,7 +435,10 @@ class PythonCaptureClient:
                     ohlcv_data=ohlcv_data,
                     drawings=drawings,
                     strategy_table=strategy_table,
-                    save_path=save_path
+                    save_path=save_path,
+                    parent_timeframe=parent_timeframe,
+                    parent_ohlcv=parent_ohlcv,
+                    inset_position=inset_position
                 )
                 
                 size = img_path.stat().st_size
@@ -415,7 +470,9 @@ class PythonCaptureClient:
                         ohlcv_data=ohlcv_data,
                         drawings=drawings,
                         strategy_table=strategy_table,
-                        save_path=save_path
+                        save_path=save_path,
+                        parent_timeframe=parent_timeframe,
+                        parent_ohlcv=parent_ohlcv
                     )
                 )
                 
@@ -467,10 +524,76 @@ class PythonCaptureClient:
     async def _fetch_ohlcv_from_exchange(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
         """Fetch OHLCV klines from configured exchange using CCXT or direct public REST APIs."""
         interval = TIMEFRAME_MAP.get(timeframe, timeframe)
-        exchange_name = config.DEFAULT_EXCHANGE.lower()
+        is_weekly = timeframe.lower() in ("w", "1w")
+        primary_exchange = config.DEFAULT_EXCHANGE.lower()
+        if symbol.endswith("_UMCBL") or primary_exchange == "weex":
+            primary_exchange = "weex"
+            
+        # Fallback exchanges order
+        exchanges = [primary_exchange]
+        for fallback in ["binance", "bybit", "weex"]:
+            if fallback not in exchanges:
+                exchanges.append(fallback)
+
+        # ── Step 1: Try direct kline fetch from each exchange ──
+        for ex in exchanges:
+            try:
+                logger.info(f"Attempting direct {interval} fetch from {ex} for {symbol}...")
+                return await self._fetch_raw_ohlcv(symbol, interval, limit, exchange=ex)
+            except Exception as e:
+                logger.warning(f"Direct fetch failed from {ex} for {symbol} ({interval}): {e}")
+
+        # ── Step 2: Try another way (resampling daily candles to weekly) ──
+        if is_weekly:
+            for ex in exchanges:
+                try:
+                    logger.info(f"Attempting to construct weekly chart for {symbol} from {ex} daily candles...")
+                    daily_klines = await self._fetch_raw_ohlcv(symbol, "1d", limit * 7, exchange=ex)
+                    if daily_klines:
+                        resampled = self._resample_daily_to_weekly(daily_klines)
+                        if resampled:
+                            logger.info(f"Successfully constructed {len(resampled)} weekly candles from {ex} daily data.")
+                            return resampled[-limit:]
+                except Exception as ex_err:
+                    logger.warning(f"Failed to resample daily to weekly from {ex} for {symbol}: {ex_err}")
+
+        # If all paths fail, raise exception
+        raise RuntimeError(f"All OHLCV fetch strategies failed for {symbol} ({timeframe})")
+
+    def _resample_daily_to_weekly(self, daily_klines: List[Any]) -> List[Any]:
+        """Resample daily candles [timestamp, open, high, low, close, volume] to weekly candles starting on Monday."""
+        from collections import defaultdict
+        import datetime
+        
+        weeks = defaultdict(list)
+        for c in daily_klines:
+            ts_ms = c[0]
+            dt = datetime.datetime.fromtimestamp(ts_ms / 1000.0, tz=datetime.timezone.utc)
+            monday = dt - datetime.timedelta(days=dt.weekday())
+            monday_00 = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+            monday_ts_ms = int(monday_00.timestamp() * 1000)
+            weeks[monday_ts_ms].append(c)
+            
+        weekly_klines = []
+        for monday_ts in sorted(weeks.keys()):
+            candles = weeks[monday_ts]
+            candles.sort(key=lambda x: x[0])
+            
+            w_open = candles[0][1]
+            w_high = max(c[2] for c in candles)
+            w_low = min(c[3] for c in candles)
+            w_close = candles[-1][4]
+            w_volume = sum(c[5] for c in candles)
+            
+            weekly_klines.append([monday_ts, w_open, w_high, w_low, w_close, w_volume])
+            
+        return weekly_klines
+
+    async def _fetch_raw_ohlcv(self, symbol: str, interval: str, limit: int, exchange: Optional[str] = None) -> List[Any]:
+        """Fetch OHLCV klines from configured exchange using CCXT or direct public REST APIs."""
+        exchange_name = (exchange or config.DEFAULT_EXCHANGE).lower()
         if symbol.endswith("_UMCBL") or exchange_name == "weex":
             exchange_name = "weex"
-
 
         # Try CCXT if enabled
         if config.CHART_CCXT_FALLBACK:
@@ -570,7 +693,7 @@ class PythonCaptureClient:
                                 float(c[3]),
                                 float(c[4]),
                                 float(c[5])
-                            ])
+                             ])
                         return ohlcv
         except Exception as e:
             logger.error(f"Direct REST API OHLCV fetch failed: {e}")
