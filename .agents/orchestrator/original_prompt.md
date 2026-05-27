@@ -9,3 +9,6 @@ You are the Project Orchestrator. Your mission is to implement an automated "Sca
 Resume work at c:/Users/pesil/working/mj_trading/TradingViewProject. Read handoff.md, BRIEFING.md, ORIGINAL_REQUEST.md, and progress.md for current state in the orchestrator folder c:/Users/pesil/working/mj_trading/TradingViewProject/.agents/orchestrator.
 Your parent is 203ebefc-de1e-4b68-9bca-67dd16e6813a — use this ID for all escalation and status reporting (send_message). Make sure to read PROJECT.md as well and update the parent with the final status and complete the task.
 
+## Follow-up — 2026-05-27T13:06:00Z
+
+Coordinate the implementation of Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio. Read ORIGINAL_REQUEST.md for requirements and acceptance criteria. Update plan.md and progress.md in your working directory, and follow the standard team structure. You can spawn worker/explorer/reviewer subagents to do the work. Your working directory is c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator.

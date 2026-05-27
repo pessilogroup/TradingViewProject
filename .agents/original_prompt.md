@@ -163,3 +163,30 @@ The user has updated `nerves/workers/trading/exchanges/weex_adapter.py` to add `
 Please utilize this method for implementing R1 (Dynamic Symbol Discovery) on the Weex exchange.
 
 
+## 2026-05-27T06:05:42Z
+
+Implement Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Timeframe Mappings and Concurrent Data Fetching
+- Define mappings for nested timeframes: `15m` (parent `1H`) and `1H` (parent `4H`).
+- When a nested timeframe is captured, fetch both target and parent timeframe candles concurrently using exchange adapters and fallbacks.
+- Store parent timeframe candles in the payload.
+
+### R2. PiP Inset Chart Layout Rendering
+- Modify the chart HTML rendering (`chart_template.html`) to dynamically overlay a nested parent timeframe chart if parent candles are present in the payload.
+- Apply modern glassmorphism styling to the floating container: `#1e222d` background, `8px` border radius, and `rgba(255,255,255,0.08)` border.
+- Include a text label identifying the parent timeframe (e.g. "4H Parent Trend").
+- Render an SVG arrow indicator (#2962ff) pointing from the inset chart to the main chart area.
+
+## Acceptance Criteria
+
+### Functionality & Routing
+- [ ] Querying `/api/vision/capture` for `1H` timeframe concurrently fetches `1H` and `4H` data, and renders both charts on the returned image with a directional arrow.
+- [ ] Querying `/api/vision/capture` for `15m` timeframe concurrently fetches `15m` and `1H` data, and renders both charts on the returned image with a directional arrow.
+- [ ] Single timeframes like `4H`, `1D`, or `1W` render a single chart without nested insets.
+- [ ] Fallback matplotlib rendering succeeds as a single chart without exceptions if Playwright fails.

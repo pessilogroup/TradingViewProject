@@ -1,63 +1,54 @@
-# Hard Handoff Report — Automated "Scan All" Background Feature
+# Final Handoff and Completion Report
 
 ## Milestone State
-All milestones for the "Scan All" background feature have been completed, verified, and audited:
-- **Milestone 1: Exploration & Architecture** — DONE. Analyzed adapters, concurrency requirements, and Telegram bot.
-- **Milestone 2: Dynamic Symbol Discovery** — DONE. Implemented dynamic active symbol discovery for Weex, Binance, Bybit.
-- **Milestone 3: Concurrency & Rate-limiting** — DONE. Concurrent scanner with Semaphore limit of 15 and exponential back-off retries.
-- **Milestone 4: FastAPI Endpoint** — DONE. Exposes `GET /api/scan/all` route.
-- **Milestone 5: Telegram Command** — DONE. Exposes `/scan_all` interactive command.
-- **Milestone 6: Testing & Audit** — DONE. Concurrency stress, rate-limit simulation, and unit tests (12/12 passing). Forensic Auditor gave a CLEAN verdict. HTML double-escaping resolved.
+- Milestone 1: Exploration & Architecture [DONE]
+- Milestone 2: Concurrent Fetching & Payload [DONE]
+- Milestone 3: HTML PiP Inset Rendering [DONE]
+- Milestone 4: Matplotlib Fallback [DONE]
+- Milestone 5: E2E Testing & Audit [DONE]
+
+All milestones have been fully implemented, reviewed, tested, and audited. The final audit verdict is CLEAN.
 
 ## Active Subagents
-None. All subagents completed successfully.
+- None. All subagents (Explorer, Worker, Reviewers, Challenger, Auditor) have completed their execution and delivered clean verdicts.
 
 ## Pending Decisions
-None.
+- None.
 
 ## Remaining Work
-None. The task is fully complete, verified, and audited.
+- None. The task is fully completed, verified, and certified for merge.
 
 ## Key Artifacts
-- **PROJECT.md**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md`
-- **plan.md**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md`
-- **progress.md**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md`
-- **BRIEFING.md**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\BRIEFING.md`
-- **Analysis implementation**: `nerves/workers/trading/analysis.py`
-- **FastAPI Endpoints**: `nerves/workers/trading/main.py`
-- **Telegram Bot command registration & implementation**: `nerves/workers/trading/telegram_bot.py`
-- **Tests**: 
-  - `nerves/workers/trading/tests/unit/test_scan_all.py`
-  - `nerves/workers/trading/tests/unit/test_rate_limit_simulation.py`
-  - `nerves/workers/trading/tests/unit/test_scan_all_stress.py`
-- **Worker 2 Handoff**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\worker_fixes_2\handoff.md`
-- **Auditor Handoff**: `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\victory_auditor_fixes_2\handoff.md`
+- `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md` - Global index
+- `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md` - Heartbeat and progress log
+- `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md` - Project plan
+- `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\BRIEFING.md` - Persistent memory
+- `c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\handoff.md` - This final report
 
 ---
 
-## 1. Observation
-We have verified that the implementation of the automated "Scan All" background feature is completed:
-- The dynamic symbol discovery methods successfully retrieve active linear futures contracts from all configured exchanges, including Weex USDT-M (suffix `_UMCBL`) and Binance/Bybit.
-- A concurrent queue utilizing `asyncio.Semaphore(15)` and an exponential back-off rate-limit handler is integrated to protect scanners against API rate limits.
-- The `GET /api/scan/all` route returns JSON responses with ranked Trend Template and VCP setups.
-- The `/scan_all` Telegram command runs the scan in the background and broadcasts formatted setups to Telegram with interactive "Analyze" buttons.
-- The 12 unit and stress tests execute and pass successfully. The Forensic Auditor's verdict is **CLEAN**, confirming no hardcoding, facade patterns, or pre-populated artifacts.
+# Implementation & Verification Synthesis
 
-## 2. Logic Chain
-- **Authenticity of Logic**: Indicator math (SMA, ATR, RS ratio, VCP volume/range contractions) uses real sliding-window calculations from live/mock data feeds rather than hardcoded mock outputs.
-- **Robustness**: Rate-limiting is backed by dynamic simulated clock tests validating that retries correctly follow back-off parameters and prevent blockages. Concurrency stress tests check memory growth limits ($<10$ MB) and lock serialization to verify stability.
-- **UI Correctness**: Telegram command outputs are sanitized using the Markdown-to-HTML parser without double escaping or broken tags.
+## 1. Observation & Context
+The goal was to implement Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio. This allows lower timeframe charts (`15m` and `1H`) to display a nested Picture-in-Picture (PiP) inset containing their parent timeframe data (`1H` and `4H` respectively). Single timeframes like `4H`, `1D`, or `1W` continue to render as a single chart without nested insets.
 
-## 3. Caveats
-- Production deployment requires standard API key environment variables (`WEEX_API_KEY`, etc.) configured correctly in the `.env` file for actual REST/WebSocket connections to the live exchanges.
-- `psutil` is required in the test environment to check peak memory consumption; if absent, the test skips the memory check but passes correctness assertions.
+## 2. Logic Chain & Implementation Details
+- **Timeframe Mapping & Concurrency**: Implemented case-insensitive timeframe mapping inside `capture_client.py` (`15m`/`15` -> `1H`, `1h`/`60`/`1H` -> `4H`). Candles for both timeframes are fetched concurrently using `asyncio.gather(..., return_exceptions=True)`.
+- **Resilient Fallback Design**: If the parent timeframe candles fail to fetch due to API limits or exceptions, the client catches the error, logs a warning, and sets parent context to `None`. The rendering engine then falls back dynamically to a single-chart layout.
+- **HTML PiP Inset Layout**: Modified `chart_template.html` to render a `#parent-inset-container` container when parent candles are present. Applied glassmorphism styling (`#1e222d` background, `8px` border radius, `rgba(255,255,255,0.08)` border), an SVG arrow connector (`#2962ff`) pointing to the main chart, and instantiated a secondary Lightweight Charts instance inside the container.
+- **Matplotlib Fallback**: Updated `generate_chart_mpl` to support parent parameters but ignore them, ensuring safe fallback to a single chart if Playwright browser rendering fails.
 
-## 4. Conclusion
-The feature is ready for production. All requirements in `ORIGINAL_REQUEST.md` have been met, and tests verify correct behavior.
+## 3. Verification & Test Suite
+11 unit and adversarial test cases in `test_mtf_nested.py` and `test_mtf_nested_adversarial.py` verify the following behaviors:
+1. Timeframe mapping correctness (case-insensitive checks).
+2. Asynchronous concurrency via `asyncio.gather`.
+3. Single timeframe capture paths skipping parent fetches.
+4. Matplotlib fallback resilience.
+5. Capture endpoint integration (`/api/vision/capture`).
+6. Parent fetch failure resilience (graceful fallback).
+7. Timeout and adversarial load scenarios.
 
-## 5. Verification Method
-Verify by executing the test suite:
-```powershell
-python -m pytest nerves/workers/trading/tests/unit/test_scan_all.py nerves/workers/trading/tests/unit/test_rate_limit_simulation.py nerves/workers/trading/tests/unit/test_scan_all_stress.py
-```
-And check that all 12 tests pass.
+## 4. Forensic Audit Results
+- **Verdict**: **CLEAN**
+- **Checks**: Passed all static and dynamic audit phases, including hardcoded output detection, facade detection, build and run validation, and output verification.
+- **Audit attestation**: 11 out of 11 tests passed successfully in 9.23 seconds.

@@ -1,52 +1,41 @@
-# Plan - Automated "Scan All" Background Feature
+# Plan - Multi-Timeframe (MTF) Nested Chart Inset Layouts
 
 ## Objectives
-Implement dynamic symbol discovery for active exchanges, execute unfiltered concurrent scanning with rate-limit protection, and expose `/api/scan/all` API endpoint and `/scan_all` Telegram bot command.
+Implement concurrent fetching of nested parent timeframes (`15m` -> `1H`, `1H` -> `4H`) in the capture pipeline, support PiP inset layouts in `chart_template.html` with glassmorphism styling and directional arrows, and ensure robust single-chart Matplotlib fallback rendering.
 
 ## Step-by-Step Execution Plan
 
-### Step 1: Exploration and Feasibility Analysis
-- **Goal**: Understand how Weex Adapter, Binance Adapter, and Bybit Adapter retrieve active linear contracts.
-- **Details**:
-  - Locate API endpoints for each exchange (e.g. Weex: `/api/v2/contract/public/symbols`, Bybit: `/v5/market/instruments-info`, Binance: `/fapi/v1/exchangeInfo`).
-  - Analyze current scheduler configuration, API routing, and Telegram commands module.
-- **Verification**: Explorer produces a clear report showing required changes.
+### Step 1: Exploration
+- **Goal**: Understand current candle fetching, template context construction, rendering logic, and Matplotlib fallback in `main.py` and `chart_template.html`.
+- **Worker**: Explorer subagent.
+- **Verification**: Handoff containing relevant code locations and planned structure.
 
-### Step 2: Implement Dynamic Symbol Discovery
-- **Goal**: Implement methods to fetch linear futures contract symbols dynamically from Weex, Binance, and Bybit.
+### Step 2: Implement Concurrent Fetching and Payload Structure
+- **Goal**: Implement mappings for nested timeframes and concurrent fetching of both target and parent candles (if mapped).
 - **Details**:
-  - Add/update methods in adapters to fetch active futures symbols.
-  - Implement a registry method or helper function to query all active exchanges for active linear contract list.
-  - Ensure Weex filtering uses `_UMCBL` suffix.
-- **Verification**: A unit test runs and returns list of symbols.
+  - Define `NESTED_TIMEFRAMES = {"15m": "1H", "1H": "4H"}`.
+  - Concurrently fetch candles for both timeframe and parent timeframe using `asyncio.gather`.
+  - Pass `parent_candles` and `parent_timeframe` to the HTML rendering payload.
+- **Worker**: Worker subagent.
+- **Verification**: Unit tests proving that calling the capture flow for `1H` concurrently requests both `1H` and `4H` data.
 
-### Step 3: Implement Concurrency and Rate-Limit Protecting Scanner
-- **Goal**: Scan 100+ active pairs concurrently without being rate-limited.
+### Step 3: Implement HTML PiP Inset Rendering
+- **Goal**: Update `chart_template.html` to render the inset chart using Lightweight Charts (or the library in use) when `parent_candles` are present.
 - **Details**:
-  - Implement an async semaphore/queue to limit max concurrent requests.
-  - Add retry-with-exponential-backoff logic for handling `HTTP 429` (Rate Limited) errors.
-  - Integrate Trend Template and VCP scoring for each pair.
-- **Verification**: Scanner can scan a simulated large list of symbols without blocking or failing on rate limit.
+  - Add nested container with glassmorphism styling (`#1e222d` background, `8px` border radius, `rgba(255,255,255,0.08)` border).
+  - Label indicating the parent timeframe.
+  - SVG arrow indicator pointing from inset chart to main chart area (color `#2962ff`).
+- **Worker**: Worker subagent.
+- **Verification**: Verify inset chart displays correctly in rendered image.
 
-### Step 4: Expose API Endpoint `/api/scan/all`
-- **Goal**: Expose an endpoint that triggers a full scan of all dynamic pairs.
+### Step 4: Ensure Matplotlib Fallback
+- **Goal**: Re-verify that Matplotlib fallback renders a single chart without nested insets or exceptions if Playwright fails.
 - **Details**:
-  - Add route `@app.get("/api/scan/all")` in `nerves/workers/trading/main.py` or separate router.
-  - Make sure scan results are ranked (e.g., VCP detected first, then by Trend Template score descending).
-- **Verification**: `GET /api/scan/all` returns valid JSON with ranked results.
+  - Verify that the Matplotlib fallback logic does not break when `parent_candles` are present. It should simply ignore them and draw a single chart.
+- **Worker**: Worker subagent.
+- **Verification**: Integration smoke test running without Playwright.
 
-### Step 5: Implement Telegram Command `/scan_all`
-- **Goal**: Register and implement `/scan_all` Telegram command.
-- **Details**:
-  - Register `/scan_all` command in the Telegram bot.
-  - Command executes the scan in a background task (so the bot doesn't time out or block).
-  - Broadcast results to target chat ID(s) once complete (filtering for Trend Template score >= 6 or VCP detected).
-- **Verification**: Mock bot execution or log output shows Telegram broadcast payload contains correct setups.
-
-### Step 6: End-to-End Verification and Auditing
-- **Goal**: Validate implementation correctness and run tests.
-- **Details**:
-  - Run the test suite.
-  - Verify that Weex futures contract pairs compute VCP/Trend Template scores correctly.
-  - Perform forensic integrity auditing.
-- **Verification**: All tests pass. Auditor reports CLEAN.
+### Step 5: Testing and Forensic Auditing
+- **Goal**: Verify robustness, functionality, and clean audit verdict.
+- **Worker**: Reviewers, Challenger, Forensic Auditor.
+- **Verification**: Successful test runs and CLEAN audit verdict.

@@ -1,19 +1,19 @@
-# BRIEFING — 2026-05-27T00:06:52+07:00
+# BRIEFING — 2026-05-27T13:06:55Z
 
 ## Mission
-Implement automated "Scan All" background feature for USDT-M futures on Weex (using suffix `_UMCBL`) and all configured exchanges, exposing /api/scan/all and /scan_all Telegram command.
+Coordinate the implementation of Multi-Timeframe (MTF) Nested Chart Inset Layouts in the Stealth Capture Studio.
 
 ## 🔒 My Identity
 - Archetype: teamwork_preview_orchestrator
 - Roles: orchestrator, user_liaison, human_reporter, successor
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator
 - Original parent: main agent
-- Original parent conversation ID: 203ebefc-de1e-4b68-9bca-67dd16e6813a
+- Original parent conversation ID: afaa841a-c8b0-457e-bafa-73080b8fab50
 
 ## 🔒 My Workflow
 - **Pattern**: Project Pattern
 - **Scope document**: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md
-1. **Decompose**: Decompose the requirements into Exploration, Implementation of Dynamic Symbol Discovery and Scan-all route, Telegram integration, E2E Testing, and QA/Auditing.
+1. **Decompose**: Decompose the project into Exploration, Concurrent Fetching, HTML PiP Inset Rendering, Matplotlib Fallback, and E2E Testing & Audit.
 2. **Dispatch & Execute**:
    - **Direct (iteration loop)**: Direct delegate to Explorer, Worker, Reviewer, Challenger, and Auditor.
    - **Delegate (sub-orchestrator)**: None.
@@ -26,14 +26,14 @@ Implement automated "Scan All" background feature for USDT-M futures on Weex (us
    - Escalate: report to parent (sub-orchestrators only, last resort)
 4. **Succession**: Self-succeed at 16 subagent spawns.
 - **Work items**:
-  1. Initialize state files [done]
-  2. Explore code references [done]
-  3. Implement Dynamic symbol discovery [done]
-  4. Implement complete unfiltered scanning [done]
-  5. Implement API endpoints and Telegram commands [done]
-  6. Verify and audit [done]
+  - Milestone 1: Exploration & Architecture [done]
+  - Milestone 2: Concurrent Fetching & Payload [done]
+  - Milestone 3: HTML PiP Inset Rendering [done]
+  - Milestone 4: Matplotlib Fallback [done]
+  - Milestone 5: E2E Testing & Audit [done]
+  - Final Report & Synthesis [done]
 - **Current phase**: 4
-- **Current focus**: Project Completion / Verification and Report
+- **Current focus**: Final Reporting & Synthesis
 
 ## 🔒 Key Constraints
 - DO NOT write code directly.
@@ -42,40 +42,39 @@ Implement automated "Scan All" background feature for USDT-M futures on Weex (us
 - Never reuse a subagent after it has delivered its handoff.
 
 ## Current Parent
-- Conversation ID: 203ebefc-de1e-4b68-9bca-67dd16e6813a
+- Conversation ID: afaa841a-c8b0-457e-bafa-73080b8fab50
 - Updated: not yet
 
 ## Key Decisions Made
-- Initialized Project Pattern for "Scan All" feature implementation.
-- Updated all milestone statuses in PROJECT.md to DONE.
-- Cancelled the heartbeat cron to cleanly prepare for succession.
+- Transitioned project scope to MTF Nested Chart Inset Layouts.
+- Started the heartbeat cron for liveness tracking.
 
 ## Team Roster
 | Agent | Type | Work Item | Status | Conv ID |
 |-------|------|-----------|--------|---------|
-| Explorer 1 | teamwork_preview_explorer | Explore exchanges for symbol list | completed | 5b42db32-7668-4e6a-a193-036b87617a64 |
-| Explorer 2 | teamwork_preview_explorer | Explore scanner & concurrency | completed | abb0f0e9-cf2b-4b86-ab93-8d90a343f7fc |
-| Explorer 3 | teamwork_preview_explorer | Explore API & Telegram command | completed | 47ba987e-0991-4917-b959-44dbdba13411 |
-| Worker | teamwork_preview_worker | Implement dynamic symbol discovery, concurrent scanner, API, and Telegram command | completed | d9875990-19ae-4329-ac5f-c8cdf2c423b7 |
-| Reviewer 1 | teamwork_preview_reviewer | Review code correctness and HTML escaping | completed | a4a154a1-d54b-4f60-9aa4-0eb5beb4298c |
-| Reviewer 2 | teamwork_preview_reviewer | Review tests coverage and robustness | completed | e46b08b8-9c17-469f-a5a3-ea825912a286 |
-| Challenger 1 | teamwork_preview_challenger | Stress test high concurrency (200 symbols) | completed | e8e7184c-017b-4e5b-85ab-e5d9f80ffa87 |
-| Challenger 2 | teamwork_preview_challenger | Stress test rate limit 429 back-off | completed | c9a804df-3834-42b5-bb91-9d04e0a134e7 |
-| Forensic Auditor | teamwork_preview_auditor | Forensic integrity verification of codebase | completed | d8a94032-f321-4376-af4e-6982bb0d6571 |
-| Worker (fixes) | teamwork_preview_worker | Implement fixes and lint cleaning | completed | 0a2fe049-89ab-49a8-a86c-994089dd037e |
-| Reviewer (fixes 1) | teamwork_preview_reviewer | Review code correctness and HTML escaping | completed | 02509897-20b7-4a47-9080-15b9f8e038c0 |
-| Reviewer (fixes 2) | teamwork_preview_reviewer | Review tests coverage and robustness | completed | 51b774d6-95b1-45e8-823b-5a73cd77a56b |
-| Forensic Auditor (fixes) | teamwork_preview_auditor | Forensic integrity verification of codebase | completed | 35d69102-8278-497a-9da4-5c89d5d57bd9 |
-| Worker (fixes 2) | teamwork_preview_worker | Refine features, fix double escaping, and remove dead code | completed | ca57a3f2-0271-405d-ab5c-48958874fd62 |
-| Worker (fixes 2 replacement) | teamwork_preview_worker | Refine features and fix double escaping | completed | 83fc40b0-f2d2-4fcb-9a3a-c12415b9d360 |
-| Reviewer (fixes 3) | teamwork_preview_reviewer | Review code correctness and HTML escaping | completed | 6ed7304a-bae8-4056-8e03-16b3e53ad328 |
-| Reviewer (fixes 4) | teamwork_preview_reviewer | Review test coverage and rate limits | completed | 401aba6c-6f5d-4c3e-9bdd-ce005a20dea1 |
-| Forensic Auditor (fixes 2) | teamwork_preview_auditor | Forensic integrity verification of codebase | completed | 00090b36-aad4-4868-b27b-a077bc9bfb4b |
+| Explorer 1 | teamwork_preview_explorer | Explore capture and layout rendering codebase | completed | f99ee351-88bb-4f4b-b529-3593eca2793a |
+| Worker 1 | teamwork_preview_worker | Implement concurrent fetching, template layouts, and fallback | completed | e4653adf-1129-4be2-8a34-f19d09fced7d |
+| Reviewer 1 | teamwork_preview_reviewer | Review code correctness and HTML rendering | completed | 3c3256c6-fc0e-4a90-bc9c-2c3d3983d420 |
+| Reviewer 2 | teamwork_preview_reviewer | Review edge cases and CSS glassmorphism overlay | completed | de914536-20f2-4ebe-954b-c59db0dd1bbd |
+| Challenger 1 | teamwork_preview_challenger | Adversarially test concurrent fetching & fallback | completed | 156ff07d-2902-4cd5-901b-95731f1b1cc2 |
+| Auditor 1 | teamwork_preview_auditor | Forensic integrity verification of codebase | completed | fa331ddb-43c8-4124-a602-ad019c91a328 |
+| Worker (fixes) | teamwork_preview_worker | Implement resilience fixes for parent timeframe fetching | completed | 7e353fe6-da00-4f30-baba-c9f1789e1b5f |
+| Reviewer (fixes 1) | teamwork_preview_reviewer | Review resilience fixes and unit tests | completed | 28f70aab-0ea8-4e42-a9e5-9a942245c7c8 |
+| Reviewer (fixes 2) | teamwork_preview_reviewer | Review error fallback handling edge cases | completed | be6c6b30-70c2-449b-a20e-ced2d97ffaa0 |
+| Challenger (fixes 1) | teamwork_preview_challenger | Adversarially verify parent fetching error path | completed | 3b7a5cd8-d0f9-4e82-a23d-d873cf7033aa |
+| Auditor (fixes 1) | teamwork_preview_auditor | Forensic integrity verification of fixes | completed | 51508069-3dd3-4aff-b02d-61f9f412aca8 |
+| Worker (fixes 2) | teamwork_preview_worker | Update obsolete adversarial test assertions | completed | f2bd818e-3c3c-4c73-9ff2-7aebefd8e911 |
+| Reviewer (fixes 3) | teamwork_preview_reviewer | Review updated adversarial test assertions | completed | f5aa8be9-269a-41cb-926d-5156a48bdec3 |
+| Reviewer (fixes 4) | teamwork_preview_reviewer | Verify test suite compilation and runs | completed | 32ab7a04-6fbf-47f1-8116-4d488304951c |
+| Challenger (fixes 2) | teamwork_preview_challenger | Adversarially test final test assertions | completed | d8db0897-c2c2-46a3-8fdb-be829d1b87ea |
+| Auditor (fixes 2) | teamwork_preview_auditor | Final forensic integrity audit | completed | b98e289a-1970-45d7-81f4-f954fe88ca79 |
 
 ## Succession Status
-- Predecessor: 7efa8c3e-7692-4aaf-a41b-1289870f9172 (main agent)
-- Successor: 80863619-92a6-4dc0-886d-635ca9b57b61 (current orchestrator)
-- Status: Completed and verified.
+- Succession required: yes
+- Spawn count: 16 / 16
+- Pending subagents: none
+- Predecessor: 80863619-92a6-4dc0-886d-635ca9b57b61 (predecessor orchestrator)
+- Successor: e67bb666-f4d5-492e-a161-3694cca9b06c
 
 ## Active Timers
 - Heartbeat cron: none
@@ -85,4 +84,4 @@ Implement automated "Scan All" background feature for USDT-M futures on Weex (us
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\BRIEFING.md — Persistent memory
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md — Heartbeat and progress log
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md — Project plan
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\context.md — Context description
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\PROJECT.md — Scope document

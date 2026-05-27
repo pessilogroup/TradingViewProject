@@ -1,36 +1,21 @@
 ## Current Status
-Last visited: 2026-05-27T00:06:52+07:00
+Last visited: 2026-05-27T13:30:00Z
 
-- [x] Initialized BRIEFING.md
-- [x] Initialized plan.md, context.md, and PROJECT.md
-- [x] Perform codebase exploration using Explorer subagents (3 spawned, analysis complete)
-- [x] Decompose milestones and update PROJECT.md
-- [x] Implement features via Worker subagent (worker handoff received)
-- [x] Review features via Reviewer subagent (2 reviewers spawned, approved)
-- [x] Verify features via Challenger subagent (2 challengers spawned, approved)
-- [x] Audit features via Auditor subagent (auditor spawned, clean)
-- [x] Second refinement iteration (completed by worker)
-- [x] Verification of final fixes (2 reviewers, 1 auditor spawned, all approved & clean)
-- [x] Updated PROJECT.md milestone statuses to DONE
-- [x] Cleaned up running background tasks (heartbeat cron cancelled)
-- [x] Wrote soft handoff report for the successor agent
-- [x] Verified implementation and final audit outputs
-- [x] Formulated final human-facing report and Hard Handoff
-- [x] Updated parent with completion message
-
+- [x] Created / updated ORIGINAL_REQUEST.md with new requirements.
+- [x] Initialized BRIEFING.md and workflow configuration.
+- [x] Initialized PROJECT.md and plan.md for MTF Nested Chart Inset Layouts.
+- [x] Milestone 1: Exploration & Architecture [DONE]
+- [x] Milestone 2: Concurrent Fetching & Payload [DONE]
+- [x] Milestone 3: HTML PiP Inset Rendering [DONE]
+- [x] Milestone 4: Matplotlib Fallback [DONE]
+- [x] Milestone 5: E2E Testing & Audit [DONE]
+- [x] Final Report & Synthesis compiled [DONE]
 
 ## Iteration Status
-Current iteration: 2 / 32
+Current iteration: 1 / 32
 
 ## Retrospective Notes
-### What worked:
-- Decomposing the complex scanning tasks into separate Explorer/Worker/Reviewer tracks helped modularize work and pinpoint specific integration details early.
-- Comprehensive simulation testing (like mocking the 429 response rate limits with a virtual clock sleep utility) proved that rate-limiting logic was extremely robust without needing live APIs.
-- The Forensic Auditor checks caught double-escaping of HTML tags in the Telegram bot commands, ensuring formatting complies with Telegram API's expectations.
+- **What worked**: The separation of implementation and verification tracks enabled parallel validation of rendering rules. Using `asyncio.gather(..., return_exceptions=True)` ensured that parent fetching errors do not disrupt primary chart generation.
+- **What did not work**: Early test versions expected a hard failure when parent fetching failed, which contradicted the resilient fallback design.
+- **Lessons learned**: Ensure that test cases match resilient error-handling semantics from the start, and verify that mock assertions target the actual API call parameters to avoid false passes.
 
-### What didn't work / Lessons learned:
-- Creating formatting in Telegram bot commands beforehand using raw HTML tags caused issues when parsed through `sanitize_for_telegram_html` because it escapes `<` and `>` into entity references. Moving to pure Markdown formatting before sanitizing resolved the rendering issue.
-- Positional argument changes in Pydantic models/Data classes must be carefully tracked. Mismatches (e.g. `VCPResult` arguments count) can trigger runtime TypeErrors if not covered in fallback/mocking routines.
-
-### Process Improvements:
-- Ensure mock helpers are placed cleanly in test modules rather than production adapters to avoid bloating target files with dead helper code.
