@@ -8,7 +8,14 @@ Tests:
 import asyncio
 import os
 import sys
+import io
 import httpx
+
+# Force UTF-8 output on Windows standard terminal
+if sys.stdout and hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Match server default (config.PORT); override with PORT=8000 if you run uvicorn on 8000
 _PORT = os.getenv("PORT", "5000")
@@ -16,8 +23,8 @@ BASE_URL = os.getenv("SMOKE_BASE_URL", f"http://127.0.0.1:{_PORT}")
 SECRET = os.getenv("WEBHOOK_SECRET", "test-secret")
 WEBHOOK  = f"{BASE_URL}/webhook"
 
-PASS = "✅ PASS"
-FAIL = "❌ FAIL"
+PASS = "[PASS]"
+FAIL = "[FAIL]"
 
 
 async def wait_for_server(timeout: int = 30):
@@ -158,12 +165,12 @@ async def main():
     print("  SOVEREIGN INDICATOR PIPELINE — LIVE SMOKE TEST")
     print("="*60)
 
-    print(f"\n[⏳] Waiting for server at {BASE_URL} ...")
+    print(f"\n[WAIT] Waiting for server at {BASE_URL} ...")
     ready = await wait_for_server(timeout=40)
     if not ready:
         print(f"\n{FAIL} Server did not start in time. Aborting smoke tests.")
         sys.exit(1)
-    print("[✓] Server is up.\n")
+    print("[OK] Server is up.\n")
 
     results = await asyncio.gather(
         smoke1_atr_sl_tp(),
@@ -176,9 +183,9 @@ async def main():
     total  = len(results)
     print("\n" + "="*60)
     if passed == total:
-        print(f"  🏁 RESULT: {passed}/{total} PASSED — All smoke tests GREEN")
+        print(f"  RESULT: {passed}/{total} PASSED -- All smoke tests GREEN")
     else:
-        print(f"  ⚠️  RESULT: {passed}/{total} PASSED — {total-passed} test(s) FAILED")
+        print(f"  RESULT: {passed}/{total} PASSED -- {total-passed} test(s) FAILED")
     print("="*60 + "\n")
     sys.exit(0 if passed == total else 1)
 
