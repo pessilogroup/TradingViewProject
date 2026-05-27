@@ -161,6 +161,198 @@ def _build_algo_context(scan_result: dict = None) -> str:
     return "\n".join(lines) if lines else "Không có dữ liệu scanner."
 
 
+async def _analyze_chart_sdk_fallback(symbol: str, scan_result: dict = None) -> dict:
+    """
+    Tầng 3 Fallback: Gửi prompt chứa trạng thái kỹ thuật và RAG rules tới LiteLLM server local (port 9101).
+    """
+    import httpx
+    # Build algo context
+    algo_context = _build_algo_context(scan_result)
+    
+    # Retrieve RAG rules
+    rag_rules = ""
+    try:
+        import rag
+        if rag._collection is not None:
+            query = f"Minervini trading rules guidelines SEPA setup for {symbol}"
+            chunks = rag.query_knowledge(query, n_results=3)
+            if chunks:
+                rag_rules = "\n\n".join([f"- Chunk {c['metadata'].get('chapter', 'N/A')}: {c['content']}" for c in chunks])
+    except Exception as re_err:
+        log.warning(f"SDK Fallback: Failed to query RAG knowledge: {re_err}")
+    
+    # Construct enriched prompt
+    fallback_prompt = f"""Bạn là expert AI Assistant tích hợp trong hệ thống giao dịch TradingViewProject.
+Do các kết nối API Vision chính bị quá tải hoặc gặp lỗi (Rate Limit/Quota), bạn được kích hoạt làm Tầng 3 Fallback (Text-Based Specialist).
+
+Nhiệm vụ: Dựa trên dữ liệu định lượng của scanner và các nguyên tắc giao dịch SEPA/Minervini dưới đây, hãy đưa ra nhận định phân tích kỹ thuật và quyết định giao dịch cho mã {symbol}.
+
+## DỮ LIỆU ĐỊNH LƯỢNG (Scanner Telemetry):
+{algo_context}
+
+## NGUYÊN TẮC SEPA/MINERVINI RÚT TRÍCH TỪ RAG:
+{rag_rules if rag_rules else "Không có dữ liệu RAG bổ sung."}
+
+## HƯỚNG DẪN ĐÁNH GIÁ:
+1. Nhận định xu hướng (Stage 1, 2, 3, hay 4).
+2. Kiểm tra các điều kiện nén giá (VCP) và khối lượng.
+3. Đánh giá tính kỷ luật và mức độ Compliant với phương pháp Minervini.
+4. Đưa ra Kế hoạch giao dịch cụ thể (Entry, Stop Loss, Take Profit, R:R).
+5. Cho điểm Confidence Score trực quan từ 1 đến 10.
+
+## FORMAT TRẢ LỜI BẮT BUỘC:
+Trả lời ngắn gọn (dưới 250 từ), phù hợp gửi qua Telegram.
+Bắt đầu bằng: 👁️ VISUAL ANALYSIS (SDK FALLBACK) — {symbol}
+Có chứa dòng điểm số dạng: Confidence: X/10 hoặc Score: X/10 ở cuối bài.
+"""
+    
+    # Request parameters
+    url = "http://127.0.0.1:9101/v1/chat/completions"
+    payload = {
+        "model": "gpt-4o-mini", # LiteLLM will route this automatically
+        "messages": [
+            {"role": "system", "content": VISION_SYSTEM_PROMPT},
+            {"role": "user", "content": fallback_prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 800
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                analysis_text = data["choices"][0]["message"]["content"]
+                return {
+                    "symbol": symbol,
+                    "analysis": analysis_text,
+                    "confidence": _parse_confidence(analysis_text),
+                    "patterns": _parse_patterns(analysis_text),
+                    "combined_score": "N/A",
+                    "error": None
+                }
+            else:
+                return {
+                    "symbol": symbol,
+                    "analysis": "",
+                    "confidence": 0,
+                    "patterns": [],
+                    "combined_score": "N/A",
+                    "error": f"LiteLLM error: HTTP {response.status_code} - {response.text}"
+                }
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "analysis": "",
+            "confidence": 0,
+            "patterns": [],
+            "combined_score": "N/A",
+            "error": f"LiteLLM connection failed: {exc}"
+        }
+
+
+async def _analyze_chart_mtf_sdk_fallback(symbol: str, mtf_scan_result: dict = None) -> dict:
+    """
+    Tầng 3 Fallback cho MTF: Gửi prompt chứa trạng thái kỹ thuật đa khung và RAG rules tới LiteLLM server local (port 9101).
+    """
+    import httpx
+    # Build mtf context
+    mtf_context_lines = []
+    if mtf_scan_result and "timeframes" in mtf_scan_result:
+        for tf, scan in mtf_scan_result["timeframes"].items():
+            if scan and not getattr(scan, 'error', None):
+                mtf_context_lines.append(
+                    f"Khung {tf.upper()}:\n"
+                    f"  - Price: {scan.price:,.2f}\n"
+                    f"  - Trend Template: {scan.trend_template.score}/8 ({scan.trend_template.stage})\n"
+                    f"  - VCP: {'Detected' if scan.vcp.detected else 'Not detected'} ({scan.vcp.note})"
+                )
+            elif scan:
+                mtf_context_lines.append(f"Khung {tf.upper()}: Lỗi scan ({scan.error})")
+    
+    mtf_context = "\n".join(mtf_context_lines) if mtf_context_lines else "Không có dữ liệu scanner."
+    
+    # Retrieve RAG rules
+    rag_rules = ""
+    try:
+        import rag
+        if rag._collection is not None:
+            query = f"Minervini trading rules guidelines SEPA setup multi timeframe for {symbol}"
+            chunks = rag.query_knowledge(query, n_results=3)
+            if chunks:
+                rag_rules = "\n\n".join([f"- Chunk {c['metadata'].get('chapter', 'N/A')}: {c['content']}" for c in chunks])
+    except Exception as re_err:
+        log.warning(f"SDK MTF Fallback: Failed to query RAG knowledge: {re_err}")
+        
+    fallback_prompt = f"""Bạn là expert AI Assistant tích hợp trong hệ thống giao dịch TradingViewProject.
+Do các kết nối API Vision chính bị quá tải hoặc gặp lỗi (Rate Limit/Quota), bạn được kích hoạt làm Tầng 3 Fallback (Text-Based Specialist) cho phân tích Đa Khung Thời Gian (MTF).
+
+Nhiệm vụ: Dựa trên dữ liệu định lượng của scanner đa khung và các nguyên tắc giao dịch SEPA/Minervini dưới đây, hãy đưa ra nhận định phân tích kỹ thuật và quyết định giao dịch cho mã {symbol}.
+
+## DỮ LIỆU ĐỊNH LƯỢNG (Scanner Telemetry):
+{mtf_context}
+
+## NGUYÊN TẮC SEPA/MINERVINI RÚT TRÍCH TỪ RAG:
+{rag_rules if rag_rules else "Không có dữ liệu RAG bổ sung."}
+
+## HƯỚNG DẪN ĐÁNH GIÁ:
+1. Nhận định xu hướng đa khung thời gian (1D, 4H, 1H).
+2. Kiểm tra các điều kiện nén giá (VCP) và khối lượng ở khung nhỏ.
+3. Đưa ra Quyết định lệnh (LONG/SHORT/AVOID) kèm Entry, Stop Loss, Take Profit, R:R.
+4. Cho điểm Confidence Score trực quan từ 1 đến 10.
+
+## FORMAT TRẢ LỜI BẮT BUỘC:
+Trả lời ngắn gọn (dưới 250 từ) bằng Tiếng Việt, phù hợp gửi qua Telegram.
+Bắt đầu bằng: 👁️ MULTI-TIMEFRAME ANALYSIS (SDK FALLBACK) — {symbol}
+Có chứa dòng điểm số dạng: Confidence: X/10 hoặc Score: X/10 ở cuối bài.
+"""
+    
+    url = "http://127.0.0.1:9101/v1/chat/completions"
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": VISION_MTF_SYSTEM_PROMPT},
+            {"role": "user", "content": fallback_prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 1000
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                data = response.json()
+                analysis_text = data["choices"][0]["message"]["content"]
+                return {
+                    "symbol": symbol,
+                    "analysis": analysis_text,
+                    "confidence": _parse_confidence(analysis_text),
+                    "patterns": _parse_patterns(analysis_text),
+                    "combined_score": "N/A",
+                    "error": None
+                }
+            else:
+                return {
+                    "symbol": symbol,
+                    "analysis": "",
+                    "confidence": 0,
+                    "patterns": [],
+                    "combined_score": "N/A",
+                    "error": f"LiteLLM error: HTTP {response.status_code} - {response.text}"
+                }
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "analysis": "",
+            "confidence": 0,
+            "patterns": [],
+            "combined_score": "N/A",
+            "error": f"LiteLLM connection failed: {exc}"
+        }
+
+
 async def analyze_chart_vision(
     image_path: Path,
     symbol: str,
@@ -219,7 +411,37 @@ async def analyze_chart_vision(
 
     image_path = Path(image_path)
     if not image_path.exists():
-        result["error"] = f"Image not found: {image_path}"
+        log.warning(f"Image not found at {image_path}. Triggering Tier 3 SDK Fallback directly...")
+        fallback_res = await _analyze_chart_sdk_fallback(symbol, scan_result)
+        if not fallback_res.get("error"):
+            result.update(fallback_res)
+            if scan_result:
+                tt_score = scan_result.get("trend_template_score", 0)
+                vcp_algo = scan_result.get("vcp_detected", False)
+                visual_conf = result["confidence"]
+                algo_score = (tt_score / 8) * 10
+                if visual_conf >= 9:
+                    combined = algo_score * 0.4 + visual_conf * 0.6
+                else:
+                    combined = algo_score * 0.5 + visual_conf * 0.5
+                result["combined_score"] = f"{combined:.1f}/10"
+                
+                visual_vcp = any("vcp" in p.lower() or "volatility contraction" in p.lower() for p in result["patterns"])
+                is_downtrend = any("stage 4" in p.lower() or "stage 3" in p.lower() for p in result["patterns"])
+                if is_downtrend:
+                    result["verdict"] = "🔴 AVOID — Stage 3/4 Downtrend Detected"
+                elif combined >= 8 and (vcp_algo or visual_vcp):
+                    result["verdict"] = "🟢 STRONG BUY SETUP"
+                elif combined >= 6:
+                    result["verdict"] = "🟡 WATCHLIST — Monitor for breakout"
+                elif combined >= 4:
+                    result["verdict"] = "🟠 NEUTRAL — Base building"
+                else:
+                    result["verdict"] = "🔴 AVOID — Weak setup"
+            else:
+                result["combined_score"] = f"{result['confidence']}/10 (visual only)"
+        else:
+            result["error"] = f"Image not found: {image_path}. Fallback error: {fallback_res['error']}"
         return result
 
     # Build prompt
@@ -450,8 +672,37 @@ async def analyze_chart_vision(
                  f"patterns: {result['patterns']}")
 
     except Exception as e:
-        log.error(f"Vision API error for {symbol}: {e}")
-        result["error"] = str(e)
+        log.warning(f"Vision API error for {symbol}: {e}. Triggering Tier 3 SDK Fallback...")
+        fallback_res = await _analyze_chart_sdk_fallback(symbol, scan_result)
+        if not fallback_res.get("error"):
+            result.update(fallback_res)
+            if scan_result:
+                tt_score = scan_result.get("trend_template_score", 0)
+                vcp_algo = scan_result.get("vcp_detected", False)
+                visual_conf = result["confidence"]
+                algo_score = (tt_score / 8) * 10
+                if visual_conf >= 9:
+                    combined = algo_score * 0.4 + visual_conf * 0.6
+                else:
+                    combined = algo_score * 0.5 + visual_conf * 0.5
+                result["combined_score"] = f"{combined:.1f}/10"
+                
+                visual_vcp = any("vcp" in p.lower() or "volatility contraction" in p.lower() for p in result["patterns"])
+                is_downtrend = any("stage 4" in p.lower() or "stage 3" in p.lower() for p in result["patterns"])
+                if is_downtrend:
+                    result["verdict"] = "🔴 AVOID — Stage 3/4 Downtrend Detected"
+                elif combined >= 8 and (vcp_algo or visual_vcp):
+                    result["verdict"] = "🟢 STRONG BUY SETUP"
+                elif combined >= 6:
+                    result["verdict"] = "🟡 WATCHLIST — Monitor for breakout"
+                elif combined >= 4:
+                    result["verdict"] = "🟠 NEUTRAL — Base building"
+                else:
+                    result["verdict"] = "🔴 AVOID — Weak setup"
+            else:
+                result["combined_score"] = f"{result['confidence']}/10 (visual only)"
+        else:
+            result["error"] = f"Original error: {e}. Fallback error: {fallback_res['error']}"
 
     return result
 
@@ -506,7 +757,35 @@ async def analyze_chart_vision_mtf(
     # Check images exist
     valid_paths = [Path(p) for p in image_paths if Path(p).exists()]
     if not valid_paths:
-        result["error"] = f"No valid images found from paths: {image_paths}"
+        log.warning(f"No valid images found from paths: {image_paths}. Triggering Tier 3 SDK Fallback directly...")
+        fallback_res = await _analyze_chart_mtf_sdk_fallback(symbol, mtf_scan_result)
+        if not fallback_res.get("error"):
+            result.update(fallback_res)
+            if mtf_scan_result and "timeframes" in mtf_scan_result:
+                scan_1d = mtf_scan_result["timeframes"].get("1d")
+                tt_score = scan_1d.trend_template.score if scan_1d and not getattr(scan_1d, 'error', None) else 0
+                vcp_algo = scan_1d.vcp.detected if scan_1d and not getattr(scan_1d, 'error', None) else False
+                visual_conf = result["confidence"]
+                algo_score = (tt_score / 8) * 10
+                combined = algo_score * 0.4 + visual_conf * 0.6 if visual_conf >= 9 else algo_score * 0.5 + visual_conf * 0.5
+                result["combined_score"] = f"{combined:.1f}/10"
+
+                is_long = "long" in result["analysis"].lower() or "mua" in result["analysis"].lower()
+                is_short = "short" in result["analysis"].lower() or "bán" in result["analysis"].lower()
+                is_avoid = "avoid" in result["analysis"].lower() or "đứng ngoài" in result["analysis"].lower() or "bỏ qua" in result["analysis"].lower()
+
+                if is_avoid:
+                    result["verdict"] = "🔴 AVOID — MTF Structure Neutral/Weak"
+                elif is_long and combined >= 6:
+                    result["verdict"] = "🟢 STRONG LONG SETUP"
+                elif is_short and combined >= 6:
+                    result["verdict"] = "🟣 STRONG SHORT SETUP"
+                else:
+                    result["verdict"] = "🟡 WATCHLIST — Uncertain structure"
+            else:
+                result["combined_score"] = f"{result['confidence']}/10 (visual only)"
+        else:
+            result["error"] = f"No valid images found: {image_paths}. Fallback error: {fallback_res['error']}"
         return result
 
     # Build prompt context
@@ -688,8 +967,35 @@ async def analyze_chart_vision_mtf(
         log.info(f"Vision MTF: {symbol} analyzed — confidence {result['confidence']}/10")
 
     except Exception as e:
-        log.error(f"Vision MTF API error for {symbol}: {e}")
-        result["error"] = str(e)
+        log.warning(f"Vision MTF API error for {symbol}: {e}. Triggering Tier 3 SDK Fallback...")
+        fallback_res = await _analyze_chart_mtf_sdk_fallback(symbol, mtf_scan_result)
+        if not fallback_res.get("error"):
+            result.update(fallback_res)
+            if mtf_scan_result and "timeframes" in mtf_scan_result:
+                scan_1d = mtf_scan_result["timeframes"].get("1d")
+                tt_score = scan_1d.trend_template.score if scan_1d and not getattr(scan_1d, 'error', None) else 0
+                vcp_algo = scan_1d.vcp.detected if scan_1d and not getattr(scan_1d, 'error', None) else False
+                visual_conf = result["confidence"]
+                algo_score = (tt_score / 8) * 10
+                combined = algo_score * 0.4 + visual_conf * 0.6 if visual_conf >= 9 else algo_score * 0.5 + visual_conf * 0.5
+                result["combined_score"] = f"{combined:.1f}/10"
+
+                is_long = "long" in result["analysis"].lower() or "mua" in result["analysis"].lower()
+                is_short = "short" in result["analysis"].lower() or "bán" in result["analysis"].lower()
+                is_avoid = "avoid" in result["analysis"].lower() or "đứng ngoài" in result["analysis"].lower() or "bỏ qua" in result["analysis"].lower()
+
+                if is_avoid:
+                    result["verdict"] = "🔴 AVOID — MTF Structure Neutral/Weak"
+                elif is_long and combined >= 6:
+                    result["verdict"] = "🟢 STRONG LONG SETUP"
+                elif is_short and combined >= 6:
+                    result["verdict"] = "🟣 STRONG SHORT SETUP"
+                else:
+                    result["verdict"] = "🟡 WATCHLIST — Uncertain structure"
+            else:
+                result["combined_score"] = f"{result['confidence']}/10 (visual only)"
+        else:
+            result["error"] = f"Original error: {e}. Fallback error: {fallback_res['error']}"
 
     return result
 

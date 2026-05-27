@@ -20,6 +20,24 @@ if sys.stderr and hasattr(sys.stderr, "buffer"):
 # Match server default (config.PORT); override with PORT=8000 if you run uvicorn on 8000
 _PORT = os.getenv("PORT", "5000")
 BASE_URL = os.getenv("SMOKE_BASE_URL", f"http://127.0.0.1:{_PORT}")
+# Try to read WEBHOOK_SECRET from .env file
+for env_file in [".env", "../.env", "../../.env"]:
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("WEBHOOK_SECRET="):
+                        val = line.split("=")[1].strip()
+                        # Remove quotes if present
+                        if val.startswith('"') and val.endswith('"'):
+                            val = val[1:-1]
+                        if val.startswith("'") and val.endswith("'"):
+                            val = val[1:-1]
+                        os.environ["WEBHOOK_SECRET"] = val
+                        break
+        except Exception:
+            pass
+
 SECRET = os.getenv("WEBHOOK_SECRET", "test-secret")
 WEBHOOK  = f"{BASE_URL}/webhook"
 

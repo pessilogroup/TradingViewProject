@@ -330,6 +330,8 @@ async def fetch_candles_with_retry(
 ) -> List[List[Any]]:
     """Fetch candles directly from public REST endpoints with retry-on-429 rate limit protection."""
     exchange_name = exchange_name.lower()
+    if ":" in symbol:
+        symbol = symbol.split(":")[-1]
     
     # Map standard timeframes to exchange standard
     bybit_tf_map = {"1d": "D", "4h": "240", "1h": "60"}

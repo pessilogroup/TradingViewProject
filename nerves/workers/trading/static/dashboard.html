@@ -298,6 +298,20 @@
           </div>
         </section>
 
+        <!-- Market Protection & Regime -->
+        <section class="glass-section overview-protection-section">
+          <div class="section-title">🛡️ Capital Protection & Regime</div>
+          <div class="protection-grid">
+            <div class="protection-item">
+              <span class="protection-label">Market Regime</span>
+              <span id="regimeBadge" class="p-badge trending">Trending 🟢</span>
+            </div>
+            <div class="protection-item">
+              <span class="protection-label">Protection Shield</span>
+              <span id="shieldBadge" class="p-badge normal">Normal 🟢</span>
+            </div>
+          </div>
+        </section>
 
       </div>
     </div>
@@ -390,9 +404,27 @@
       <!-- LEFT: Signal Feed -->
       <div class="sig-feed-col">
         <section class="glass-section sig-feed-section">
-          <div class="section-header">
+          <div class="section-header" style="flex-wrap: wrap; gap: 8px;">
             <div class="section-title">📋 Signal Feed</div>
-            <span id="sigFeedCount" class="muted-label"></span>
+            <div class="sig-chart-controls" style="display: flex; gap: 6px; align-items: center; margin-left: auto;">
+              <!-- DownList: List -->
+              <select id="sigChartSymbolSelect" class="form-input sig-input-sm" onchange="onChartSymbolChange()" style="width: auto; height: 26px; padding: 0 4px; font-size: 0.75rem; background: var(--bg2); border-color: var(--border); color: var(--text); border-radius: 4px; cursor: pointer;">
+                <option value="">All Symbols</option>
+              </select>
+              <!-- OptionList: Indicator -->
+              <select id="sigChartIndicatorSelect" class="form-input sig-input-sm" onchange="onChartIndicatorChange()" style="width: auto; height: 26px; padding: 0 4px; font-size: 0.75rem; background: var(--bg2); border-color: var(--border); color: var(--text); border-radius: 4px; cursor: pointer;">
+                <option value="">All Indicators</option>
+              </select>
+              <!-- OptionList: TimeFrame -->
+              <select id="sigChartTimeframeSelect" class="form-input sig-input-sm" onchange="onChartTimeframeChange()" style="width: auto; height: 26px; padding: 0 4px; font-size: 0.75rem; background: var(--bg2); border-color: var(--border); color: var(--text); border-radius: 4px; cursor: pointer;">
+                <option value="15m">15m</option>
+                <option value="1h">1H</option>
+                <option value="4h" selected>4H</option>
+                <option value="1d">1D</option>
+                <option value="1w">1W</option>
+              </select>
+            </div>
+            <span id="sigFeedCount" class="muted-label" style="margin-left: 8px;"></span>
           </div>
           <div id="sigFeedList" class="sig-feed-list">
             <div class="loading"><div class="spinner"></div></div>
@@ -407,11 +439,15 @@
         <!-- Confidence Distribution Chart -->
         <section class="glass-section">
           <div class="section-header">
-            <div class="section-title">📊 Signal Type Mix</div>
+            <div class="section-title" id="sigTypeMixTitle">📊 Signal Type Mix</div>
             <span class="muted-label" id="sigChartLabel"></span>
           </div>
           <div class="sig-donut-wrap">
             <canvas id="sigTypeChart" height="180"></canvas>
+          </div>
+          <!-- Direction Mix Stats -->
+          <div class="sig-direction-mix" id="sigDirectionMix">
+            <div class="loading"><div class="spinner"></div></div>
           </div>
         </section>
 

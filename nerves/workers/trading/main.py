@@ -744,28 +744,70 @@ async def get_indicator_signals(
 
 
 @app.get("/api/indicator-signals/stats")
-async def get_indicator_signals_stats():
-    """KPI stats for the Signals dashboard: total, by type, avg confidence, top indicators."""
+async def get_indicator_signals_stats(
+    symbol: Optional[str] = Query(None),
+    indicator_name: Optional[str] = Query(None)
+):
+    """KPI stats for the Signals dashboard: total, by type, avg confidence, top indicators, direction mix."""
     import aiosqlite
+
+    totals_query = "SELECT signal_type, COUNT(*) AS cnt, AVG(confidence_score) AS avg_conf FROM indicator_signals"
+    top_ind_query = "SELECT indicator_name, COUNT(*) AS cnt FROM indicator_signals"
+    recent_high_query = "SELECT COUNT(*) AS cnt FROM indicator_signals WHERE confidence_score > 80 AND created_at >= datetime('now', '-24 hours')"
+
+    params = []
+    conditions = []
+    if symbol:
+        conditions.append("symbol = ?")
+        params.append(symbol.upper())
+    if indicator_name:
+        conditions.append("indicator_name = ?")
+        params.append(indicator_name)
+
+    if conditions:
+        where_str = " WHERE " + " AND ".join(conditions)
+        totals_query += where_str
+        top_ind_query += where_str
+        recent_high_query += " AND " + " AND ".join(conditions)
+
+    totals_query += " GROUP BY signal_type"
+    top_ind_query += " GROUP BY indicator_name ORDER BY cnt DESC LIMIT 5"
+
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        totals = await db.execute_fetchall(
-            "SELECT signal_type, COUNT(*) AS cnt, AVG(confidence_score) AS avg_conf "
-            "FROM indicator_signals GROUP BY signal_type"
-        )
-        top_indicators = await db.execute_fetchall(
-            "SELECT indicator_name, COUNT(*) AS cnt "
-            "FROM indicator_signals GROUP BY indicator_name ORDER BY cnt DESC LIMIT 5"
-        )
-        recent_high = await db.execute_fetchall(
-            "SELECT COUNT(*) AS cnt FROM indicator_signals "
-            "WHERE confidence_score > 80 AND created_at >= datetime('now', '-24 hours')"
-        )
+        totals = await db.execute_fetchall(totals_query, params)
+        top_indicators = await db.execute_fetchall(top_ind_query, params)
+        recent_high = await db.execute_fetchall(recent_high_query, params)
+
+        # top_symbols is global/unfiltered
         top_symbols = await db.execute_fetchall(
             "SELECT symbol, COUNT(*) AS cnt FROM indicator_signals "
             "GROUP BY symbol ORDER BY cnt DESC LIMIT 6"
         )
+
+        regime_row = await db.execute_fetchall(
+            "SELECT value FROM settings WHERE key = 'market_regime'"
+        )
+        market_regime = regime_row[0]["value"] if regime_row else "CHOP"
+
+        # dir_totals for direction_mix (restricted to the last 5 minutes)
+        dir_query = (
+            "SELECT json_extract(metadata, '$.direction') AS direction, "
+            "       signal_type, COUNT(*) AS cnt, AVG(price) AS avg_price "
+            "FROM indicator_signals "
+            "WHERE created_at >= datetime('now', '-5 minutes') "
+        )
+        dir_params = []
+        if symbol:
+            dir_query += "AND symbol = ? "
+            dir_params.append(symbol.upper())
+        if indicator_name:
+            dir_query += "AND indicator_name = ? "
+            dir_params.append(indicator_name)
+        dir_query += "GROUP BY direction, signal_type"
+
+        dir_rows = await db.execute_fetchall(dir_query, dir_params)
 
     by_type = {r["signal_type"]: {"count": r["cnt"], "avg_conf": round(r["avg_conf"] or 0, 1)}
                for r in totals}
@@ -774,6 +816,26 @@ async def get_indicator_signals_stats():
         sum(v["avg_conf"] * v["count"] for v in by_type.values()) / max(total_all, 1), 1
     )
 
+    # Structure direction mix
+    direction_mix = {
+        "long": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+        "short": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}}
+    }
+    for r in dir_rows:
+        direction = r["direction"]
+        if not direction:
+            direction = "long"
+        direction = direction.lower()
+        if direction not in ["long", "short"]:
+            direction = "long"
+
+        sig_type = r["signal_type"]
+        if sig_type in ["entry", "exit"]:
+            direction_mix[direction][sig_type] = {
+                "count": r["cnt"],
+                "avg_price": round(r["avg_price"] or 0.0, 2)
+            }
+
     return {
         "total":           total_all,
         "by_type":         by_type,
@@ -781,6 +843,8 @@ async def get_indicator_signals_stats():
         "high_priority_24h": recent_high[0]["cnt"] if recent_high else 0,
         "top_indicators":  [{"name": r["indicator_name"], "count": r["cnt"]} for r in top_indicators],
         "top_symbols":     [{"symbol": r["symbol"], "count": r["cnt"]} for r in top_symbols],
+        "direction_mix":   direction_mix,
+        "market_regime":   market_regime,
     }
 
 

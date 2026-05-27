@@ -357,6 +357,7 @@ async function loadSystemStatus() {
       <div class="status-card-name">Auth</div><div class="status-card-val">${data.auth_required ? 'Token Required' : 'Open Access'}</div></div></div>
   `;
   updateCDPBadge(mcp);
+  updateProtectionStatus(data.protection || {});
   loadWebhookLog();
 }
 
@@ -373,9 +374,40 @@ function updateCDPBadge(mcp) {
   }
 }
 
+function updateProtectionStatus(protection) {
+  const regimeBadge = document.getElementById('regimeBadge');
+  const shieldBadge = document.getElementById('shieldBadge');
+  
+  if (regimeBadge) {
+    const regime = protection.market_regime || 'TRENDING';
+    if (regime === 'CHOP') {
+      regimeBadge.className = 'p-badge chop';
+      regimeBadge.textContent = 'Chop 🟡';
+    } else {
+      regimeBadge.className = 'p-badge trending';
+      regimeBadge.textContent = 'Trending 🟢';
+    }
+  }
+  
+  if (shieldBadge) {
+    const safeMode = protection.safe_mode_active || false;
+    const dd = protection.safe_mode_drawdown || 0.0;
+    if (safeMode) {
+      shieldBadge.className = 'p-badge safe-mode';
+      shieldBadge.textContent = `Safe Mode 🔴 (${dd.toFixed(1)}% DD)`;
+    } else {
+      shieldBadge.className = 'p-badge normal';
+      shieldBadge.textContent = 'Normal 🟢';
+    }
+  }
+}
+
 async function loadCDPStatus() {
   const data = await apiFetch('/api/system/status');
-  if (data) updateCDPBadge(data.mcp || {});
+  if (data) {
+    updateCDPBadge(data.mcp || {});
+    updateProtectionStatus(data.protection || {});
+  }
 }
 
 async function loadWebhookLog() {
