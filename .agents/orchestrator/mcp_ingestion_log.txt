@@ -9,17 +9,17 @@ Sending initialize request...
 Initialize Response: {"jsonrpc": "2.0", "id": 1, "result": {"capabilities": {"logging": {}, "prompts": {"listChanged": true}, "resources": {}, "tools": {"listChanged": true}}, "protocolVersion": "2024-11-05", "serverInfo": {"name": "angati", "version": "3.2.0"}}}...
 Sent initialized notification
 Storing weex_spot_api.md in L1 memory...
-[Server message]: {"jsonrpc":"2.0","method":"notifications/prompts/list_changed","params":{}}
 [Server message]: {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}
-Response for weex_spot_api.md: {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "{\"id\":\"9b993cf1-b785-461c-92ea-285c27590793\",\"status\":\"stored\"}"}], "structuredContent": {"id": "9b993cf1-b785-461c-92ea-285c27590793", "status": "stored"}}}
+[Server message]: {"jsonrpc":"2.0","method":"notifications/prompts/list_changed","params":{}}
+Response for weex_spot_api.md: {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "{\"id\":\"21f0d134-2e6f-4095-9783-816daea2072b\",\"status\":\"stored\"}"}], "structuredContent": {"id": "21f0d134-2e6f-4095-9783-816daea2072b", "status": "stored"}}}
 Storing weex_contract_v2_api.md in L1 memory...
-Response for weex_contract_v2_api.md: {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\"id\":\"7a4e0447-6a49-45c5-a932-0a2c5f6e2cfc\",\"status\":\"stored\"}"}], "structuredContent": {"id": "7a4e0447-6a49-45c5-a932-0a2c5f6e2cfc", "status": "stored"}}}
+Response for weex_contract_v2_api.md: {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\"id\":\"5d30a831-2d7b-4257-8215-8253efb9933b\",\"status\":\"stored\"}"}], "structuredContent": {"id": "5d30a831-2d7b-4257-8215-8253efb9933b", "status": "stored"}}}
 Storing weex_websocket.md in L1 memory...
-Response for weex_websocket.md: {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\"id\":\"55a5c267-0560-4066-b196-58f3a2dcac38\",\"status\":\"stored\"}"}], "structuredContent": {"id": "55a5c267-0560-4066-b196-58f3a2dcac38", "status": "stored"}}}
+Response for weex_websocket.md: {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\"id\":\"409d0f99-6416-42cf-a2b6-b4190e8953a8\",\"status\":\"stored\"}"}], "structuredContent": {"id": "409d0f99-6416-42cf-a2b6-b4190e8953a8", "status": "stored"}}}
 Storing weex_signatures.md in L1 memory...
-Response for weex_signatures.md: {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\"id\":\"1c455490-a545-4d6c-8851-2f8a6c37f838\",\"status\":\"stored\"}"}], "structuredContent": {"id": "1c455490-a545-4d6c-8851-2f8a6c37f838", "status": "stored"}}}
+Response for weex_signatures.md: {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\"id\":\"b6fc773b-dad2-4ed9-bfdc-60a6960bc897\",\"status\":\"stored\"}"}], "structuredContent": {"id": "b6fc773b-dad2-4ed9-bfdc-60a6960bc897", "status": "stored"}}}
 Storing weex_quickstart_sandbox.md in L1 memory...
-Response for weex_quickstart_sandbox.md: {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "{\"id\":\"2ee04707-cd46-450a-b53c-35b0c7f08c74\",\"status\":\"stored\"}"}], "structuredContent": {"id": "2ee04707-cd46-450a-b53c-35b0c7f08c74", "status": "stored"}}}
+Response for weex_quickstart_sandbox.md: {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "{\"id\":\"a7936cb0-d76b-4167-95a2-ddb60da10860\",\"status\":\"stored\"}"}], "structuredContent": {"id": "a7936cb0-d76b-4167-95a2-ddb60da10860", "status": "stored"}}}
 Recalling memories with query 'Weex'...
 Recall Response: {
   "jsonrpc": "2.0",
@@ -28,7 +28,7 @@ Recall Response: {
     "content": [
       {
         "type": "text",
-        "text": "memory_recall: load failed: decrypt vector for afd173b8-8e8e-419b-9c0e-5500a3bed760 failed: cipher: message authentication failed"
+        "text": "memory_recall: load failed: decrypt vector for d1bd8647-f4b1-4606-9aaa-3c0543f96194 failed: cipher: message authentication failed"
       }
     ],
     "isError": true

@@ -13,6 +13,10 @@
       "env": {
         "ANGATI_AGENTS_ROOT": "c:\\Users\\pesil\\working\\mj_trading\\TradingViewProject"
       }
+    },
+    "cloudflared": {
+      "command": "python",
+      "args": ["nerves/workers/trading/scripts/cloudflared_mcp.py"]
     }
   }
 }

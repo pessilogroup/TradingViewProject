@@ -1,73 +1,58 @@
-# BRIEFING — 2026-05-27T19:20:00+07:00
+# BRIEF — 2026-05-27T22:50:00+07:00
 
 ## Mission
-Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
+Orchestrate and execute the requirements in ORIGINAL_REQUEST.md follow-up (2026-05-27T22:49:02+07:00)
 
 ## 🔒 My Identity
-- Archetype: Project Orchestrator
+- Archetype: teamwork_preview_orchestrator
 - Roles: orchestrator, user_liaison, human_reporter, successor
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator
 - Original parent: main agent
-- Original parent conversation ID: c3bb402f-7c4c-4891-9027-38332cba1e45
+- Original parent conversation ID: f5111a39-39e8-46e9-a3b8-586ab9b88de4
 
 ## 🔒 My Workflow
-- **Pattern**: Project
+- **Pattern**: Project / Canonical
 - **Scope document**: c:\Users\pesil\working\mj_trading\TradingViewProject\PROJECT.md
-1. **Decompose**: Split work into M1_Explorer, M2_Implementer, M3_Verification milestones.
+1. **Decompose**: Decompose requirements into logical implementation units (Slippage control, ATR sizing, CDP keep-alive, AI filter)
 2. **Dispatch & Execute**:
-   - **Direct (iteration loop)**: Explorer → Worker → Reviewer → test → gate
-   - **Delegate (sub-orchestrator)**: None needed for this medium task scope.
-3. **On failure** (in this order):
-   - Retry: nudge stuck agent or re-send task
-   - Replace: spawn fresh agent with partial progress
-   - Skip: proceed without (only if non-critical)
-   - Redistribute: split stuck agent's remaining work
-   - Redesign: re-partition decomposition
-   - Escalate: report to parent (sub-orchestrators only, last resort)
-4. **Succession**: Self-succeed when spawn count >= 16.
+   - Dispatch to teamwork_preview_worker for investigation and coding.
+3. **Succession**: Self-succeed at 16 spawns.
 - **Work items**:
-  1. M1_Explorer [done]
-  2. M2_Implementer [in-progress]
-  3. M3_Verification [pending]
-- **Current phase**: 2
-- **Current focus**: M2_Implementer
+  1. Slippage control [pending]
+  2. ATR sizing [pending]
+  3. CDP health check [pending]
+  4. AI Regime filter [pending]
+- **Current phase**: 1
+- **Current focus**: Decompose and plan
 
 ## 🔒 Key Constraints
-- Never write, modify, or create source code files directly.
-- Never run build/test commands yourself — require workers to do so.
-- You MAY use file-editing tools ONLY for metadata/state files (.md) in your .agents/ folder.
-- Never reuse a subagent after it has delivered its handoff — always spawn fresh
+- CODE_ONLY network mode
+- Do not bypass terminal/MCP boundary rules
 
 ## Current Parent
-- Conversation ID: c3bb402f-7c4c-4891-9027-38332cba1e45
-- Updated: 2026-05-27T19:15:00+07:00
+- Conversation ID: f5111a39-39e8-46e9-a3b8-586ab9b88de4
+- Updated: not yet
 
 ## Key Decisions Made
-- Decomposed into 3 sequential milestones using the Project pattern with direct iteration loops (no sub-orchestrators due to medium complexity).
-- Explorer phase (Milestone 1) is completed. Discovered direct execution from MSIX install location, DOM selectors for active symbol and indicators, and webhook schema details.
+- Setup initial plan and briefing structure
 
 ## Team Roster
 | Agent | Type | Work Item | Status | Conv ID |
 |-------|------|-----------|--------|---------|
-| Explorer_1 | teamwork_preview_explorer | TV CDP Discovery Explorer | completed | 890b524f-4290-4f81-bb6a-8ea0e15a09fc |
-| Explorer_2 | teamwork_preview_explorer | TV Study Extractor Explorer | completed | 91a4d93c-aa35-470a-b7f5-426bc7be0735 |
-| Explorer_3 | teamwork_preview_explorer | Webhook Integration Explorer | completed | 00b944aa-7725-4bc1-beb4-c804a874b28f |
-| Implementer_1 | teamwork_preview_worker | TV CDP Webhook Implementer | in-progress | d3e82b18-fb2a-4b76-b0be-91929385d699 |
+| worker_1 | teamwork_preview_worker | Implement R1-R4 features and tests | completed | ca6c4ac4-d05f-4c0b-a960-c14806926380 |
+| reviewer_1 | teamwork_preview_reviewer | Review R1-R4 implementation and tests | completed | 897d7764-06f3-496f-905f-8027059326f9 |
+| auditor_1 | teamwork_preview_auditor | Forensic audit on R1-R4 features | completed | a30dc9d5-e852-4278-aa01-fcae600a7d85 |
 
 ## Succession Status
 - Succession required: no
-- Spawn count: 4 / 16
+- Spawn count: 3
 - Pending subagents: none
-- Predecessor: none
-- Successor: not yet spawned
 
 ## Active Timers
-- Heartbeat cron: task-53
+- Heartbeat cron: not started
 - Safety timer: none
 - On succession: kill all timers before spawning successor
 - On context truncation: run `manage_task(Action="list")` — re-create if missing
 
 ## Artifact Index
-- c:\Users\pesil\working\mj_trading\TradingViewProject\PROJECT.md — Scope and architecture definition
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md — Specific execution plan
-- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\progress.md — Tracking status and logs
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\orchestrator\plan.md — Implementation plan

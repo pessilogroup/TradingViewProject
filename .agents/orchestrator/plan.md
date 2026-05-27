@@ -1,22 +1,27 @@
-# Plan - CDP & Webhook Integration
+# Implementation Plan - Webhook Integration Extension (FastAPI + CDP + Risk + AI Regime)
 
-## Mission
-Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
+## Tasks
+1. **R1. Auto-Validation & Dynamic Slippage Control**:
+   - Compare payload webhook `price` with real-time market price fetched from exchange (Binance / Weex / active exchange).
+   - If slippage > 0.5%, place a LIMIT order instead of MARKET.
+   - Wait up to 30 seconds for the Limit order to execute.
+   - If not executed, cancel the order and send a Telegram warning notification "Slippage Warning".
 
-## Milestones
+2. **R2. ATR-Based Adaptive Position Sizing**:
+   - Extract `atr_value` from payload webhook (check field/metadata).
+   - Calculate Stop Loss = Entry Price - (2 * ATR) for Long / Entry Price + (2 * ATR) for Short.
+   - Calculate trade sizing (`quoteQty`) so max loss is <= 1.0% of available account balance.
+   - Place OCO order with the exact calculated SL and TP.
 
-### Milestone 1: Explorer Phase (Analysis & Extraction Research)
-- Task: Analyze the existing `tradingview-mcp` code, standard/MSIX paths of TradingView Desktop on Windows, HTML/DOM structure of TradingView Desktop for symbol and study values, and `/webhook` ingress payload constraints.
-- Done when: Handoff file created detailing paths, selectors, and payload schema.
+3. **R3. CDP Automatic Health Check & Keep-Alive**:
+   - Add a background monitoring loop (running every 5 minutes).
+   - Check if the TradingView tab is responsive/active (via CDP at port 9222).
+   - If disconnected, hung, or unresponsive for 30 seconds, reload the TradingView tab via CDP.
 
-### Milestone 2: Implementation Phase (Script Development)
-- Task: Create/extend a script (e.g. `nerves/workers/trading/scripts/tv_cdp_webhook.py`) that:
-  1. Auto-launches TradingView Desktop (handling standard paths and MSIX via `Get-AppxPackage`) with `--remote-debugging-port=9222`.
-  2. Establishes CDP connection to port 9222 and parses the active symbol.
-  3. Extracts latest close price, timeframe interval, and study indicators (SMA50, SMA150, SMA200, ATR14) from the chart.
-  4. Assembles the webhook payload, POSTs it to the `/webhook` ingress, and verifies HTTP 200.
-- Done when: Implementation passes basic manual tests and code is clean.
+4. **R4. AI Market Regime Filter**:
+   - Before executing strategy signals, run a Gemini Vision check on chart screenshots or calculate a Heuristic from recent candle data to classify market regime as `TREND` or `CHOP` (Sideway).
+   - If regime is `CHOP`, reduce position size by 50% or skip breakout breakout signals entirely.
 
-### Milestone 3: Verification & Auditing Phase (Test Suite & Verification)
-- Task: Add integration test/automated verification to run the script and check database persistence. Run the Forensic Auditor.
-- Done when: All tests pass, E2E validation succeeds, and Forensic Auditor reports clean.
+## Strategy & Subagent Dispatch
+We will dispatch a `teamwork_preview_worker` to explore the details of these files, write the implementations, and run tests.
+We will first analyze how to test these components.

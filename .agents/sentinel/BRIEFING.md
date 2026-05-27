@@ -1,17 +1,17 @@
-# BRIEFING — 2026-05-27T19:12:33+07:00
+# BRIEFING — 2026-05-28T00:43:55+07:00
 
 ## Mission
-Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222, dynamic symbol/study extraction, and webhook integration simulation.
+Xây dựng hệ thống tự động kiểm thử (Auto-Test Runner) dưới dạng Watcher tự động giám sát mã nguồn (Python & Pine Script), chạy lại các bài kiểm thử và xác thực hệ thống, đồng thời ghi log, cập nhật Dashboard và gửi cảnh báo qua Telegram.
 
 ## 🔒 My Identity
 - Archetype: sentinel
 - Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\sentinel
-- Orchestrator: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
-- Victory Auditor: TBD
-- Active Orchestrator: ccfa9f9d-d3b7-4a4c-b116-f5bae223e6ba
-- Active Victory Auditor: TBD
-- Progress Cron Task: c3bb402f-7c4c-4891-9027-38332cba1e45/task-29
-- Liveness Cron Task: c3bb402f-7c4c-4891-9027-38332cba1e45/task-31
+- Orchestrator: 3e5392b5-bd42-4d64-9166-39a900fcd950
+- Victory Auditor: ebf72eb2-11ca-4c20-8b4c-b89414a29b3f
+- Active Orchestrator: 3e5392b5-bd42-4d64-9166-39a900fcd950
+- Active Victory Auditor: ebf72eb2-11ca-4c20-8b4c-b89414a29b3f
+- Progress Cron Task: 23d8e338-8a2e-4c60-926b-288d30b56656/task-25
+- Liveness Cron Task: 23d8e338-8a2e-4c60-926b-288d30b56656/task-27
 
 ## 🔒 Key Constraints
 - No technical decisions — relay only
@@ -19,18 +19,28 @@ Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on
 - respect ConsensusEngine verdicts
 
 ## User Context
-- **Last user request**: Automate connecting to TradingView Desktop via Chrome DevTools Protocol (CDP) on port 9222 (including auto-launching and MSIX packaging path resolution), extracting live study values and dynamic active symbols from the active chart page, and validating the integration by sending simulated real data payloads to the webhook ingress.
+- **Last user request**: Xây dựng hệ thống tự động kiểm thử (Auto-Test Runner) dưới dạng Watcher tự động giám sát mã nguồn (Python & Pine Script).
 - **Pending clarifications**: none
-- **Delivered results**: none
+- **Delivered results**:
+  - Implemented dynamic price slippage validation at time of signal receipt.
+  - Implemented automatic limit order placement and 30s monitoring for slippage exceeding 0.5%.
+  - Added Telegram alerts for unfilled cancelled limit orders.
+  - Implemented ATR-based Stop-Loss (Entry - 2*ATR) and Risk Sizing (1% risk of account balance) with OCO execution.
+  - Built automatic 5-minute TradingView CDP health check & websocket liveness reloader.
+  - Integrated AI market regime filter (Trend vs Chop) halving order quantity or skipping breakout signals in Chop.
 
 ## Project Status
-- **Phase**: in progress (explorers dispatched)
+- **Phase**: complete
 
 ## Victory Audit Status
-- **Triggered**: no
-- **Verdict**: pending
+- **Triggered**: yes
+- **Verdict**: VICTORY CONFIRMED
 - **Retry count**: 0
 
 ## Artifact Index
 - c:\Users\pesil\working\mj_trading\TradingViewProject\ORIGINAL_REQUEST.md — Verbatim user request.
 - c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\original_prompt.md — Sentinel prompt history.
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\teamwork_preview_orchestrator_auto_test — Orchestrator directory.
+- c:\Users\pesil\working\mj_trading\TradingViewProject\.agents\victory_auditor_auto_test — Victory Auditor directory.
+
+

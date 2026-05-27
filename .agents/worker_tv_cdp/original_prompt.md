@@ -37,3 +37,28 @@ Please perform the following tasks:
    - Run the implementation script `tv_cdp_webhook.py`.
    - Direct-check persistence in the SQLite database `nerves/workers/trading/trades.db`: query the `indicator_signals` table to verify that the webhook signal was inserted and stored successfully.
    - Record the build/test results, commands executed, and layout verification details in your handoff report.
+
+## 2026-05-27T22:49:02+07:00
+Implement the four core requirements from ORIGINAL_REQUEST.md follow-up (2026-05-27T22:49:02+07:00) in the TradingViewProject workspace:
+
+1. **R1. Auto-Validation & Dynamic Slippage Control**:
+   - In `TradeEngine` (or appropriate executor), retrieve the current market price from the exchange (e.g. Binance / Weex depending on symbol/exchange).
+   - Compare the webhook entry price with this market price. If the slippage (|market_price - webhook_price| / webhook_price) is greater than 0.5% (0.005), change the order type from Market to Limit order, placing the order at the webhook price.
+   - If the limit order remains unfilled after 30 seconds, cancel it and trigger a Telegram alert with a "Slippage Warning".
+
+2. **R2. ATR-Based Adaptive Position Sizing**:
+   - Extract the `atr_value` from the webhook payload (which can be passed through events to TradeEngine).
+   - Calculate the Stop Loss (SL) and Take Profit (TP) levels. For Long: Stop Loss = Entry Price - (2 * ATR). For Short: Stop Loss = Entry Price + (2 * ATR).
+   - Calculate the position size (`quoteQty`) such that the max risk (defined by the distance to Stop Loss) is <= 1.0% of the available account balance on the exchange (e.g., fetch balance via `get_account_balance("USDT")`).
+   - Execute the order as an OCO (or simulated OCO for Weex) using the exact ATR-derived SL and TP prices.
+
+3. **R3. CDP Automatic Health Check & Keep-Alive**:
+   - Add a monitoring function/daemon or background task in `scheduler.py` (or similar) that runs every 5 minutes.
+   - It must check responsiveness of the TradingView Desktop tab via CDP port 9222.
+   - If the connection is down, the page is crashed, or does not respond within 30 seconds, trigger a reload command of the TradingView tab via CDP.
+
+4. **R4. AI Market Regime Filter**:
+   - Integrate a regime classifier filter before trade execution (e.g., in `TradeEngine` or `AIAnalyzer`/`vision.py`). Use a Gemini Vision check or a candle-data heuristic to determine if the market is in `TREND` or `CHOP` (Sideway).
+   - If the market is determined to be in `CHOP` state: reduce order size (`quoteQty`) by 50% or skip breakout signals (e.g., `bo` or `breakout_long` signals) entirely.
+
+Run existing tests and write new unit/integration tests to verify that these four features work correctly. Document all commands and results.
