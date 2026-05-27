@@ -164,7 +164,9 @@ async def cmd_status(update, context):
     ]
 
     # RAG status
-    rag_status = "✅ Enabled" if config.RAG_ENABLED and config.ANTHROPIC_API_KEY else "❌ Disabled"
+    has_anthropic = bool(config.ANTHROPIC_API_KEY and not config.ANTHROPIC_API_KEY.startswith("sk-ant-xxx"))
+    has_gemini = bool(config.GEMINI_API_KEY or config.GCP_PROJECT_ID)
+    rag_status = "✅ Enabled" if config.RAG_ENABLED and (has_anthropic or has_gemini) else "❌ Disabled"
     lines.append(f"🧠 RAG: {rag_status}")
 
     # MCP status
@@ -1386,7 +1388,9 @@ async def cmd_status_inline(message):
         f"⏰ Time: `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`",
         f"🌐 Server: FastAPI v7.0 on :{config.PORT}",
     ]
-    rag_status = "✅" if config.RAG_ENABLED and config.ANTHROPIC_API_KEY else "❌"
+    has_anthropic = bool(config.ANTHROPIC_API_KEY and not config.ANTHROPIC_API_KEY.startswith("sk-ant-xxx"))
+    has_gemini = bool(config.GEMINI_API_KEY or config.GCP_PROJECT_ID)
+    rag_status = "✅" if config.RAG_ENABLED and (has_anthropic or has_gemini) else "❌"
     mcp_status = "✅" if config.MCP_ENABLED else "❌"
     brief_status = "✅" if config.BRIEF_ENABLED else "❌"
     lines.append(f"🧠 RAG: {rag_status}  |  🖥️ MCP: {mcp_status}  |  ⏰ Brief: {brief_status}")

@@ -198,18 +198,24 @@ async def analyze_chart_vision(
     provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
 
     # Validate
+    has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
+    has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
+    has_gemini = bool(has_vertex or has_genai)
+
     if provider == "gemini":
-        has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
-        has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
-        if not (has_vertex or has_genai):
+        if not has_gemini:
             result["error"] = "Gemini API not available or configured (need GCP_PROJECT_ID or GEMINI_API_KEY)"
             return result
     elif provider == "claude_cli":
         pass  # CLI verify khi gọi, không cần API key
     else:
-        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
-            result["error"] = "Anthropic API not available or configured"
-            return result
+        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None) or getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx"):
+            if has_gemini:
+                log.info("Anthropic API key is not configured. Falling back to Gemini...")
+                provider = "gemini"
+            else:
+                result["error"] = "Anthropic API not available or configured"
+                return result
 
     image_path = Path(image_path)
     if not image_path.exists():
@@ -224,12 +230,117 @@ async def analyze_chart_vision(
     )
 
     try:
+        analysis_text = ""
+        
+        # 1. Try Anthropic first if it's the provider
+        if provider == "anthropic":
+            try:
+                # Encode image for Anthropic
+                image_data = _encode_image(image_path)
+                if not image_data:
+                    raise ValueError("Failed to encode image")
+
+                import anthropic
+                client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                mime_type = _get_media_type(image_path)
+                message = client.messages.create(
+                    model=model,
+                    max_tokens=800,
+                    system=VISION_SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": mime_type,
+                                        "data": image_data,
+                                    },
+                                },
+                                {
+                                    "type": "text",
+                                    "text": user_prompt,
+                                },
+                            ],
+                        }
+                    ],
+                )
+                analysis_text = message.content[0].text
+            except Exception as e:
+                if has_gemini:
+                    log.warning(f"Anthropic SDK vision call failed: {e}. Falling back to Gemini...")
+                    provider = "gemini"
+                else:
+                    raise e
+
+        # 2. Try Claude CLI if provider is claude_cli
+        if provider == "claude_cli":
+            try:
+                import rag as _rag
+                cli_prompt = (
+                    f"{VISION_SYSTEM_PROMPT}\n\n"
+                    f"Đọc và phân tích biểu đồ tại đường dẫn sau:\n"
+                    f"{image_path.resolve()}\n\n"
+                    f"{user_prompt}"
+                )
+                analysis_text = await _rag._call_claude_cli(
+                    cli_prompt, image_path=str(image_path.resolve())
+                )
+            except Exception as cli_err:
+                if (
+                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
+                    and ANTHROPIC_AVAILABLE
+                    and getattr(config, "ANTHROPIC_API_KEY", None)
+                    and not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx")
+                ):
+                    log.warning(f"Vision: Claude CLI fail ({cli_err}). Fallback SDK.")
+                    provider = "anthropic"  # try Anthropic SDK
+                    # try Anthropic SDK logic
+                    image_data = _encode_image(image_path)
+                    if not image_data:
+                        raise ValueError("Failed to encode image")
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                    mime_type = _get_media_type(image_path)
+                    message = client.messages.create(
+                        model=model,
+                        max_tokens=800,
+                        system=VISION_SYSTEM_PROMPT,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": mime_type,
+                                            "data": image_data,
+                                        },
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": user_prompt,
+                                    },
+                                ],
+                            }
+                        ],
+                    )
+                    analysis_text = message.content[0].text
+                elif has_gemini:
+                    log.warning(f"Vision: Claude CLI fail ({cli_err}). Falling back to Gemini...")
+                    provider = "gemini"
+                else:
+                    result["error"] = f"Claude CLI error: {cli_err}"
+                    return result
+
+        # 3. Try Gemini (either by design or as a fallback)
         if provider == "gemini":
             # Hybrid Strategy: Pro for high precision, Flash for fast scan
             model_name = "gemini-2.5-pro" if model == "claude-sonnet-4-5" else "gemini-2.5-flash"
-            
             max_retries = 3
-            analysis_text = ""
             
             for attempt in range(max_retries):
                 try:
@@ -280,11 +391,7 @@ async def analyze_chart_vision(
                         analysis_text = response.text
                         break
                     else:
-                        result["error"] = (
-                            "No Gemini auth available. Set GEMINI_API_KEY (https://aistudio.google.com) "
-                            "or run: gcloud auth application-default login"
-                        )
-                        return result
+                        raise RuntimeError("No Gemini credentials available")
                 except Exception as e:
                     error_str = str(e).lower()
                     if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
@@ -294,65 +401,6 @@ async def analyze_chart_vision(
                             await asyncio.sleep(wait_time)
                             continue
                     raise  # Reraise nếu không phải lỗi rate limit hoặc đã thử tối đa
-
-        elif provider == "claude_cli":
-            try:
-                import rag as _rag
-                cli_prompt = (
-                    f"{VISION_SYSTEM_PROMPT}\n\n"
-                    f"Đọc và phân tích biểu đồ tại đường dẫn sau:\n"
-                    f"{image_path.resolve()}\n\n"
-                    f"{user_prompt}"
-                )
-                analysis_text = await _rag._call_claude_cli(
-                    cli_prompt, image_path=str(image_path.resolve())
-                )
-            except Exception as cli_err:
-                if (
-                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
-                    and ANTHROPIC_AVAILABLE
-                    and getattr(config, "ANTHROPIC_API_KEY", None)
-                ):
-                    log.warning(f"Vision: Claude CLI fail ({cli_err}). Fallback SDK.")
-                    provider = "anthropic"  # rơi xuống nhánh dưới qua re-check
-                else:
-                    result["error"] = f"Claude CLI error: {cli_err}"
-                    return result
-
-        if provider != "claude_cli" and provider != "gemini":
-            # Encode image for Anthropic
-            image_data = _encode_image(image_path)
-            if not image_data:
-                result["error"] = "Failed to encode image"
-                return result
-
-            import anthropic
-            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model=model,
-                max_tokens=800,
-                system=VISION_SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": _get_media_type(image_path),
-                                    "data": image_data,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": user_prompt,
-                            },
-                        ],
-                    }
-                ],
-            )
-            analysis_text = message.content[0].text
 
         result["analysis"] = analysis_text
 
@@ -430,18 +478,30 @@ async def analyze_chart_vision_mtf(
     provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
 
     # Validate
+    has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
+    has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
+    has_gemini = bool(has_vertex or has_genai)
+
+    has_anthropic = (
+        ANTHROPIC_AVAILABLE
+        and bool(getattr(config, "ANTHROPIC_API_KEY", None))
+        and not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx")
+    )
+
     if provider == "gemini":
-        has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
-        has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
-        if not (has_vertex or has_genai):
+        if not has_gemini:
             result["error"] = "Gemini API not available or configured"
             return result
     elif provider == "claude_cli":
         pass
     else:
-        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
-            result["error"] = "Anthropic API not available or configured"
-            return result
+        if not has_anthropic:
+            if has_gemini:
+                log.info("Vision MTF: Anthropic mock or missing. Switching to Gemini fallback.")
+                provider = "gemini"
+            else:
+                result["error"] = "Anthropic API not available or configured"
+                return result
 
     # Check images exist
     valid_paths = [Path(p) for p in image_paths if Path(p).exists()]
@@ -470,6 +530,68 @@ async def analyze_chart_vision_mtf(
     )
 
     try:
+        # 1. Try Claude CLI if provider is claude_cli
+        if provider == "claude_cli":
+            try:
+                import rag as _rag
+                cli_prompt = f"{VISION_MTF_SYSTEM_PROMPT}\n\n{user_prompt}"
+                # call with the first image, since CLI only takes one primary image
+                analysis_text = await _rag._call_claude_cli(
+                    cli_prompt, image_path=str(valid_paths[0].resolve())
+                )
+            except Exception as cli_err:
+                if (
+                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
+                    and ANTHROPIC_AVAILABLE
+                    and getattr(config, "ANTHROPIC_API_KEY", None)
+                    and not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx")
+                ):
+                    log.warning(f"Vision MTF: Claude CLI fail ({cli_err}). Fallback SDK.")
+                    provider = "anthropic"
+                elif has_gemini:
+                    log.warning(f"Vision MTF: Claude CLI fail ({cli_err}). Falling back to Gemini...")
+                    provider = "gemini"
+                else:
+                    result["error"] = f"Claude CLI error: {cli_err}"
+                    return result
+
+        # 2. Try Anthropic SDK if provider is anthropic
+        if provider != "claude_cli" and provider != "gemini":
+            try:
+                content_blocks = []
+                for path in valid_paths:
+                    image_data = _encode_image(path)
+                    if image_data:
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": _get_media_type(path),
+                                "data": image_data,
+                            },
+                        })
+                content_blocks.append({
+                    "type": "text",
+                    "text": user_prompt,
+                })
+
+                import anthropic
+                client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                message = client.messages.create(
+                    model=model,
+                    max_tokens=1000,
+                    system=VISION_MTF_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": content_blocks}],
+                )
+                analysis_text = message.content[0].text
+            except Exception as e:
+                if has_gemini:
+                    log.warning(f"Anthropic SDK MTF vision call failed: {e}. Falling back to Gemini...")
+                    provider = "gemini"
+                else:
+                    raise e
+
+        # 3. Try Gemini (either initially or as a fallback)
         if provider == "gemini":
             model_name = "gemini-2.5-pro" if model == "claude-sonnet-4-5" else "gemini-2.5-flash"
             max_retries = 3
@@ -522,8 +644,7 @@ async def analyze_chart_vision_mtf(
                         analysis_text = response.text
                         break
                     else:
-                        result["error"] = "No Gemini auth available."
-                        return result
+                        raise RuntimeError("No Gemini credentials available")
                 except Exception as e:
                     error_str = str(e).lower()
                     if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
@@ -532,53 +653,6 @@ async def analyze_chart_vision_mtf(
                             await asyncio.sleep(wait_time)
                             continue
                     raise
-
-        elif provider == "claude_cli":
-            try:
-                import rag as _rag
-                cli_prompt = f"{VISION_MTF_SYSTEM_PROMPT}\n\n{user_prompt}"
-                # call with the first image, since CLI only takes one primary image
-                analysis_text = await _rag._call_claude_cli(
-                    cli_prompt, image_path=str(valid_paths[0].resolve())
-                )
-            except Exception as cli_err:
-                if (
-                    getattr(config, "CLAUDE_CLI_FALLBACK_SDK", True)
-                    and ANTHROPIC_AVAILABLE
-                    and getattr(config, "ANTHROPIC_API_KEY", None)
-                ):
-                    provider = "anthropic"
-                else:
-                    result["error"] = f"Claude CLI error: {cli_err}"
-                    return result
-
-        if provider != "claude_cli" and provider != "gemini":
-            content_blocks = []
-            for path in valid_paths:
-                image_data = _encode_image(path)
-                if image_data:
-                    content_blocks.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": _get_media_type(path),
-                            "data": image_data,
-                        },
-                    })
-            content_blocks.append({
-                "type": "text",
-                "text": user_prompt,
-            })
-
-            import anthropic
-            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model=model,
-                max_tokens=1000,
-                system=VISION_MTF_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": content_blocks}],
-            )
-            analysis_text = message.content[0].text
 
         result["analysis"] = analysis_text
         result["confidence"] = _parse_confidence(analysis_text)

@@ -178,9 +178,12 @@ async def generate_morning_brief() -> Optional[dict]:
     elif screenshot_path and not _has_vision:
         logger.warning("[Brief] Vision skipped — no AI provider configured (check GEMINI_API_KEY or ANTHROPIC_API_KEY)")
 
-    # 5. RAG + Claude analysis
+    # 5. RAG + AI analysis (Claude or Gemini fallback)
     ai_analysis = ""
-    if config.RAG_ENABLED and config.ANTHROPIC_API_KEY:
+    has_gemini = bool(config.GEMINI_API_KEY or config.GCP_PROJECT_ID)
+    has_anthropic = bool(config.ANTHROPIC_API_KEY and not config.ANTHROPIC_API_KEY.startswith("sk-ant-xxx"))
+    
+    if config.RAG_ENABLED and (has_anthropic or has_gemini):
         try:
             # Build context from top results
             vcp_symbols = [r.symbol for r in scan_results if r.vcp.detected and not r.error]
@@ -202,18 +205,50 @@ async def generate_morning_brief() -> Optional[dict]:
                 "timestamp": timestamp.isoformat(),
             }
 
-            ai_analysis = await generate_trading_advice(
-                symbol="WATCHLIST",
-                action="brief",
-                price="N/A",
-                payload=signal_data,
-                rag_chunks=chunks,
-            )
+            try:
+                ai_analysis = await generate_trading_advice(
+                    symbol="WATCHLIST",
+                    action="brief",
+                    price="N/A",
+                    payload=signal_data,
+                    rag_chunks=chunks,
+                )
+                if "⚠️" in ai_analysis and has_gemini and config.AI_PROVIDER != "gemini":
+                    logger.warning("[Brief] Anthropic advice generation returned error. Trying Gemini fallback...")
+                    original_provider = config.AI_PROVIDER
+                    config.AI_PROVIDER = "gemini"
+                    try:
+                        ai_analysis = await generate_trading_advice(
+                            symbol="WATCHLIST",
+                            action="brief",
+                            price="N/A",
+                            payload=signal_data,
+                            rag_chunks=chunks,
+                        )
+                    finally:
+                        config.AI_PROVIDER = original_provider
+            except Exception as e:
+                if has_gemini and config.AI_PROVIDER != "gemini":
+                    logger.warning(f"[Brief] Anthropic advice generation failed: {e}. Trying Gemini fallback...")
+                    original_provider = config.AI_PROVIDER
+                    config.AI_PROVIDER = "gemini"
+                    try:
+                        ai_analysis = await generate_trading_advice(
+                            symbol="WATCHLIST",
+                            action="brief",
+                            price="N/A",
+                            payload=signal_data,
+                            rag_chunks=chunks,
+                        )
+                    finally:
+                        config.AI_PROVIDER = original_provider
+                else:
+                    raise e
         except Exception as e:
             logger.warning(f"[Brief] AI analysis failed: {e}")
             ai_analysis = "_AI analysis unavailable_"
     else:
-        ai_analysis = "_RAG/Claude not configured — enable ANTHROPIC_API_KEY and RAG_ENABLED_"
+        ai_analysis = "_RAG/Claude/Gemini not configured — enable GEMINI_API_KEY or ANTHROPIC_API_KEY and RAG_ENABLED_"
 
     # 6. Format brief
     brief_text = _format_brief_text(scan_results, ai_analysis, timestamp)

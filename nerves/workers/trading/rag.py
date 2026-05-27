@@ -280,16 +280,31 @@ async def generate_trading_advice(
     """
     provider = getattr(config, "AI_PROVIDER", "anthropic").lower()
 
+    # Determine if Gemini is available
+    has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
+    has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
+    has_gemini = bool(has_vertex or has_genai)
+
+    # Determine if Anthropic is available (non-mock, non-empty)
+    has_anthropic = (
+        ANTHROPIC_AVAILABLE
+        and bool(getattr(config, "ANTHROPIC_API_KEY", None))
+        and not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx")
+    )
+
     if provider == "claude_cli":
         pass  # không cần check key, sẽ verify binary khi gọi
     elif provider == "gemini":
-        has_vertex = VERTEXAI_AVAILABLE and getattr(config, "GCP_PROJECT_ID", None)
-        has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
-        if not (has_vertex or has_genai):
+        if not has_gemini:
             return "⚠️ RAG Analysis không khả dụng (thiếu GEMINI_API_KEY hoặc GCP_PROJECT_ID)."
     else:
-        if not ANTHROPIC_AVAILABLE or not getattr(config, "ANTHROPIC_API_KEY", None):
-            return "⚠️ RAG Analysis không khả dụng (thiếu ANTHROPIC_API_KEY)."
+        # Defaults or explicit anthropic provider
+        if not has_anthropic:
+            if has_gemini:
+                log.info("RAG: Anthropic not configured/mock. Switching to Gemini fallback.")
+                provider = "gemini"
+            else:
+                return "⚠️ RAG Analysis không khả dụng (thiếu ANTHROPIC_API_KEY)."
 
     if not rag_chunks:
         return "⚠️ Không tìm thấy kiến thức phù hợp trong Knowledge Base."
@@ -390,15 +405,56 @@ Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ 
             log.info(f"RAG: Gemini generated advice for {symbol} ({action})")
             return advice
         else:
-            import anthropic
-            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            message = client.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            advice = message.content[0].text
-            log.info(f"RAG: Claude generated advice for {symbol} ({action})")
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                message = client.messages.create(
+                    model="claude-sonnet-4-5",
+                    max_tokens=512,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                advice = message.content[0].text
+                log.info(f"RAG: Claude generated advice for {symbol} ({action})")
+                return advice
+            except Exception as sdk_err:
+                if has_gemini:
+                    log.warning(f"RAG: Anthropic call failed ({sdk_err}). Falling back to Gemini...")
+                    provider = "gemini"
+                else:
+                    raise sdk_err
+
+        # Run Gemini if fallback activated it
+        if provider == "gemini":
+            model_name = "gemini-2.5-flash"
+            
+            _use_vertex = False
+            if has_vertex:
+                try:
+                    import google.auth
+                    google.auth.default()
+                    _use_vertex = True
+                except Exception:
+                    log.warning("Vertex AI ADC not found — falling back to GEMINI_API_KEY")
+
+            if _use_vertex:
+                import vertexai
+                from vertexai.generative_models import GenerativeModel as VertexGenerativeModel
+                vertexai.init(project=config.GCP_PROJECT_ID, location=getattr(config, "GCP_LOCATION", "us-central1"))
+                g_model = VertexGenerativeModel(model_name)
+                response = g_model.generate_content(prompt)
+                advice = response.text
+            elif has_genai:
+                from google import genai
+                client = genai.Client(api_key=config.GEMINI_API_KEY)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                advice = response.text
+            else:
+                return "⚠️ RAG Analysis không khả dụng (thiếu Gemini auth)."
+            
+            log.info(f"RAG: Gemini fallback generated advice for {symbol} ({action})")
             return advice
 
     except Exception as e:
