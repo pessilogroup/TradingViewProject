@@ -204,13 +204,56 @@ def detect_vcp(
 async def scan_symbols(symbols: list[str], mcp_client) -> list[ScanResult]:
     """
     Batch scan symbols: fetch data from MCP, score TT + VCP.
-    Returns sorted by TT score descending.
+    Falls back to REST scanning if MCP is unavailable or fails.
+    Returns sorted by VCP detected first, then by TT score descending.
     """
     from mcp_client import QuoteData, StudyValues
 
-    raw_data = await mcp_client.batch_run(symbols)
-    results = []
+    raw_data = None
+    if mcp_client is not None:
+        try:
+            raw_data = await mcp_client.batch_run(symbols)
+        except Exception as e:
+            logger.warning(f"MCP batch_run failed: {e}. Falling back to REST scan.")
 
+    if raw_data is None:
+        logger.info("Performing REST fallback scan for symbols...")
+        results = []
+        semaphore = asyncio.Semaphore(15)
+        
+        async with aiohttp.ClientSession() as session:
+            btc_benchmarks = {}
+            
+            async def get_btc_benchmark(eid):
+                if eid in btc_benchmarks:
+                    return btc_benchmarks[eid]
+                btc_symbol = "BTCUSDT_UMCBL" if eid == "weex" else "BTCUSDT"
+                try:
+                    btc_candles = await fetch_candles_with_retry(session, eid, btc_symbol, limit=365)
+                    btc_closes = {c[0]: c[4] for c in btc_candles} if btc_candles else {}
+                    btc_benchmarks[eid] = (btc_candles, btc_closes)
+                except Exception as ex:
+                    logger.warning(f"Could not fetch BTC benchmark for exchange {eid}: {ex}")
+                    btc_benchmarks[eid] = ([], {})
+                return btc_benchmarks[eid]
+
+            tasks = []
+            for sym in symbols:
+                eid = "weex" if sym.endswith("_UMCBL") else "binance"
+                
+                async def scan_task(s, exchange_id):
+                    btc_candles, btc_closes = await get_btc_benchmark(exchange_id)
+                    res = await scan_single_symbol_rest(session, exchange_id, s, btc_closes, btc_candles, semaphore)
+                    return res
+                
+                tasks.append(scan_task(sym, eid))
+            
+            results = await asyncio.gather(*tasks)
+            results = [r for r in results if r is not None]
+            results.sort(key=lambda r: (r.vcp.detected, r.trend_template.score), reverse=True)
+            return results
+
+    results = []
     for item in raw_data:
         sym = item["symbol"]
 
@@ -220,6 +263,7 @@ async def scan_symbols(symbols: list[str], mcp_client) -> list[ScanResult]:
                 trend_template=TrendTemplateResult(0, {}, "Unknown", "MCP error"),
                 vcp=VCPResult(False, 1.0, 1.0, None, False, "Data unavailable"),
                 volume=0, volume_avg=None,
+                exchange="weex" if sym.endswith("_UMCBL") else "binance",
                 error=item["error"]
             ))
             continue
@@ -255,6 +299,7 @@ async def scan_symbols(symbols: list[str], mcp_client) -> list[ScanResult]:
             vcp=vcp,
             volume=quote.volume,
             volume_avg=studies.volume_avg20,
+            exchange="weex" if sym.endswith("_UMCBL") else "binance",
             error=None,
         ))
 
