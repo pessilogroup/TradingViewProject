@@ -165,8 +165,11 @@ class MCPClient:
                         indicators[name] = v
                 else:
                     indicators[name] = s_vals
-        else:
+        elif isinstance(values, dict):
+            # If values is a flat dict already, just use it
             indicators = values
+        else:
+            indicators = {}
 
         def _find(keys: list) -> Optional[float]:
             for k in keys:

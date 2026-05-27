@@ -135,6 +135,23 @@ class ExchangeAdapter(Protocol):
     ) -> Dict[str, Any]:
         ...
 
+    async def get_ticker_price(self, symbol: str) -> float:
+        ...
+
+    async def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> Dict[str, Any]:
+        ...
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        ...
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        ...
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        ...
+
     async def execute_smart_order(
         self, symbol: str, side: str,
         entry_price: Optional[float] = None,
@@ -145,9 +162,11 @@ class ExchangeAdapter(Protocol):
         sl_price: Optional[float] = None,
         tp_price: Optional[float] = None,
         asset: str = "USDT",
+        order_type: str = "MARKET",
     ) -> OrderResult:
         ...
 
     async def health_check(self) -> Dict[str, Any]:
         """Returns {'healthy': bool, 'latency_ms': float, 'error': Optional[str]}"""
         ...
+

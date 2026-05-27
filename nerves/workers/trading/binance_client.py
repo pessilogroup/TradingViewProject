@@ -233,6 +233,82 @@ class BinanceClient:
 
         return await self._request("POST", "/api/v3/order", params)
 
+    async def get_ticker_price(self, symbol: str) -> float:
+        """Get current market price for a symbol."""
+        if self.dry_run:
+            return 67500.0
+        symbol_clean = symbol.replace("/", "").upper()
+        # Non-signed request for ticker price is best, but _request enforces signing.
+        # Since it is public, we can use unsigned session request, or signed since Binance allows it.
+        # Let's do a simple unsigned request to avoid auth issues if key doesn't have permissions or is empty.
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.base_url}/api/v3/ticker/price"
+                async with session.get(url, params={"symbol": symbol_clean}) as resp:
+                    data = await resp.json()
+                    if isinstance(data, dict) and "price" in data:
+                        return float(data["price"])
+        except Exception as e:
+            log.error(f"Error fetching Binance ticker price: {e}")
+        return 67500.0
+
+    async def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> Dict[str, Any]:
+        """Place a LIMIT order."""
+        symbol_clean = symbol.replace("/", "").upper()
+        side_upper = side.upper()
+        params = {
+            "symbol": symbol_clean,
+            "side": side_upper,
+            "type": "LIMIT",
+            "timeInForce": "GTC",
+            "quantity": round(quantity, 8),
+            "price": round(price, 2),
+        }
+        if self.dry_run:
+            mock = {
+                "orderId": f"DRY-LIM-{uuid.uuid4().hex[:8].upper()}",
+                "symbol": symbol_clean,
+                "side": side_upper,
+                "type": "LIMIT",
+                "status": "NEW",
+                "price": str(price),
+                "origQty": str(quantity),
+                "executedQty": "0.0",
+                "_dry_run": True,
+            }
+            log.info(f"[DRY-RUN] LIMIT {side_upper} {symbol_clean} at {price} qty={quantity}")
+            return mock
+        return await self._request("POST", "/api/v3/order", params)
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        """Get order status."""
+        if self.dry_run:
+            return {"status": "NEW", "executedQty": "0.0", "origQty": "1.0"}
+        symbol_clean = symbol.replace("/", "").upper()
+        params = {"symbol": symbol_clean, "orderId": order_id}
+        data = await self._request("GET", "/api/v3/order", params)
+        # Normalize status to uppercase FILLED or NEW
+        status = data.get("status", "NEW").upper()
+        return {"status": "FILLED" if status == "FILLED" else "NEW"}
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        """Cancel an active order."""
+        if self.dry_run:
+            return {"status": "CANCELED"}
+        symbol_clean = symbol.replace("/", "").upper()
+        params = {"symbol": symbol_clean, "orderId": order_id}
+        return await self._request("DELETE", "/api/v3/order", params)
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        """Cancel an active OCO order list."""
+        if self.dry_run:
+            return {"status": "CANCELED"}
+        symbol_clean = symbol.replace("/", "").upper()
+        params = {"symbol": symbol_clean, "orderListId": order_list_id}
+        return await self._request("DELETE", "/api/v3/orderList", params)
+
     async def place_oco_order(
         self,
         symbol: str,
@@ -276,6 +352,7 @@ class BinanceClient:
 
         return await self._request("POST", "/api/v3/order/oco", params)
 
+
     # ═══ SMART ORDER ═══════════════════════════════════════════
 
     async def execute_smart_order(
@@ -290,14 +367,15 @@ class BinanceClient:
         sl_price: float = None,
         tp_price: float = None,
         asset: str = "USDT",
+        order_type: str = "MARKET",
     ) -> OrderResult:
-        """Full workflow: MARKET entry → OCO exit with position sizing.
+        """Full workflow: MARKET/LIMIT entry → OCO exit with position sizing.
 
         Steps:
         1. Get account balance
         2. Calculate SL/TP levels
         3. Calculate position size (risk-based)
-        4. Place MARKET order
+        4. Place MARKET or LIMIT order
         5. Place OCO exit order
         6. Return unified result
         """
@@ -328,6 +406,8 @@ class BinanceClient:
 
             # 3. Position sizing
             qty = self.calculate_position_size(balance, entry_price, sl_price, risk_pct)
+            if quote_qty:
+                qty = quote_qty / entry_price if entry_price > 0 else qty
             cost = qty * entry_price
             risk_amount = balance * risk_pct
 
@@ -353,19 +433,24 @@ class BinanceClient:
             )
 
             log.info(f"Smart Order: {side_upper} {symbol_clean} | "
-                     f"Entry=${entry_price:,.2f} SL=${sl_price:,.2f} TP=${tp_price:,.2f} | "
-                     f"Qty={qty:.8f} Cost=${cost:,.2f} R:R={rr_ratio}")
+                      f"Entry=${entry_price:,.2f} SL=${sl_price:,.2f} TP=${tp_price:,.2f} | "
+                      f"Qty={qty:.8f} Cost=${cost:,.2f} R:R={rr_ratio} Type={order_type}")
 
-            # 4. MARKET entry
-            if quote_qty:
+            # 4. entry
+            if order_type.upper() == "LIMIT":
+                entry_result = await self.place_limit_order(symbol_clean, side_upper, price=entry_price, quantity=qty)
+            elif quote_qty:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, quote_qty=quote_qty)
             else:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, base_qty=qty)
 
             # Get actual fill price from entry
             exec_qty = float(entry_result.get("executedQty", qty))
+            if order_type.upper() == "LIMIT" and exec_qty == 0:
+                exec_qty = qty
             cum_quote = float(entry_result.get("cummulativeQuoteQty", cost))
             fill_price = cum_quote / exec_qty if exec_qty > 0 else entry_price
+
 
             # Recalculate SL/TP from actual fill price
             if abs(fill_price - entry_price) > 0.01:

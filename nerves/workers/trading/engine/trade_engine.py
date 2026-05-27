@@ -13,6 +13,7 @@ Design Invariants (v6.0):
 - Uses set_bus() pattern for test isolation.
 """
 import logging
+import asyncio
 from typing import Optional
 
 import database
@@ -41,6 +42,34 @@ def get_bus():
 # ═══════════════════════════════════════════════════════════════
 # EVENT HANDLER: TradeApproved → Execute Order
 # ═══════════════════════════════════════════════════════════════
+
+async def monitor_limit_order(adapter, symbol: str, order_id: str, oco_id: Optional[str], entry_price: float):
+    """Monitor a limit order placed due to slippage, cancel after 30s if unfilled."""
+    await asyncio.sleep(30)
+    try:
+        status_info = await adapter.get_order(symbol, order_id)
+        if status_info.get("status") != "FILLED":
+            log.warning(f"Slippage limit order {order_id} unfilled after 30s. Cancelling.")
+            try:
+                await adapter.cancel_order(symbol, order_id)
+            except Exception as e:
+                log.warning(f"Failed to cancel unfilled limit order {order_id}: {e}")
+            if oco_id:
+                try:
+                    await adapter.cancel_oco_order(symbol, oco_id)
+                except Exception as e:
+                    log.warning(f"Failed to cancel associated OCO order {oco_id}: {e}")
+            
+            # Send Telegram alert
+            msg = f"⚠️ **Slippage Warning**\nLimit order `{order_id}` for `{symbol}` at price `{entry_price}` remained unfilled after 30 seconds and has been cancelled."
+            try:
+                from notifier import notify_all
+                await notify_all(msg)
+            except Exception as n_err:
+                log.error(f"Failed to send Telegram alert: {n_err}")
+    except Exception as exc:
+        log.error(f"Error in monitor_limit_order for {order_id}: {exc}")
+
 
 @_default_bus.on(TradeApproved)
 async def execute_trade(event: TradeApproved) -> None:
@@ -133,37 +162,96 @@ async def execute_trade(event: TradeApproved) -> None:
     except (ValueError, TypeError):
         quote_qty_val = None
 
-    if is_breakout:
-        # Tactical Entry: 2.5% of account balance
+    # Extract ATR value (R2)
+    atr_val = getattr(event, "atr_value", None)
+    if atr_val is None:
+        atr_val = original_payload.get("atr_value")
+    if atr_val is None:
+        atr_val = original_payload.get("metadata", {}).get("atr14")
+    if atr_val is None:
+        atr_val = original_payload.get("atr")
+
+    atr_sizing_applied = False
+    if atr_val is not None:
         try:
-            balance = await adapter.get_account_balance("USDT")
-            if balance > 0:
-                tactical_qty = balance * 0.025
-                quote_qty_val = max(10.0, min(tactical_qty, config.MAX_QUOTE_QTY))
-                log.info(f"TradeEngine: Tactical Entry Sizing applied: {quote_qty_val:.2f} USDT (2.5% of {balance:.2f} balance)")
-            else:
+            atr = float(atr_val)
+            if atr > 0:
+                if action.upper() == "BUY":
+                    sl_price = entry_price - (2.0 * atr)
+                    tp_price = entry_price + (4.0 * atr)
+                else:
+                    sl_price = entry_price + (2.0 * atr)
+                    tp_price = entry_price - (4.0 * atr)
+                log.info(f"TradeEngine: ATR-based SL/TP calculated: SL={sl_price}, TP={tp_price} (ATR={atr})")
+                
+                try:
+                    balance = await adapter.get_account_balance("USDT")
+                    risk_amount = balance * 0.01
+                    price_dist = abs(entry_price - sl_price)
+                    if price_dist > 0:
+                        quote_qty_val = (risk_amount / price_dist) * entry_price
+                        atr_sizing_applied = True
+                        log.info(f"TradeEngine: ATR risk-based sizing applied: quote_qty={quote_qty_val:.2f} USDT (risking 1.0% of {balance:.2f} balance)")
+                except Exception as e:
+                    log.warning(f"TradeEngine: Failed to compute ATR-based position size: {e}")
+        except (ValueError, TypeError) as e:
+            log.warning(f"TradeEngine: Invalid ATR value {atr_val}: {e}")
+
+    if not atr_sizing_applied:
+        if is_breakout:
+            # Tactical Entry: 2.5% of account balance
+            try:
+                balance = await adapter.get_account_balance("USDT")
+                if balance > 0:
+                    tactical_qty = balance * 0.025
+                    quote_qty_val = max(10.0, min(tactical_qty, config.MAX_QUOTE_QTY))
+                    log.info(f"TradeEngine: Tactical Entry Sizing applied: {quote_qty_val:.2f} USDT (2.5% of {balance:.2f} balance)")
+                else:
+                    if quote_qty_val is None:
+                        quote_qty_val = 10.0
+            except Exception as e:
+                log.warning(f"TradeEngine: Failed to compute tactical sizing: {e}. Using default.")
                 if quote_qty_val is None:
                     quote_qty_val = 10.0
-        except Exception as e:
-            log.warning(f"TradeEngine: Failed to compute tactical sizing: {e}. Using default.")
-            if quote_qty_val is None:
-                quote_qty_val = 10.0
-            
-        # Tactical Stop-loss at Swing Low of last 5 hours
+                
+            # Tactical Stop-loss at Swing Low of last 5 hours
+            try:
+                import aiohttp
+                from analysis import fetch_candles_with_retry
+                async with aiohttp.ClientSession() as session:
+                    candles = await fetch_candles_with_retry(session, requested_exchange, event.symbol, interval="1h", limit=5)
+                if candles:
+                    swing_low = min(float(c[3]) for c in candles)
+                    sl_price = swing_low * 0.998
+                    if sl_price >= entry_price:
+                        sl_price = entry_price * 0.98
+                    log.info(f"TradeEngine: Tactical Entry Stop Loss at {sl_price:.4f} (Swing Low: {swing_low:.4f})")
+            except Exception as exc:
+                log.warning(f"TradeEngine: Failed to compute Swing Low Stop Loss: {exc}. Keeping default: {sl_price}")
+
+    # Regime Filter (R4)
+    try:
+        from engine.regime_switcher import get_market_regime
+        regime = await get_market_regime(event.symbol, requested_exchange)
+        await database.set_setting("market_regime", regime)
+    except Exception as exc:
+        log.warning(f"TradeEngine: Failed to get market regime: {exc}. Trying fallback setting.")
         try:
-            import aiohttp
-            from analysis import fetch_candles_with_retry
-            async with aiohttp.ClientSession() as session:
-                candles = await fetch_candles_with_retry(session, requested_exchange, event.symbol, interval="1h", limit=5)
-            if candles:
-                swing_low = min(float(c[3]) for c in candles)
-                sl_price = swing_low * 0.998
-                if sl_price >= entry_price:
-                    sl_price = entry_price * 0.98
-                log.info(f"TradeEngine: Tactical Entry Stop Loss at {sl_price:.4f} (Swing Low: {swing_low:.4f})")
-        except Exception as exc:
-            log.warning(f"TradeEngine: Failed to compute Swing Low Stop Loss: {exc}. Keeping default: {sl_price}")
-            
+            regime = await database.get_setting("market_regime", "TRENDING")
+        except Exception:
+            regime = "TRENDING"
+
+    if regime == "CHOP":
+        if is_breakout:
+            error_msg = f"Skipped: breakout signal {event.signal_id} because market is in CHOP regime"
+            log.info(f"TradeEngine: {error_msg}")
+            await _handle_failure(event, action, error_msg, requested_exchange, combined_score)
+            return
+        else:
+            if quote_qty_val is not None:
+                quote_qty_val = quote_qty_val * 0.5
+                log.info(f"TradeEngine: CHOP regime detected. Reducing position size by 50% to {quote_qty_val:.2f} USDT")
+
     # Safe Mode sizing modification
     try:
         import inspect
@@ -208,6 +296,18 @@ async def execute_trade(event: TradeApproved) -> None:
     if quote_qty_val is not None:
         quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
 
+    # Slippage Control (R1)
+    target_order_type = "MARKET"
+    try:
+        market_price = await adapter.get_ticker_price(event.symbol)
+        slippage = abs(market_price - entry_price) / entry_price if entry_price > 0.0 else 0.0
+        log.info(f"TradeEngine: Market Price={market_price}, Webhook Price={entry_price}, Slippage={slippage:.4f}")
+        if slippage > 0.005:
+            target_order_type = "LIMIT"
+            log.info(f"TradeEngine: Slippage {slippage:.4f} > 0.5% (0.005). Changing order type to LIMIT at {entry_price}")
+    except Exception as exc:
+        log.warning(f"TradeEngine: Failed to verify slippage: {exc}")
+
     try:
         # ── Execute smart order (MARKET + OCO) ───────────────
         result = await adapter.execute_smart_order(
@@ -217,6 +317,7 @@ async def execute_trade(event: TradeApproved) -> None:
             quote_qty=quote_qty_val,
             sl_price=sl_price,
             tp_price=tp_price,
+            order_type=target_order_type,
         )
 
         if result.success:
@@ -232,6 +333,9 @@ async def execute_trade(event: TradeApproved) -> None:
             oco_id = None
             if result.oco_order:
                 oco_id = str(result.oco_order.get("orderListId", ""))
+
+            if target_order_type == "LIMIT" and order_status != "FILLED":
+                asyncio.create_task(monitor_limit_order(adapter, event.symbol, order_id, oco_id, entry_price))
 
             # ── Persist to DB (Hybrid — direct write) ────────
             trade_id = await database.insert_trade(

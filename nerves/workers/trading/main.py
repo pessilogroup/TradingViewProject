@@ -1356,6 +1356,36 @@ async def system_status_endpoint():
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m {seconds}s"
 
+    # Retrieve health checks and test status from DB settings
+    try:
+        health_api_server = await database.get_setting("health_api_server", "UNKNOWN")
+    except Exception:
+        health_api_server = "ERROR"
+
+    try:
+        health_cdp = await database.get_setting("health_cdp", "UNKNOWN")
+    except Exception:
+        health_cdp = "ERROR"
+
+    try:
+        health_database = await database.get_setting("health_database", "UNKNOWN")
+    except Exception:
+        health_database = "ERROR"
+
+    try:
+        test_runner_status = await database.get_setting("test_runner_status", "UNKNOWN")
+    except Exception:
+        test_runner_status = "UNKNOWN"
+
+    import json as _json
+    last_test_run = None
+    try:
+        last_test_run_str = await database.get_setting("last_test_run")
+        if last_test_run_str:
+            last_test_run = _json.loads(last_test_run_str)
+    except Exception:
+        pass
+
     return {
         "server": {
             "version": "7.6",
@@ -1375,6 +1405,11 @@ async def system_status_endpoint():
         },
         "database": db_counts,
         "auth_required": bool(config.DASHBOARD_TOKEN),
+        "health_api_server": health_api_server,
+        "health_cdp": health_cdp,
+        "health_database": health_database,
+        "test_runner_status": test_runner_status,
+        "last_test_run": last_test_run,
     }
 
 

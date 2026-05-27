@@ -215,7 +215,67 @@ class BybitAdapter:
             "type": "SIMULATED_OCO"
         }
 
-    async def execute_smart_order(self, symbol: str, side: str, entry_price: Optional[float] = None, quote_qty: Optional[float] = None, sl_pct: Optional[float] = None, tp_pct: Optional[float] = None, risk_pct: Optional[float] = None, sl_price: Optional[float] = None, tp_price: Optional[float] = None, asset: str = "USDT") -> OrderResult:
+    async def get_ticker_price(self, symbol: str) -> float:
+        if self.dry_run:
+            return 67500.0
+        try:
+            symbol_clean = symbol.replace("/", "").upper()
+            data = await self._request("GET", "/v5/market/tickers", {"category": "spot", "symbol": symbol_clean})
+            list_data = data.get("result", {}).get("list", [])
+            if list_data:
+                return float(list_data[0].get("lastPrice", 0.0))
+        except Exception as e:
+            log.error(f"Error fetching Bybit ticker price: {e}")
+        return 67500.0
+
+    async def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> Dict[str, Any]:
+        params = {
+            "category": "spot",
+            "symbol": symbol.replace("/", "").upper(),
+            "side": side.capitalize(),
+            "orderType": "Limit",
+            "price": str(round(price, 4)),
+            "qty": str(round(quantity, 8)),
+            "timeInForce": "GTC",
+        }
+        if self.dry_run:
+            return {
+                "orderId": f"DRY-BYB-LIM-{uuid.uuid4().hex[:8]}",
+                "status": "NEW",
+                "price": str(price),
+                "qty": str(quantity),
+                "_dry_run": True
+            }
+        data = await self._request("POST", "/v5/order/create", params)
+        res = data.get("result", {})
+        return {
+            "orderId": res.get("orderId"),
+            "status": "NEW"
+        }
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "NEW"}
+        try:
+            data = await self._request("GET", "/v5/order/realtime-order", {"category": "spot", "symbol": symbol.replace("/", "").upper(), "orderId": order_id})
+            res = data.get("result", {}).get("list", [{}])[0]
+            status = res.get("orderStatus", "New")
+            return {"status": "FILLED" if status.upper() == "FILLED" else "NEW"}
+        except Exception:
+            return {"status": "NEW"}
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "CANCELED"}
+        await self._request("POST", "/v5/order/cancel", {"category": "spot", "symbol": symbol.replace("/", "").upper(), "orderId": order_id})
+        return {"status": "CANCELED"}
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        return await self.cancel_order(symbol, order_list_id)
+
+    async def execute_smart_order(self, symbol: str, side: str, entry_price: Optional[float] = None, quote_qty: Optional[float] = None, sl_pct: Optional[float] = None, tp_pct: Optional[float] = None, risk_pct: Optional[float] = None, sl_price: Optional[float] = None, tp_price: Optional[float] = None, asset: str = "USDT", order_type: str = "MARKET") -> OrderResult:
         """Simplified smart order for Bybit, mimicking Binance logic."""
         symbol_clean = symbol.replace("/", "").upper()
         side_upper = side.upper()
@@ -242,6 +302,8 @@ class BybitAdapter:
             risk_amount = balance * risk_pct
             distance = abs(entry_price - sl_price)
             qty = risk_amount / distance if distance > 0 else 0
+            if quote_qty:
+                qty = quote_qty / entry_price if entry_price > 0 else qty
             cost = qty * entry_price
             
             # Cap at 95%
@@ -263,8 +325,10 @@ class BybitAdapter:
                 position_pct=cost / balance if balance > 0 else 0,
             )
 
-            # 4. MARKET entry
-            if quote_qty:
+            # 4. entry
+            if order_type.upper() == "LIMIT":
+                entry_result = await self.place_limit_order(symbol_clean, side_upper, price=entry_price, quantity=qty)
+            elif quote_qty:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, quote_qty=quote_qty)
             else:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, base_qty=qty)
@@ -307,3 +371,4 @@ class BybitAdapter:
             return {"healthy": True, "latency_ms": round(latency, 1), "error": None}
         except Exception as e:
             return {"healthy": False, "latency_ms": 0, "error": str(e)}
+

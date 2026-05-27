@@ -272,6 +272,59 @@ class WeexAdapter:
             "type": "SIMULATED_OCO"
         }
 
+    async def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> Dict[str, Any]:
+        weex_side = side.lower()
+        if weex_side == "buy":
+            weex_side = "open_long"
+        elif weex_side == "sell":
+            weex_side = "close_long"
+
+        params = {
+            "symbol": symbol,
+            "marginCoin": "USDT",
+            "side": weex_side,
+            "orderType": "limit",
+            "price": str(round(price, 4)),
+            "size": str(round(quantity, 4)),
+            "clientOid": f"WEX-{uuid.uuid4().hex[:8]}"
+        }
+        if self.dry_run:
+            return {
+                "orderId": f"DRY-WEX-LIM-{uuid.uuid4().hex[:8]}",
+                "status": "NEW",
+                "price": str(price),
+                "size": str(quantity),
+                "_dry_run": True
+            }
+        data = await self._request("POST", "/api/v2/contract/trade/order", params)
+        res = data.get("data", {})
+        return {
+            "orderId": res.get("orderId"),
+            "status": "NEW"
+        }
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "NEW"}
+        try:
+            data = await self._request("GET", "/api/v2/contract/trade/orderInfo", {"symbol": symbol, "orderId": order_id})
+            res = data.get("data", {})
+            state = res.get("state", "new")
+            return {"status": "FILLED" if state == "filled" else "NEW"}
+        except Exception:
+            return {"status": "NEW"}
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "CANCELED"}
+        await self._request("POST", "/api/v2/contract/trade/cancel-order", {"symbol": symbol, "orderId": order_id})
+        return {"status": "CANCELED"}
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        return await self.cancel_order(symbol, order_list_id)
+
     async def execute_smart_order(
         self, symbol: str, side: str,
         entry_price: Optional[float] = None,
@@ -282,6 +335,7 @@ class WeexAdapter:
         sl_price: Optional[float] = None,
         tp_price: Optional[float] = None,
         asset: str = "USDT",
+        order_type: str = "MARKET",
     ) -> OrderResult:
         symbol_clean = symbol.upper()
         if not symbol_clean.endswith("_UMCBL"):
@@ -309,6 +363,8 @@ class WeexAdapter:
             risk_amount = balance * risk_pct
             distance = abs(entry_price - sl_price)
             qty = risk_amount / distance if distance > 0 else 0.001
+            if quote_qty:
+                qty = quote_qty / entry_price if entry_price > 0 else qty
             cost = qty * entry_price
             
             if cost > balance * 0.95:
@@ -329,7 +385,10 @@ class WeexAdapter:
                 position_pct=cost / balance if balance > 0 else 0,
             )
 
-            if quote_qty:
+            # 4. entry
+            if order_type.upper() == "LIMIT":
+                entry_result = await self.place_limit_order(symbol_clean, side_upper, price=entry_price, quantity=qty)
+            elif quote_qty:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, quote_qty=quote_qty)
             else:
                 entry_result = await self.place_market_order(symbol_clean, side_upper, base_qty=qty)
@@ -387,3 +446,4 @@ class WeexAdapter:
             return {"healthy": True, "latency_ms": round(latency, 1), "error": None}
         except Exception as e:
             return {"healthy": False, "latency_ms": 0, "error": str(e)}
+
