@@ -11,15 +11,15 @@ Sent initialized notification
 Storing weex_spot_api.md in L1 memory...
 [Server message]: {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}
 [Server message]: {"jsonrpc":"2.0","method":"notifications/prompts/list_changed","params":{}}
-Response for weex_spot_api.md: {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "{\"id\":\"e5f0465f-cde0-4604-a23d-6c213aa4ab3c\",\"status\":\"stored\"}"}], "structuredContent": {"id": "e5f0465f-cde0-4604-a23d-6c213aa4ab3c", "status": "stored"}}}
+Response for weex_spot_api.md: {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "{\"id\":\"600fc9e0-d82e-4fdd-b624-2c3936842404\",\"status\":\"stored\"}"}], "structuredContent": {"id": "600fc9e0-d82e-4fdd-b624-2c3936842404", "status": "stored"}}}
 Storing weex_contract_v2_api.md in L1 memory...
-Response for weex_contract_v2_api.md: {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\"id\":\"307ed201-8cf7-47c2-b391-c78e46533915\",\"status\":\"stored\"}"}], "structuredContent": {"id": "307ed201-8cf7-47c2-b391-c78e46533915", "status": "stored"}}}
+Response for weex_contract_v2_api.md: {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\"id\":\"99e0e4e4-bc35-4e8c-a113-73f4a51b5f64\",\"status\":\"stored\"}"}], "structuredContent": {"id": "99e0e4e4-bc35-4e8c-a113-73f4a51b5f64", "status": "stored"}}}
 Storing weex_websocket.md in L1 memory...
-Response for weex_websocket.md: {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\"id\":\"e90ededd-15b3-4e27-a758-76ba8c001724\",\"status\":\"stored\"}"}], "structuredContent": {"id": "e90ededd-15b3-4e27-a758-76ba8c001724", "status": "stored"}}}
+Response for weex_websocket.md: {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\"id\":\"850fbdb1-f0db-41e5-9539-5089cd211d73\",\"status\":\"stored\"}"}], "structuredContent": {"id": "850fbdb1-f0db-41e5-9539-5089cd211d73", "status": "stored"}}}
 Storing weex_signatures.md in L1 memory...
-Response for weex_signatures.md: {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\"id\":\"a8aad086-c7d1-44e2-8dea-fe4c682645e7\",\"status\":\"stored\"}"}], "structuredContent": {"id": "a8aad086-c7d1-44e2-8dea-fe4c682645e7", "status": "stored"}}}
+Response for weex_signatures.md: {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\"id\":\"5aed45e9-bcfd-4607-b161-5211cc177a33\",\"status\":\"stored\"}"}], "structuredContent": {"id": "5aed45e9-bcfd-4607-b161-5211cc177a33", "status": "stored"}}}
 Storing weex_quickstart_sandbox.md in L1 memory...
-Response for weex_quickstart_sandbox.md: {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "{\"id\":\"a132cd79-ee00-4d38-b6b7-6f18a2ee8a83\",\"status\":\"stored\"}"}], "structuredContent": {"id": "a132cd79-ee00-4d38-b6b7-6f18a2ee8a83", "status": "stored"}}}
+Response for weex_quickstart_sandbox.md: {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "{\"id\":\"c67ccb5a-8e04-4c77-b25f-b628b5eef042\",\"status\":\"stored\"}"}], "structuredContent": {"id": "c67ccb5a-8e04-4c77-b25f-b628b5eef042", "status": "stored"}}}
 Recalling memories with query 'Weex'...
 Recall Response: {
   "jsonrpc": "2.0",

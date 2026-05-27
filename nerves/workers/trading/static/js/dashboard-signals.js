@@ -15,7 +15,7 @@ const SIG = {
 
 /* ── Bootstrap: called by switchTab('signals') ───────────────────── */
 async function initSignalsTab() {
-  await Promise.all([loadSignalStats(), loadSignals()]);
+  await Promise.all([loadSignalStats(), loadSignals(), loadWatchlist()]);
 }
 
 /* ── Debounce helper ─────────────────────────────────────────────── */
@@ -325,3 +325,114 @@ function formatShortTime(ts) {
     if (tab === 'signals') initSignalsTab();
   };
 })();
+
+/* ── Load watchlist ──────────────────────────────────────────────── */
+async function loadWatchlist() {
+  const el = document.getElementById('sigWatchlistList');
+  if (!el) return;
+
+  try {
+    const res = await apiFetch('/api/watchlist');
+    if (!res || !res.symbols) {
+      el.innerHTML = '<div class="empty-state p-8" style="grid-column: span 3;"><p>Empty watchlist</p></div>';
+      return;
+    }
+    renderWatchlist(res.symbols);
+  } catch (e) {
+    console.error('[Signals] Watchlist load error:', e);
+    el.innerHTML = '<div class="empty-state p-8" style="grid-column: span 3;"><p>Error loading watchlist</p></div>';
+  }
+}
+
+/* ── Render watchlist ────────────────────────────────────────────── */
+function renderWatchlist(symbols) {
+  const el = document.getElementById('sigWatchlistList');
+  if (!el) return;
+
+  if (!symbols || !symbols.length) {
+    el.innerHTML = '<div class="empty-state p-8" style="grid-column: span 3;"><p>Empty watchlist</p></div>';
+    return;
+  }
+
+  el.innerHTML = symbols.map(symbol => `
+    <div class="sig-sym-chip" style="position: relative; padding-right: 24px; display: flex; align-items: center; justify-content: center; min-height: 38px;" onclick="filterBySymbol('${symbol}')">
+      <span class="sig-sym-name">${escHtml(symbol)}</span>
+      <span onclick="removeSigWatchlistSymbol('${symbol}', event)" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 0.85rem; color: #ef4444; cursor: pointer; font-weight: bold; width: 14px; height: 14px; line-height: 14px; display: inline-block; transition: color 0.15s;" title="Remove from Watchlist" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#ef4444'">✕</span>
+    </div>
+  `).join('');
+}
+
+/* ── Add symbol to watchlist ─────────────────────────────────────── */
+async function addSigWatchlistSymbol() {
+  const inp = document.getElementById('sigNewWatchlistSymbol');
+  if (!inp) return;
+  const symbol = inp.value.trim().toUpperCase();
+  if (!symbol) {
+    showToast('Vui lòng nhập symbol', 'error');
+    return;
+  }
+
+  try {
+    const res = await apiFetch('/api/watchlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol })
+    });
+    if (res && (res.added || res.reason === 'already_exists')) {
+      inp.value = '';
+      showToast(res.added ? `Đã thêm ${symbol} vào watchlist` : `${symbol} đã tồn tại trong watchlist`, 'info');
+      await loadWatchlist();
+    } else {
+      showToast('Không thể thêm symbol', 'error');
+    }
+  } catch (e) {
+    console.error('[Signals] Watchlist add error:', e);
+    showToast('Lỗi khi thêm symbol', 'error');
+  }
+}
+
+/* ── Remove symbol from watchlist ────────────────────────────────── */
+async function removeSigWatchlistSymbol(symbol, event) {
+  if (event) {
+    event.stopPropagation(); // prevent filtering by symbol
+    event.preventDefault();
+  }
+
+  if (!confirm(`Bạn có chắc chắn muốn xóa ${symbol} khỏi watchlist?`)) {
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`/api/watchlist/${symbol}`, {
+      method: 'DELETE'
+    });
+    if (res && res.removed) {
+      showToast(`Đã xóa ${symbol} khỏi watchlist`, 'info');
+      await loadWatchlist();
+    } else {
+      showToast('Không thể xóa symbol', 'error');
+    }
+  } catch (e) {
+    console.error('[Signals] Watchlist delete error:', e);
+    showToast('Lỗi khi xóa symbol', 'error');
+  }
+}
+
+/* ── Sync watchlist from TradingView ─────────────────────────────── */
+async function syncSigWatchlist() {
+  showToast('Đang đồng bộ từ TradingView...', 'info');
+  try {
+    const res = await apiFetch('/api/watchlist/sync', {
+      method: 'PUT'
+    });
+    if (res && res.synced) {
+      showToast(`Đồng bộ thành công! Đã thêm ${res.added} symbols mới (tổng số: ${res.total})`, 'success');
+      await loadWatchlist();
+    } else {
+      showToast(res ? `Không đồng bộ được: ${res.reason || res.error || 'Unknown error'}` : 'Đồng bộ thất bại', 'error');
+    }
+  } catch (e) {
+    console.error('[Signals] Watchlist sync error:', e);
+    showToast('Lỗi khi đồng bộ watchlist', 'error');
+  }
+}
