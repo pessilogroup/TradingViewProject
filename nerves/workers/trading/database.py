@@ -337,3 +337,73 @@ async def set_setting(key: str, value: str) -> None:
     except Exception as e:
         log.warning(f"Failed to set setting {key} to {value}: {e}")
 
+
+async def get_rolling_drawdown(limit: int = 20) -> float:
+    """
+    Tính toán phần trăm sụt giảm tài khoản (Drawdown) dựa trên các giao dịch đóng gần nhất.
+    """
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            # Lấy 20 giao dịch có PnL (chỉ tính các giao dịch đã đóng/có pnl)
+            async with db.execute(
+                "SELECT pnl FROM trades WHERE pnl IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                pnls = [float(r["pnl"]) for r in rows]
+                
+        if not pnls:
+            return 0.0
+            
+        # Đảo ngược để tính theo trình tự thời gian
+        pnls.reverse()
+        
+        # Giả lập đường cong vốn bắt đầu từ 1000
+        equity = 1000.0
+        peak = equity
+        max_dd_pct = 0.0
+        
+        for pnl in pnls:
+            equity += pnl
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                dd = (peak - equity) / peak
+                if dd > max_dd_pct:
+                    max_dd_pct = dd
+                    
+        return max_dd_pct * 100.0
+    except Exception as e:
+        log.warning(f"Failed to calculate rolling drawdown: {e}")
+        return 0.0
+
+
+async def get_recent_profit_factor(limit: int = 5) -> float:
+    """
+    Tính Profit Factor của N lệnh gần nhất.
+    """
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT pnl FROM trades WHERE pnl IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                pnls = [float(r["pnl"]) for r in rows]
+                
+        if not pnls:
+            return 1.0
+            
+        gross_profit = sum(p for p in pnls if p > 0)
+        gross_loss = sum(abs(p) for p in pnls if p < 0)
+        
+        if gross_loss == 0:
+            return 99.0 if gross_profit > 0 else 1.0
+            
+        return gross_profit / gross_loss
+    except Exception as e:
+        log.warning(f"Failed to calculate recent profit factor: {e}")
+        return 1.0
+

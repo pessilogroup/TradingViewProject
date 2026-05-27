@@ -90,6 +90,8 @@ async def process_signal(event: SignalReceived) -> None:
     3. Emit SignalValidated or SignalRejected accordingly.
     """
     action = event.action.lower()
+    if action in ("bo", "breakout_long"):
+        action = "buy"
 
     # Alert signals bypass trade validation — emit AlertTriggered for AIAnalyzer
     if action == "alert":
@@ -118,12 +120,35 @@ async def process_signal(event: SignalReceived) -> None:
         ))
         return
 
-    # ── Timeframe Circuit Breaker ────────────────────────────
+    # ── Timeframe & Regime Circuit Breaker ───────────────────
+    from engine.regime_switcher import get_market_regime
+    import database
+    regime = await get_market_regime(event.symbol, event.exchange)
+    await database.set_setting("market_regime", regime)
+
+    is_daily = event.interval.strip().lower() in {"d", "1d", "daily"}
+    is_1h = event.interval.strip().lower() in {"60", "1h", "60m"}
+
     if action in ("buy", "sell"):
-        if not _is_valid_trade_interval(event.interval):
+        if is_daily:
+            if regime == "CHOP":
+                log.warning(
+                    f"SignalProcessor: Rejecting Daily MTT signal for {event.symbol}: "
+                    f"MTT Daily signals are blocked during CHOP market regime."
+                )
+                await _bus.emit(SignalRejected(
+                    signal_id=event.signal_id,
+                    symbol=event.symbol,
+                    action=action,
+                    reason="market_regime_chop_block",
+                    interval=event.interval,
+                    exchange=event.exchange,
+                ))
+                return
+        elif not is_1h:
             log.warning(
                 f"SignalProcessor: Rejecting trade for {event.symbol}: "
-                f"invalid interval '{event.interval}'. Only 1h/60 is allowed."
+                f"invalid interval '{event.interval}'. Only 1h/60 or Daily (trending) is allowed."
             )
             await _bus.emit(SignalRejected(
                 signal_id=event.signal_id,
@@ -210,16 +235,38 @@ async def process_indicator_signal(event: IndicatorSignalReceived) -> None:
         ))
         return
         
-    if event.signal_type == "entry" and not _is_valid_trade_interval(event.interval):
-        await _bus.emit(IndicatorSignalRejected(
-            signal_id=event.signal_id,
-            symbol=event.symbol,
-            indicator_name=event.indicator_name,
-            signal_type=event.signal_type,
-            reason="invalid_timeframe",
-            exchange=event.exchange
-        ))
-        return
+    from engine.regime_switcher import get_market_regime
+    import database
+    regime = await get_market_regime(event.symbol, event.exchange)
+    await database.set_setting("market_regime", regime)
+
+    is_daily = event.interval.strip().lower() in {"d", "1d", "daily"}
+    is_1h = event.interval.strip().lower() in {"60", "1h", "60m"}
+
+    if event.signal_type == "entry":
+        if is_daily:
+            if regime == "CHOP":
+                log.warning(f"SignalProcessor: Rejecting Daily indicator entry for {event.symbol} due to CHOP regime")
+                await _bus.emit(IndicatorSignalRejected(
+                    signal_id=event.signal_id,
+                    symbol=event.symbol,
+                    indicator_name=event.indicator_name,
+                    signal_type=event.signal_type,
+                    reason="market_regime_chop_block",
+                    exchange=event.exchange
+                ))
+                return
+        elif not is_1h:
+            log.warning(f"SignalProcessor: Rejecting indicator entry for {event.symbol} - invalid interval {event.interval}")
+            await _bus.emit(IndicatorSignalRejected(
+                signal_id=event.signal_id,
+                symbol=event.symbol,
+                indicator_name=event.indicator_name,
+                signal_type=event.signal_type,
+                reason="invalid_timeframe",
+                exchange=event.exchange
+            ))
+            return
         
     await _bus.emit(IndicatorSignalValidated(
         signal_id=event.signal_id,

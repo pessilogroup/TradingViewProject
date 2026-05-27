@@ -247,7 +247,7 @@ async def test_valid_timeframes_pass(valid_interval):
         reset_dedup_cache()
 
 
-@pytest.mark.parametrize("bad_interval", ["4h", "15", "D", "1d", "240", ""])
+@pytest.mark.parametrize("bad_interval", ["4h", "15", "240", ""])
 @pytest.mark.asyncio
 async def test_invalid_timeframes_rejected(bad_interval):
     """Intervals that are not 1h/60/60m should produce SignalRejected(invalid_timeframe)."""

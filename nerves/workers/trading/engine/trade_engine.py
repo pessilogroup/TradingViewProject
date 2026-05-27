@@ -87,7 +87,7 @@ async def execute_trade(event: TradeApproved) -> None:
 
     try:
         adapter = router.resolve_exchange({"exchange": requested_exchange})
-        actual_exchange = adapter.exchange_id
+        actual_exchange = getattr(adapter, "exchange_id", None) or getattr(adapter, "exchange_name", requested_exchange)
     except Exception as e:
         error_msg = f"Exchange routing failed: {e}"
         log.error(f"TradeEngine: {error_msg}")
@@ -103,16 +103,110 @@ async def execute_trade(event: TradeApproved) -> None:
         await _handle_failure(event, action, error_msg, requested_exchange, combined_score)
         return
 
+    # Fetch original signal details and check if it is a breakout/BO
+    original_action = ""
+    original_payload = {}
+    try:
+        import aiosqlite
+        import json
+        import config
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT action, payload FROM signals WHERE id = ?", (event.signal_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    original_action = str(row["action"]).lower()
+                    try:
+                        original_payload = json.loads(row["payload"]) if row["payload"] else {}
+                    except Exception:
+                        original_payload = {}
+    except Exception as exc:
+        log.warning(f"TradeEngine: Failed to fetch original signal details: {exc}")
+
+    is_breakout = (original_action in {"bo", "breakout_long"}) or (original_payload.get("action") in {"bo", "breakout_long"}) or (original_payload.get("signal_type") == "breakout_long")
+
+    # Sizing calculation
     try:
         quote_qty_val = float(event.quote_qty) if event.quote_qty else None
-        if quote_qty_val is not None:
-            if quote_qty_val <= 0.0:
-                quote_qty_val = None
-            else:
-                import config
-                quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
+        if quote_qty_val is not None and quote_qty_val <= 0.0:
+            quote_qty_val = None
     except (ValueError, TypeError):
         quote_qty_val = None
+
+    if is_breakout:
+        # Tactical Entry: 2.5% of account balance
+        try:
+            balance = await adapter.get_account_balance("USDT")
+            if balance > 0:
+                tactical_qty = balance * 0.025
+                quote_qty_val = max(10.0, min(tactical_qty, config.MAX_QUOTE_QTY))
+                log.info(f"TradeEngine: Tactical Entry Sizing applied: {quote_qty_val:.2f} USDT (2.5% of {balance:.2f} balance)")
+            else:
+                if quote_qty_val is None:
+                    quote_qty_val = 10.0
+        except Exception as e:
+            log.warning(f"TradeEngine: Failed to compute tactical sizing: {e}. Using default.")
+            if quote_qty_val is None:
+                quote_qty_val = 10.0
+            
+        # Tactical Stop-loss at Swing Low of last 5 hours
+        try:
+            import aiohttp
+            from analysis import fetch_candles_with_retry
+            async with aiohttp.ClientSession() as session:
+                candles = await fetch_candles_with_retry(session, requested_exchange, event.symbol, interval="1h", limit=5)
+            if candles:
+                swing_low = min(float(c[3]) for c in candles)
+                sl_price = swing_low * 0.998
+                if sl_price >= entry_price:
+                    sl_price = entry_price * 0.98
+                log.info(f"TradeEngine: Tactical Entry Stop Loss at {sl_price:.4f} (Swing Low: {swing_low:.4f})")
+        except Exception as exc:
+            log.warning(f"TradeEngine: Failed to compute Swing Low Stop Loss: {exc}. Keeping default: {sl_price}")
+            
+    # Safe Mode sizing modification
+    try:
+        import inspect
+        
+        dd_val = database.get_rolling_drawdown(20)
+        rolling_dd = await dd_val if inspect.isawaitable(dd_val) else 0.0
+        
+        pf_val = database.get_recent_profit_factor(5)
+        recent_pf = await pf_val if inspect.isawaitable(pf_val) else 1.0
+        
+        sm_val = database.get_setting("safe_mode_active", "false")
+        current_safe_mode = await sm_val if inspect.isawaitable(sm_val) else "false"
+        
+        if rolling_dd > 10.0:
+            safe_mode_active = True
+            log.warning(f"TradeEngine: Drawdown ({rolling_dd:.2f}%) > 10% -> Safe Mode Activated")
+        elif current_safe_mode == "true" and recent_pf > 1.5:
+            safe_mode_active = False
+            log.info(f"TradeEngine: Profit Factor ({recent_pf:.2f}) > 1.5 -> Safe Mode Deactivated")
+        else:
+            safe_mode_active = (current_safe_mode == "true")
+            
+        set_active_val = database.set_setting("safe_mode_active", "true" if safe_mode_active else "false")
+        if inspect.isawaitable(set_active_val):
+            await set_active_val
+            
+        set_dd_val = database.set_setting("safe_mode_drawdown", f"{rolling_dd:.2f}")
+        if inspect.isawaitable(set_dd_val):
+            await set_dd_val
+        
+        if safe_mode_active:
+            if quote_qty_val is not None:
+                quote_qty_val = quote_qty_val * 0.5
+                log.info(f"TradeEngine: Safe Mode active (drawdown: {rolling_dd:.2f}%). Position sized halved to {quote_qty_val:.2f} USDT")
+    except Exception as exc:
+        log.warning(f"TradeEngine: Safe Mode logic check failed: {exc}")
+        safe_mode_active = False
+        rolling_dd = 0.0
+
+    # Ensure quote_qty_val is bounded
+    import config
+    if quote_qty_val is not None:
+        quote_qty_val = min(quote_qty_val, config.MAX_QUOTE_QTY)
 
     try:
         # ── Execute smart order (MARKET + OCO) ───────────────

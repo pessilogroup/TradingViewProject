@@ -92,6 +92,8 @@ async def webhook(request: Request):
 
     action = (tv_alert.action or "").lower()
     symbol = tv_alert.symbol or ""
+    if ":" in symbol:
+        symbol = symbol.split(":")[-1]
     price = tv_alert.price
     ts = tv_alert.time or ""
     quote_qty = tv_alert.quoteQty
