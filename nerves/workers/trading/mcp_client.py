@@ -9,7 +9,7 @@ import base64
 import logging
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 import os
 
 import config
@@ -152,7 +152,21 @@ class MCPClient:
 
         # Parse indicator values — key names depend on what's on chart
         values = raw if isinstance(raw, dict) else {}
-        indicators = values.get("indicators", {}) or values
+        indicators = {}
+        if values.get("indicators"):
+            indicators = values["indicators"]
+        elif "studies" in values:
+            for study in values.get("studies", []):
+                name = study.get("name", "")
+                s_vals = study.get("values")
+                if isinstance(s_vals, dict):
+                    for k, v in s_vals.items():
+                        indicators[f"{name} {k}"] = v
+                        indicators[name] = v
+                else:
+                    indicators[name] = s_vals
+        else:
+            indicators = values
 
         def _find(keys: list) -> Optional[float]:
             for k in keys:
@@ -165,9 +179,9 @@ class MCPClient:
             return None
 
         return StudyValues(
-            sma50=_find(["sma 50", "sma50", "ma 50", "ma50"]),
-            sma150=_find(["sma 150", "sma150", "ma 150", "ma150"]),
-            sma200=_find(["sma 200", "sma200", "ma 200", "ma200"]),
+            sma50=_find(["sma 50", "sma50", "ma 50", "ma50", "average 50"]),
+            sma150=_find(["sma 150", "sma150", "ma 150", "ma150", "average 150"]),
+            sma200=_find(["sma 200", "sma200", "ma 200", "ma200", "average 200"]),
             volume_avg20=_find(["vol ma", "volume ma", "vol avg", "vma"]),
             atr14=_find(["atr", "average true range"]),
             high_52w=_find(["52w high", "52 week high", "yearly high"]),
@@ -254,8 +268,10 @@ class MCPClient:
 
         try:
             if not active_only:
-                if symbol != "active": await self._run("symbol", symbol)
-                if timeframe != "active": await self._run("timeframe", timeframe)
+                if symbol != "active":
+                    await self._run("symbol", symbol)
+                if timeframe != "active":
+                    await self._run("timeframe", timeframe)
 
             # Try screenshot with region first, fall back without
             try:
