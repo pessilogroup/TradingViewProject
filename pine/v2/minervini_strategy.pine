@@ -100,9 +100,22 @@ ma_helper(mtype, len, src) =>
 
 // Cấu hình MA linh hoạt theo Mode
 ma_slow_len = (strat_mode == "Daily Trend Follower (MTT v1.005-b)") ? slow_len_mtt : slow_len_mis
-mf = ma_helper(ma_type, fast_len, close)
-mm = ma_helper(ma_type, med_len, close)
-ms = ma_helper(ma_type, ma_slow_len, close)
+
+// Tính toán các đường MA local trên khung thời gian hiện tại (Local Timeframe)
+local_mf = ma_helper(ma_type, fast_len, close)
+local_mm = ma_helper(ma_type, med_len, close)
+local_ms = ma_helper(ma_type, ma_slow_len, close)
+
+// Tính toán các đường MA Daily (EMA 20/50/100) tránh lookahead bias bằng cách dùng [1] và lookahead_off
+daily_mf = request.security(syminfo.tickerid, "D", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+daily_mm = request.security(syminfo.tickerid, "D", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+daily_ms = request.security(syminfo.tickerid, "D", ta.ema(close, 100)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Gán biến kết quả dựa theo Strategy Mode
+is_mtt = (strat_mode == "Daily Trend Follower (MTT v1.005-b)")
+mf = is_mtt ? daily_mf : local_mf
+mm = is_mtt ? daily_mm : local_mm
+ms = is_mtt ? daily_ms : local_ms
 
 // 3. Technical indicators for MIS mode
 sma50  = ta.sma(close, 50)
