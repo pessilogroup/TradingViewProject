@@ -33,7 +33,11 @@ log = logging.getLogger(__name__)
 # Lazy imports — only load if bot is enabled
 _bot_app = None
 _bot_thread = None
+_bot_loop = None
+_approval_timeout_mgr = None
+_report_auto_send_task = None
 running_tasks = set()
+active_commands = set()
 
 
 
@@ -321,6 +325,11 @@ async def cmd_remove(update, context):
 async def cmd_scan(update, context):
     """Scan watchlist — Trend Template + VCP."""
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "scan")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu scan trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
 
     async def process_task():
@@ -395,6 +404,8 @@ async def cmd_scan(update, context):
         except Exception as e:
             log.error(f"Scan error: {e}", exc_info=True)
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Scan failed: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -425,86 +436,94 @@ async def cmd_brief(update, context):
 async def cmd_vision(update, context):
     """AI Vision — phân tích chart screenshot bằng Claude Vision."""
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "vision")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu vision trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
 
     async def process_task():
-        if not context.args:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ Cần chỉ định symbol.\nVD: /vision <code>BTCUSDT</code>",
-                parse_mode="HTML",
-            )
-            return
-
-        symbol = context.args[0].strip().upper()
-        await context.bot.send_message(chat_id=chat_id, text=f"👁️ Đang phân tích chart <code>{symbol}</code>... Vui lòng chờ.", parse_mode="HTML")
-
         try:
-            import config
-            from pathlib import Path
-
-            # Check for existing screenshot
-            screenshots_dir = Path(__file__).parent / "screenshots"
-            screenshot_path = None
-
-            # Try to capture new screenshot via MCP
-            if config.MCP_ENABLED:
-                try:
-                    from mcp_client import get_mcp_client
-                    mcp = get_mcp_client()
-                    health = await mcp.health_check()
-                    if health.get("connected"):
-                        from datetime import datetime as dt
-                        import re
-                        safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
-                        screenshot_path = await mcp.capture_screenshot(
-                            symbol=symbol,
-                            timeframe="D",
-                            region="chart",
-                            save_path=screenshots_dir / f"vision_{safe_symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"
-                        )
-                except Exception as e:
-                    log.warning(f"Vision screenshot capture failed: {e}")
-
-            # Fallback: look for latest screenshot of this symbol
-            if not screenshot_path or not Path(screenshot_path).exists():
-                if screenshots_dir.exists():
-                    candidates = sorted(
-                        screenshots_dir.glob(f"*{symbol}*.png"),
-                        key=lambda p: p.stat().st_mtime,
-                        reverse=True,
-                    )
-                    if candidates:
-                        screenshot_path = candidates[0]
-
-            if not screenshot_path or not Path(screenshot_path).exists():
+            if not context.args:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"⚠️ Không tìm thấy screenshot cho <code>{symbol}</code>.\n"
-                         "Cần TradingView MCP connected hoặc screenshot sẵn có.",
+                    text="⚠️ Cần chỉ định symbol.\nVD: /vision <code>BTCUSDT</code>",
                     parse_mode="HTML",
                 )
                 return
 
-            # Run Vision analysis
-            from vision import analyze_chart_vision, format_vision_telegram
+            symbol = context.args[0].strip().upper()
+            await context.bot.send_message(chat_id=chat_id, text=f"👁️ Đang phân tích chart <code>{symbol}</code>... Vui lòng chờ.", parse_mode="HTML")
 
-            result = await analyze_chart_vision(
-                image_path=Path(screenshot_path),
-                symbol=symbol,
-            )
+            try:
+                import config
+                from pathlib import Path
 
-            if result.get("error"):
-                await context.bot.send_message(chat_id=chat_id, text=f"❌ Vision error: {result['error']}")
-                return
+                # Check for existing screenshot
+                screenshots_dir = Path(__file__).parent / "screenshots"
+                screenshot_path = None
 
-            from notifier import sanitize_for_telegram_html
-            vision_text = format_vision_telegram(result)
-            await context.bot.send_message(chat_id=chat_id, text=sanitize_for_telegram_html(vision_text), parse_mode="HTML")
+                # Try to capture new screenshot via MCP
+                if config.MCP_ENABLED:
+                    try:
+                        from mcp_client import get_mcp_client
+                        mcp = get_mcp_client()
+                        health = await mcp.health_check()
+                        if health.get("connected"):
+                            from datetime import datetime as dt
+                            import re
+                            safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+                            screenshot_path = await mcp.capture_screenshot(
+                                symbol=symbol,
+                                timeframe="D",
+                                region="chart",
+                                save_path=screenshots_dir / f"vision_{safe_symbol}_{dt.now().strftime('%Y%m%d_%H%M%S')}.png"
+                            )
+                    except Exception as e:
+                        log.warning(f"Vision screenshot capture failed: {e}")
 
-        except Exception as e:
-            log.error(f"Vision command error: {e}", exc_info=True)
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ Vision failed: {e}")
+                # Fallback: look for latest screenshot of this symbol
+                if not screenshot_path or not Path(screenshot_path).exists():
+                    if screenshots_dir.exists():
+                        candidates = sorted(
+                            screenshots_dir.glob(f"*{symbol}*.png"),
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if candidates:
+                            screenshot_path = candidates[0]
+
+                if not screenshot_path or not Path(screenshot_path).exists():
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"⚠️ Không tìm thấy screenshot cho <code>{symbol}</code>.\n"
+                             "Cần TradingView MCP connected hoặc screenshot sẵn có.",
+                        parse_mode="HTML",
+                    )
+                    return
+
+                # Run Vision analysis
+                from vision import analyze_chart_vision, format_vision_telegram
+
+                result = await analyze_chart_vision(
+                    image_path=Path(screenshot_path),
+                    symbol=symbol,
+                )
+
+                if result.get("error"):
+                    await context.bot.send_message(chat_id=chat_id, text=f"❌ Vision error: {result['error']}")
+                    return
+
+                from notifier import sanitize_for_telegram_html
+                vision_text = format_vision_telegram(result)
+                await context.bot.send_message(chat_id=chat_id, text=sanitize_for_telegram_html(vision_text), parse_mode="HTML")
+
+            except Exception as e:
+                log.error(f"Vision command error: {e}", exc_info=True)
+                await context.bot.send_message(chat_id=chat_id, text=f"❌ Vision failed: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -514,12 +533,17 @@ async def cmd_vision(update, context):
 async def cmd_grade(update, context):
     """AI Mentor — chấm điểm setup Long/Short trên màn hình hiện tại."""
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "grade")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu grade trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
 
     async def process_task():
-        await context.bot.send_message(chat_id=chat_id, text="👨‍🏫 Đang chụp và phân tích lệnh của bạn... Vui lòng chờ.", parse_mode="HTML")
-
         try:
+            await context.bot.send_message(chat_id=chat_id, text="👨‍🏫 Đang chụp và phân tích lệnh của bạn... Vui lòng chờ.", parse_mode="HTML")
+
             import config
             from pathlib import Path
 
@@ -575,10 +599,11 @@ async def cmd_grade(update, context):
             formatted = format_vision_telegram(result)
             await context.bot.send_message(chat_id=chat_id, text=sanitize_for_telegram_html(formatted), parse_mode="HTML")
 
-
         except Exception as e:
             log.error(f"Grade command error: {e}", exc_info=True)
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Grade failed: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -793,6 +818,11 @@ async def cmd_balance_enhanced(update, context):
 async def cmd_scan_enhanced(update, context):
     """REQ4: Enhanced /scan — adds 👁 Analyze inline buttons for VCP setups."""
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "scan")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu scan trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
 
     async def process_task():
@@ -863,6 +893,8 @@ async def cmd_scan_enhanced(update, context):
         except Exception as e:
             log.error(f"cmd_scan_enhanced error: {e}", exc_info=True)
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Scan failed: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -871,9 +903,13 @@ async def cmd_scan_enhanced(update, context):
 
 async def cmd_scan_all(update, context):
     """Trigger background scan across all configured exchanges and reply when done."""
-    await update.message.reply_text("🔄 Đang bắt đầu scan toàn bộ các sàn trong background... Vui lòng chờ kết quả.")
-    
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "scan_all")
+    if cmd_key in active_commands:
+        await update.message.reply_text("⚠️ Yêu cầu scan_all trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
+    await update.message.reply_text("🔄 Đang bắt đầu scan toàn bộ các sàn trong background... Vui lòng chờ kết quả.")
     
     async def run_scan_and_notify():
         try:
@@ -944,6 +980,8 @@ async def cmd_scan_all(update, context):
         except Exception as err:
             log.error(f"Background scan notify error: {err}", exc_info=True)
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Quá trình scan background bị lỗi: {err}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(run_scan_and_notify())
     running_tasks.add(task)
@@ -1060,6 +1098,11 @@ async def cmd_scan_mtf(update, context):
     exchange_name = args[1].strip().lower() if len(args) > 1 else config.DEFAULT_EXCHANGE.lower()
     
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "scan_mtf")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu scan_mtf trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
     
     async def process_task():
@@ -1270,6 +1313,8 @@ async def cmd_scan_mtf(update, context):
         except Exception as e:
             log.error(f"cmd_scan_mtf failed: {e}", exc_info=True)
             await progress_msg.edit_text(f"❌ Phân tích thất bại: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -1279,6 +1324,11 @@ async def cmd_scan_mtf(update, context):
 async def cmd_recommend(update, context):
     """Gợi ý cơ hội giao dịch đa khung thời gian từ Watchlist."""
     chat_id = update.effective_chat.id
+    cmd_key = (chat_id, "recommend")
+    if cmd_key in active_commands:
+        await context.bot.send_message(chat_id=chat_id, text="⚠️ Yêu cầu recommend trước đó của bạn vẫn đang được xử lý. Vui lòng đợi.")
+        return
+    active_commands.add(cmd_key)
     await context.bot.send_message(chat_id=chat_id, text="🔄 Đang xử lý...")
     
     async def process_task():
@@ -1348,6 +1398,8 @@ async def cmd_recommend(update, context):
         except Exception as e:
             log.error(f"cmd_recommend failed: {e}", exc_info=True)
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi khi quét Watchlist: {e}")
+        finally:
+            active_commands.discard(cmd_key)
 
     task = asyncio.create_task(process_task())
     running_tasks.add(task)
@@ -2412,7 +2464,7 @@ def start_bot():
     Multiple calls (e.g. on hot-reload) must NOT spawn duplicate pollers.
     409 Conflict from Telegram = two getUpdates sessions running simultaneously.
     """
-    global _bot_app, _bot_thread, _sender, _position_monitor, _approval_timeout_mgr
+    global _bot_app, _bot_thread, _bot_loop, _sender, _position_monitor, _approval_timeout_mgr
 
     import config
     if not config.TELEGRAM_BOT_TOKEN:
@@ -2435,9 +2487,10 @@ def start_bot():
 
         def _run_bot():
             """Bot runner in separate thread with its own event loop."""
-            global _bot_app, _sender, _position_monitor, _approval_timeout_mgr
+            global _bot_app, _sender, _position_monitor, _approval_timeout_mgr, _bot_loop
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            _bot_loop = loop
 
             # Build bot — force IPv4 to fix async httpx ConnectError on Windows
             from telegram.request import HTTPXRequest
@@ -2508,7 +2561,8 @@ def start_bot():
 
                 # ── P9-B1: REPORT_AUTO_SEND daily scheduler ───────────────
                 if config.REPORT_AUTO_SEND:
-                    asyncio.create_task(
+                    global _report_auto_send_task
+                    _report_auto_send_task = asyncio.create_task(
                         _report_auto_send_loop(), name="report-auto-send"
                     )
                     log.info(f"📊 ReportAutoSend scheduler started (time={config.REPORT_SEND_TIME} ICT)")
@@ -2546,7 +2600,14 @@ def start_bot():
 
             _bot_app = app
             log.info("🤖 Telegram Bot started (polling mode)")
-            app.run_polling(drop_pending_updates=True, close_loop=False)
+            try:
+                app.run_polling(drop_pending_updates=True, close_loop=False)
+            finally:
+                _bot_loop = None
+                try:
+                    loop.close()
+                except Exception:
+                    pass
 
         _bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
         _bot_thread.start()
@@ -2555,15 +2616,73 @@ def start_bot():
 
 def stop_bot():
     """Stop Telegram bot gracefully."""
-    global _bot_app, _bot_thread
+    global _bot_app, _bot_thread, _bot_loop, _position_monitor, _approval_timeout_mgr, _report_auto_send_task
     if _bot_app is not None:
         log.info("🤖 Telegram Bot stopping...")
         try:
+            # Cancel all interactive command background tasks
+            for task in list(running_tasks):
+                if not task.done():
+                    task.cancel()
+            running_tasks.clear()
+            active_commands.clear()
+
+            # Stop the monitors thread-safely
+            if _position_monitor is not None:
+                _position_monitor._running = False
+                if _position_monitor._task and not _position_monitor._task.done():
+                    _position_monitor._task.cancel()
+                _position_monitor = None
+
+            if _approval_timeout_mgr is not None:
+                _approval_timeout_mgr._running = False
+                if _approval_timeout_mgr._task and not _approval_timeout_mgr._task.done():
+                    _approval_timeout_mgr._task.cancel()
+                _approval_timeout_mgr = None
+
+            # Stop the auto report task
+            if _report_auto_send_task is not None:
+                if not _report_auto_send_task.done():
+                    _report_auto_send_task.cancel()
+                _report_auto_send_task = None
+
             # stop_running() signals run_polling() to exit
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(_bot_app.updater.stop())
-            loop.run_until_complete(_bot_app.stop())
-            loop.close()
+            if _bot_loop is not None:
+                if _bot_loop.is_running():
+                    log.info("🤖 Stopping bot using original event loop (running)...")
+                    fut_updater = asyncio.run_coroutine_threadsafe(_bot_app.updater.stop(), _bot_loop)
+                    try:
+                        fut_updater.result(timeout=10)
+                    except Exception as e:
+                        log.warning(f"🤖 Updater stop error: {e}")
+                    fut_app = asyncio.run_coroutine_threadsafe(_bot_app.stop(), _bot_loop)
+                    try:
+                        fut_app.result(timeout=10)
+                    except Exception as e:
+                        log.warning(f"🤖 App stop error: {e}")
+                elif not _bot_loop.is_closed():
+                    log.info("🤖 Stopping bot using original event loop (idle)...")
+                    try:
+                        _bot_loop.run_until_complete(_bot_app.updater.stop())
+                        _bot_loop.run_until_complete(_bot_app.stop())
+                    except Exception as e:
+                        log.warning(f"🤖 App stop error (idle loop): {e}")
+                else:
+                    log.warning("🤖 Original event loop is closed. Falling back to new loop stop...")
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(_bot_app.updater.stop())
+                        loop.run_until_complete(_bot_app.stop())
+                    finally:
+                        loop.close()
+            else:
+                log.warning("🤖 Original bot event loop not found. Falling back to new loop stop...")
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_bot_app.updater.stop())
+                    loop.run_until_complete(_bot_app.stop())
+                finally:
+                    loop.close()
         except Exception as e:
             log.warning(f"🤖 Bot stop error (non-fatal): {e}")
         _bot_app = None

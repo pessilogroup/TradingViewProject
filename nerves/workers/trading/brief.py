@@ -41,24 +41,35 @@ def _format_brief_text(
         "",
     ]
 
-    # Per-symbol table
-    lines.append("*Symbol  │ Price     │ TT   │ Vol%  │ VCP*")
-    lines.append("─" * 45)
+    # Per-symbol table inside code block for clean alignment
+    lines.append("```")
+    lines.append(f"{'Symbol':<12} │ {'Price':>10} │ {'TT':^4} │ {'Vol%':>5} │ {'VCP':<3}")
+    lines.append("─" * 46)
 
+    errors = []
     for r in scan_results:
         if r.error:
-            lines.append(f"❌ {r.symbol:8} — Error: {r.error[:30]}")
+            lines.append(
+                f"{r.symbol:<12} │ {0.0:>10.2f} │  ?/8 │ {'100%':>5} │ ❌"
+            )
+            errors.append(f"❌ *{r.symbol}*: {r.error}")
             continue
 
-        vcp_flag = "⭐VCP" if r.vcp.detected else "    "
-        change = f"+{r.change_pct:.1f}%" if r.change_pct >= 0 else f"{r.change_pct:.1f}%"
+        vcp_flag = "⭐" if r.vcp.detected else ""
         vol_pct = f"{r.vcp.volume_ratio*100:.0f}%"
+        price_str = f"{r.price:,.2f}" if r.price >= 1 else f"{r.price:.4f}"
 
         lines.append(
-            f"`{r.symbol:8}` │ {r.price:>10,.2f} │ {r.trend_template.score}/8 │ {vol_pct:>5} │ {vcp_flag}"
+            f"{r.symbol:<12} │ {price_str:>10} │ {r.trend_template.score:>2}/8 │ {vol_pct:>5} │ {vcp_flag:<3}"
         )
 
+    lines.append("```")
     lines.append("")
+
+    if errors:
+        for err in errors:
+            lines.append(err)
+        lines.append("")
 
     # VCP highlights
     vcps = [r for r in scan_results if r.vcp.detected and not r.error]
