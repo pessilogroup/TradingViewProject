@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Launch TradingView Desktop with Chrome DevTools Protocol (CDP) enabled.
 .DESCRIPTION
@@ -13,6 +13,14 @@ $tvPaths = @(
 )
 
 $tvPath = $tvPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $tvPath) {
+    # Check MSIX package
+    $pkg = Get-AppxPackage -Name "*TradingView*" -ErrorAction SilentlyContinue
+    if ($pkg) {
+        $tvPath = "$($pkg.InstallLocation)\TradingView.exe"
+    }
+}
 
 if (-not $tvPath) {
     Write-Host "ERROR: TradingView Desktop not found." -ForegroundColor Red

@@ -18,7 +18,7 @@ import config
 logger = logging.getLogger(__name__)
 
 # Path to daemon entry point
-_DAEMON_DIR = Path(__file__).parent.parent / "tradingview-mcp"
+_DAEMON_DIR = Path(__file__).parent.parent.parent.parent / "tradingview-mcp"
 _DAEMON_ENTRY = _DAEMON_DIR / "src" / "daemon" / "index.js"
 
 
@@ -78,6 +78,7 @@ class DaemonLifecycleManager:
             **os.environ,
             "CAPTURE_DAEMON_PORT": str(self._port),
             "CAPTURE_DAEMON_HOST": self._host,
+            "TV_CDP_PORT": str(config.MCP_CDP_PORT),
         }
 
         logger.info(f"Starting CaptureDaemon: {self._node_path} {_DAEMON_ENTRY}")
