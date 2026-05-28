@@ -50,3 +50,8 @@ refactor_styles.py
 # SQLite temp files
 *.db-shm
 *.db-wal
+
+# Local Agent Workspaces & Logs
+.agents/
+memory/
+nerves/workers/trading/test_runs.log
