@@ -182,6 +182,7 @@ async def process_signal(event: SignalReceived) -> None:
         sl=event.sl,
         tp=event.tp,
         exchange=event.exchange,
+        mode=getattr(event, "mode", ""),
     ))
 
 

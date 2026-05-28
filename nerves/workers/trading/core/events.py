@@ -50,6 +50,7 @@ class SignalReceived(Event):
     payload: Optional[Dict[str, Any]] = None
     exchange: str = "binance"
     rag_advice: str = ""
+    mode: str = ""            # "MTT" | "MIS" | "" (empty = not specified)
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class SignalValidated(Event):
     sl: str = ""
     tp: str = ""
     exchange: str = "binance"
+    mode: str = ""            # "MTT" | "MIS" | "" — forwarded from SignalReceived
 
 
 
@@ -135,6 +137,7 @@ class TradeApproved(Event):
     exchange: str = "binance"
     approved_by: str = "AI"  # "AI" or "Human"
     analysis_text: str = ""
+    mode: str = ""            # "MTT" | "MIS" | "" — forwarded from SignalValidated
 
 
 @dataclass(frozen=True)

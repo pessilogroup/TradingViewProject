@@ -98,6 +98,7 @@ async def webhook(request: Request):
     ts = tv_alert.time or ""
     quote_qty = tv_alert.quoteQty
     interval = str(tv_alert.interval or "").strip().lower()
+    mode = (getattr(tv_alert, "mode", None) or payload.get("mode", "") or "").strip().upper()
 
     sl_str = tv_alert.sl or ""
     tp_str = tv_alert.tp or ""
@@ -156,6 +157,7 @@ async def webhook(request: Request):
         quote_qty=quote_qty_val,
         source_ip=source_ip,
         payload=payload,
+        mode=mode,
     )
 
     log.info(f"ALERT #{signal_id}  action={action}  symbol={symbol}  price={price}  qty={quote_qty_val}  time={ts}")
@@ -221,6 +223,7 @@ async def webhook(request: Request):
             price=price_float,
             quote_qty=quote_qty_val,
             interval=interval,
+            mode=mode,
             sl=sl_str,
             tp=tp_str,
             source_ip=source_ip,

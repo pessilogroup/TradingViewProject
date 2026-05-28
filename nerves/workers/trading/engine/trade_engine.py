@@ -20,6 +20,7 @@ import database
 
 from core.event_bus import bus as _default_bus
 from core.events import TradeApproved, TradeExecuted, TradeFailed
+from symbol_config import get_symbol_config
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,9 @@ async def execute_trade(event: TradeApproved) -> None:
         log.info(f"TradeEngine: Skipping non-trade action '{action}' for #{event.signal_id}")
         return
 
+    # Resolve per-symbol risk parameters (OPTIMIZED_PARAMETERS_MATRIX)
+    symbol_cfg = get_symbol_config(event.symbol)
+
     # ── Parse prices ─────────────────────────────────────────
     try:
         entry_price = float(str(event.price).replace(',', '')) if event.price else 0.0
@@ -102,8 +106,25 @@ async def execute_trade(event: TradeApproved) -> None:
     except (ValueError, TypeError):
         sl_price = None
 
-    try:
-        tp_price = float(str(event.tp).replace(',', '')) if event.tp else None
+    # ── SL Hard-Cap Enforcement (stop_loss_pct) ──────────────────────────────
+    # Prevent aggressively-wide stop-losses that exceed the per-symbol cap defined
+    # in symbol_config.py. The cap is NOT applied to the ATR path (which uses
+    # atr_sl_mul and already has well-tested multipliers). This only guards the
+    # manually-provided event.sl string path parsed above.
+    if sl_price is not None and entry_price > 0:
+        sl_dist_pct = abs(entry_price - sl_price) / entry_price
+        if sl_dist_pct > symbol_cfg["stop_loss_pct"]:
+            if action == "buy":
+                clamped_sl = entry_price * (1.0 - symbol_cfg["stop_loss_pct"])
+            else:  # sell / short
+                clamped_sl = entry_price * (1.0 + symbol_cfg["stop_loss_pct"])
+            log.warning(
+                f"TradeEngine: SL clamped for {event.symbol} "
+                f"({sl_dist_pct*100:.1f}% > cap {symbol_cfg['stop_loss_pct']*100:.0f}%): "
+                f"{sl_price:.4f} → {clamped_sl:.4f}"
+            )
+            sl_price = clamped_sl
+
         if tp_price is not None and tp_price <= 0.0:
             tp_price = None
     except (ValueError, TypeError):
@@ -177,21 +198,36 @@ async def execute_trade(event: TradeApproved) -> None:
             atr = float(atr_val)
             if atr > 0:
                 if action.upper() == "BUY":
-                    sl_price = entry_price - (2.0 * atr)
-                    tp_price = entry_price + (4.0 * atr)
+                    sl_price = entry_price - (symbol_cfg["atr_sl_mul"] * atr)
+                    tp_price = entry_price + (symbol_cfg["atr_tp_mul"] * atr)
                 else:
-                    sl_price = entry_price + (2.0 * atr)
-                    tp_price = entry_price - (4.0 * atr)
-                log.info(f"TradeEngine: ATR-based SL/TP calculated: SL={sl_price}, TP={tp_price} (ATR={atr})")
-                
+                    sl_price = entry_price + (symbol_cfg["atr_sl_mul"] * atr)
+                    tp_price = entry_price - (symbol_cfg["atr_tp_mul"] * atr)
+                log.info(
+                    f"TradeEngine: ATR-based SL/TP calculated: "
+                    f"SL={sl_price}, TP={tp_price} "
+                    f"(ATR={atr}, sym_mul={symbol_cfg['atr_sl_mul']}x/{symbol_cfg['atr_tp_mul']}x)"
+                )
+                # Chandelier trailing stop reference (trail_atr_mul) — informational only.
+                # OCO is placed at ATR SL above. This wider level is the future trailing
+                # stop target once price moves in our favour.
+                if action.upper() == "BUY":
+                    trail_sl_ref = entry_price - (symbol_cfg["trail_atr_mul"] * atr)
+                else:
+                    trail_sl_ref = entry_price + (symbol_cfg["trail_atr_mul"] * atr)
+                log.info(
+                    f"TradeEngine: Chandelier trail reference: {trail_sl_ref:.4f} "
+                    f"({symbol_cfg['trail_atr_mul']}x ATR={atr:.4f} from entry={entry_price:.4f})"
+                )
+
                 try:
                     balance = await adapter.get_account_balance("USDT")
-                    risk_amount = balance * 0.01
+                    risk_amount = balance * symbol_cfg["risk_pct"]
                     price_dist = abs(entry_price - sl_price)
                     if price_dist > 0:
                         quote_qty_val = (risk_amount / price_dist) * entry_price
                         atr_sizing_applied = True
-                        log.info(f"TradeEngine: ATR risk-based sizing applied: quote_qty={quote_qty_val:.2f} USDT (risking 1.0% of {balance:.2f} balance)")
+                        log.info(f"TradeEngine: ATR risk-based sizing applied: quote_qty={quote_qty_val:.2f} USDT (risking {symbol_cfg['risk_pct']*100:.1f}% of {balance:.2f} balance)")
                 except Exception as e:
                     log.warning(f"TradeEngine: Failed to compute ATR-based position size: {e}")
         except (ValueError, TypeError) as e:
@@ -199,13 +235,13 @@ async def execute_trade(event: TradeApproved) -> None:
 
     if not atr_sizing_applied:
         if is_breakout:
-            # Tactical Entry: 2.5% of account balance
+            # Tactical Entry: beta-scaled % of account balance (BTC=2.5%, ETH=2.0%, SOL=1.5%)
             try:
                 balance = await adapter.get_account_balance("USDT")
                 if balance > 0:
-                    tactical_qty = balance * 0.025
+                    tactical_qty = balance * symbol_cfg["breakout_size_pct"]
                     quote_qty_val = max(10.0, min(tactical_qty, config.MAX_QUOTE_QTY))
-                    log.info(f"TradeEngine: Tactical Entry Sizing applied: {quote_qty_val:.2f} USDT (2.5% of {balance:.2f} balance)")
+                    log.info(f"TradeEngine: Tactical Entry Sizing applied: {quote_qty_val:.2f} USDT ({symbol_cfg['breakout_size_pct']*100:.1f}% of {balance:.2f} balance)")
                 else:
                     if quote_qty_val is None:
                         quote_qty_val = 10.0

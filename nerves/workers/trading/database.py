@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS signals (
     quote_qty   REAL,
     source_ip   TEXT,
     payload     TEXT,
+    mode        TEXT,
     processed   INTEGER NOT NULL DEFAULT 0
 );
 
@@ -170,6 +171,13 @@ async def init_db():
                 await db.commit()
             except Exception:
                 pass  # Column already exists
+
+        # v7.0: Add mode column to signals (backward-compatible — Phase 2 MTT/MIS tracking)
+        try:
+            await db.execute("ALTER TABLE signals ADD COLUMN mode TEXT")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
 
     log.info(f"Database initialized: {config.DB_PATH}")
 
