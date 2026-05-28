@@ -229,6 +229,76 @@ class MCPClient:
             logger.warning(f"Crop failed: {e}")
             return False
 
+    async def _resolve_active_chart_cdp(self) -> tuple[Optional[str], Optional[str]]:
+        """
+        Authentic CDP DOM parsing strategy to fetch the active chart's symbol and timeframe
+        directly from the TradingView UI via Chrome DevTools Protocol Runtime.evaluate.
+        """
+        import aiohttp
+        import json
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. Discover the TradingView page CDP websocket URL
+                async with session.get(f"http://127.0.0.1:{self.cdp_port}/json", timeout=3) as resp:
+                    pages = await resp.json()
+                
+                # Prioritize TradingView page, otherwise take first available
+                page = next((p for p in pages if p.get("type") == "page" and "TradingView" in p.get("title", "")), None)
+                if not page:
+                    page = next((p for p in pages if p.get("type") == "page"), None)
+                    
+                if not page or "webSocketDebuggerUrl" not in page:
+                    return None, None
+                    
+                ws_url = page["webSocketDebuggerUrl"]
+                
+                # 2. Connect via WebSocket to issue Runtime.evaluate
+                async with session.ws_connect(ws_url, timeout=3) as ws:
+                    js_expr = """
+                    (() => {
+                        try {
+                            if (window.tvWidget) {
+                                const chart = window.tvWidget.activeChart();
+                                return { symbol: chart.symbol(), timeframe: chart.resolution() };
+                            }
+                        } catch (e) {}
+                        
+                        try {
+                            // DOM fallback parsing for TradingView Desktop
+                            const symNode = document.querySelector('.js-widget-title, .title-3sKkivG, [data-name="legend-source-title"]');
+                            const tfNode = document.querySelector('.js-button-text, .text-3sKkivG, [data-name="legend-source-interval"]');
+                            let sym = symNode ? symNode.innerText.trim() : null;
+                            let tf = tfNode ? tfNode.innerText.trim() : null;
+                            return { symbol: sym, timeframe: tf };
+                        } catch (e) {
+                            return { symbol: null, timeframe: null };
+                        }
+                    })()
+                    """
+                    
+                    req_id = 1001
+                    await ws.send_json({
+                        "id": req_id,
+                        "method": "Runtime.evaluate",
+                        "params": {
+                            "expression": js_expr,
+                            "returnByValue": True
+                        }
+                    })
+                    
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            if data.get("id") == req_id:
+                                res = data.get("result", {}).get("result", {}).get("value", {})
+                                return res.get("symbol"), res.get("timeframe")
+                                
+        except Exception as e:
+            logger.warning(f"CDP resolve active chart failed: {e}")
+            
+        return None, None
+
     async def capture_screenshot(
         self,
         symbol: str = "active",
@@ -245,14 +315,22 @@ class MCPClient:
         Uses fast local rendering (lightweight-charts/mplfinance) or daemon by default,
         and falls back to legacy subprocess mode on failure.
         """
+        # Resolve active symbol/timeframe dynamically via CDP
+        target_symbol = symbol
+        target_timeframe = timeframe
+        if symbol == "active" or timeframe == "active":
+            cdp_sym, cdp_tf = await self._resolve_active_chart_cdp()
+            if not cdp_sym or not cdp_tf:
+                raise RuntimeError("Failed to resolve active chart via CDP")
+            if symbol == "active":
+                target_symbol = cdp_sym
+            if timeframe == "active":
+                target_timeframe = cdp_tf
+
         # Try fast local/daemon capture first
         try:
             from capture_client import get_capture_client
             client = get_capture_client()
-            
-            # Map "active" to default symbol/timeframe if local native rendering is resolved
-            target_symbol = symbol if symbol != "active" else "BTCUSDT"
-            target_timeframe = timeframe if timeframe != "active" else "1h"
             
             res = await client.capture_screenshot(
                 symbol=target_symbol,
@@ -339,25 +417,28 @@ class MCPClient:
         Run quote + study_values for each symbol sequentially.
         Returns list of raw data dicts.
         """
-        results = []
-        for sym in symbols:
-            try:
-                quote = await self.get_quote(sym)
-                studies = await self.get_study_values(sym, timeframe)
-                ohlcv = await self.get_ohlcv_summary(sym, timeframe)
+        sem = asyncio.Semaphore(5)
 
-                results.append({
-                    "symbol": sym,
-                    "quote": quote,
-                    "studies": studies,
-                    "ohlcv_summary": ohlcv,
-                    "error": None
-                })
-            except Exception as e:
-                logger.warning(f"batch_run error for {sym}: {e}")
-                results.append({"symbol": sym, "error": str(e)})
+        async def fetch_symbol(sym):
+            async with sem:
+                try:
+                    quote = await self.get_quote(sym)
+                    studies = await self.get_study_values(sym, timeframe)
+                    ohlcv = await self.get_ohlcv_summary(sym, timeframe)
 
-        return results
+                    return {
+                        "symbol": sym,
+                        "quote": quote,
+                        "studies": studies,
+                        "ohlcv_summary": ohlcv,
+                        "error": None
+                    }
+                except Exception as e:
+                    logger.warning(f"batch_run error for {sym}: {e}")
+                    return {"symbol": sym, "error": str(e)}
+
+        results = await asyncio.gather(*[fetch_symbol(sym) for sym in symbols])
+        return list(results)
 
 
 # Singleton

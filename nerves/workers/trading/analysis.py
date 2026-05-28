@@ -224,29 +224,23 @@ async def scan_symbols(symbols: list[str], mcp_client) -> list[ScanResult]:
         async with aiohttp.ClientSession() as session:
             btc_benchmarks = {}
             
-            async def get_btc_benchmark(eid):
-                if eid in btc_benchmarks:
-                    return btc_benchmarks[eid]
+            # Sequentially pre-fetch BTC benchmarks to avoid Thundering Herd
+            unique_eids = set("weex" if sym.endswith("_UMCBL") else "binance" for sym in symbols)
+            for eid in unique_eids:
                 btc_symbol = "BTCUSDT_UMCBL" if eid == "weex" else "BTCUSDT"
                 try:
-                    btc_candles = await fetch_candles_with_retry(session, eid, btc_symbol, limit=365)
+                    btc_candles = await fetch_candles_with_retry(session, eid, btc_symbol, limit=365, semaphore=semaphore)
                     btc_closes = {c[0]: c[4] for c in btc_candles} if btc_candles else {}
                     btc_benchmarks[eid] = (btc_candles, btc_closes)
                 except Exception as ex:
                     logger.warning(f"Could not fetch BTC benchmark for exchange {eid}: {ex}")
                     btc_benchmarks[eid] = ([], {})
-                return btc_benchmarks[eid]
 
             tasks = []
             for sym in symbols:
                 eid = "weex" if sym.endswith("_UMCBL") else "binance"
-                
-                async def scan_task(s, exchange_id):
-                    btc_candles, btc_closes = await get_btc_benchmark(exchange_id)
-                    res = await scan_single_symbol_rest(session, exchange_id, s, btc_closes, btc_candles, semaphore)
-                    return res
-                
-                tasks.append(scan_task(sym, eid))
+                btc_candles, btc_closes = btc_benchmarks[eid]
+                tasks.append(scan_single_symbol_rest(session, eid, sym, btc_closes, btc_candles, semaphore))
             
             results = await asyncio.gather(*tasks)
             results = [r for r in results if r is not None]
@@ -326,7 +320,8 @@ async def fetch_candles_with_retry(
     interval: str = "1d",
     limit: int = 365,
     max_retries: int = 5,
-    backoff_factor: float = 1.5
+    backoff_factor: float = 1.5,
+    semaphore: Optional[asyncio.Semaphore] = None
 ) -> List[List[Any]]:
     """Fetch candles directly from public REST endpoints with retry-on-429 rate limit protection."""
     exchange_name = exchange_name.lower()
@@ -354,28 +349,39 @@ async def fetch_candles_with_retry(
     retries = 0
     while retries < max_retries:
         try:
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 429:
-                    retry_after = float(resp.headers.get("Retry-After", 1.0))
-                    wait_time = max(retry_after, backoff_factor ** retries)
-                    logger.warning(f"Rate limited (429) for {symbol} on {exchange_name}. Waiting {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                    retries += 1
-                    continue
-                elif resp.status != 200:
-                    # If Bybit category linear failed, try spot
-                    if exchange_name == "bybit" and params.get("category") == "linear":
-                        logger.info(f"Bybit linear failed for {symbol}, trying category spot...")
-                        params["category"] = "spot"
-                        continue
-                    logger.warning(f"HTTP error {resp.status} for {symbol} on {exchange_name}")
-                    await asyncio.sleep(backoff_factor ** retries)
-                    retries += 1
-                    continue
+            if semaphore:
+                await semaphore.acquire()
+            try:
+                async with session.get(url, params=params, timeout=10) as resp:
+                    status = resp.status
+                    retry_after_header = resp.headers.get("Retry-After", 1.0)
+                    if status == 200:
+                        res = await resp.json()
+                    else:
+                        res = None
+            finally:
+                if semaphore:
+                    semaphore.release()
 
-                res = await resp.json()
+            if status == 429:
+                retry_after = float(retry_after_header)
+                wait_time = max(retry_after, backoff_factor ** retries)
+                logger.warning(f"Rate limited (429) for {symbol} on {exchange_name}. Waiting {wait_time}s...")
+                await asyncio.sleep(wait_time)
+                retries += 1
+                continue
+            elif status != 200:
+                # If Bybit category linear failed, try spot
+                if exchange_name == "bybit" and params.get("category") == "linear":
+                    logger.info(f"Bybit linear failed for {symbol}, trying category spot...")
+                    params["category"] = "spot"
+                    continue
+                logger.warning(f"HTTP error {status} for {symbol} on {exchange_name}")
+                await asyncio.sleep(backoff_factor ** retries)
+                retries += 1
+                continue
 
-                # Process response
+            # Process response
                 if exchange_name == "weex":
                     if isinstance(res, list):
                         ohlcv = []
@@ -560,19 +566,18 @@ async def scan_single_symbol_rest(
     semaphore: asyncio.Semaphore
 ) -> ScanResult:
     """Scan a single symbol using REST endpoints, scoring Trend Template & VCP."""
-    async with semaphore:
-        try:
-            ohlcv = await fetch_candles_with_retry(session, exchange_name, symbol, limit=365)
-            return _calculate_scan_result(ohlcv, exchange_name, symbol, btc_closes, btc_candles)
-        except Exception as e:
-            logger.exception(f"Exception during REST scan for {symbol}")
-            return ScanResult(
-                symbol=symbol, price=0.0, change_pct=0.0,
-                trend_template=TrendTemplateResult(0, {}, "Unknown", f"Scan error: {str(e)}"),
-                vcp=VCPResult(False, 1.0, 1.0, None, False, "Scan error"),
-                volume=0.0, volume_avg=None, exchange=exchange_name,
-                error=str(e)
-            )
+    try:
+        ohlcv = await fetch_candles_with_retry(session, exchange_name, symbol, limit=365, semaphore=semaphore)
+        return _calculate_scan_result(ohlcv, exchange_name, symbol, btc_closes, btc_candles)
+    except Exception as e:
+        logger.exception(f"Exception during REST scan for {symbol}")
+        return ScanResult(
+            symbol=symbol, price=0.0, change_pct=0.0,
+            trend_template=TrendTemplateResult(0, {}, "Unknown", f"Scan error: {str(e)}"),
+            vcp=VCPResult(False, 1.0, 1.0, None, False, "Scan error"),
+            volume=0.0, volume_avg=None, exchange=exchange_name,
+            error=str(e)
+        )
 
 
 async def scan_symbol_multi_timeframe(
@@ -590,10 +595,10 @@ async def scan_symbol_multi_timeframe(
     async def fetch_tf(tf):
         try:
             # Fetch symbol candles
-            ohlcv = await fetch_candles_with_retry(session, exchange_name, symbol, interval=tf, limit=365)
+            ohlcv = await fetch_candles_with_retry(session, exchange_name, symbol, interval=tf, limit=365, semaphore=semaphore)
             # Fetch BTC benchmark candles
             try:
-                btc_candles = await fetch_candles_with_retry(session, exchange_name, btc_symbol, interval=tf, limit=365)
+                btc_candles = await fetch_candles_with_retry(session, exchange_name, btc_symbol, interval=tf, limit=365, semaphore=semaphore)
                 btc_closes = {c[0]: c[4] for c in btc_candles} if btc_candles else {}
             except Exception:
                 btc_candles = []
@@ -613,9 +618,8 @@ async def scan_symbol_multi_timeframe(
             )
             return tf, err_result
 
-    async with semaphore:
-        tf_results = await asyncio.gather(*(fetch_tf(tf) for tf in timeframes))
-        scans = dict(tf_results)
+    tf_results = await asyncio.gather(*(fetch_tf(tf) for tf in timeframes))
+    scans = dict(tf_results)
 
     price = 0.0
     for tf in ["1h", "4h", "1d"]:
@@ -694,7 +698,7 @@ async def scan_all_configured_exchanges() -> List[ScanResult]:
 
                 btc_symbol = "BTCUSDT_UMCBL" if eid == "weex" else "BTCUSDT"
                 try:
-                    btc_candles = await fetch_candles_with_retry(session, eid, btc_symbol, limit=365)
+                    btc_candles = await fetch_candles_with_retry(session, eid, btc_symbol, limit=365, semaphore=semaphore)
                     btc_closes = {c[0]: c[4] for c in btc_candles} if btc_candles else {}
                 except Exception as ex:
                     logger.warning(f"Could not fetch BTC benchmark for exchange {eid}: {ex}")
