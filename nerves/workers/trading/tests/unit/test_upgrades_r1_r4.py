@@ -106,7 +106,9 @@ async def test_r1_slippage_greater_than_05_percent_switches_to_limit():
 
         # Assert that monitor task was created since target order type is LIMIT and order status is NEW
         mock_create_task.assert_called_once()
-        
+        coro = mock_create_task.call_args[0][0]
+        coro.close()
+
     set_bus(None)
 
 @pytest.mark.asyncio
@@ -190,16 +192,19 @@ async def test_r1_limit_order_monitoring_and_cancellation():
 # R2: ATR-Based Adaptive Position Sizing Tests
 @pytest.mark.asyncio
 async def test_r2_atr_based_sl_tp_and_sizing():
-    """Verify SL/TP are calculated based on ATR and position size is calculated for 1% USDT balance risk."""
+    """Verify SL/TP are calculated based on per-symbol ATR multipliers and position size is risk-based.
+
+    BTCUSDT (Beta=1.0): atr_sl_mul=2.0, atr_tp_mul=8.0, risk_pct=1.0%
+    - Balance 1000.0 USDT -> 1% risk = 10 USDT.
+    - ATR=2.5, Entry=100.0.
+    - Long SL = 100.0 - (2.0 * 2.5) = 95.0. TP = 100.0 + (8.0 * 2.5) = 120.0.
+    - Price distance = 5.0. quote_qty = (10 / 5.0) * 100.0 = 200 USDT.
+    """
     from engine.trade_engine import execute_trade, set_bus
 
     test_bus = EventBus()
     set_bus(test_bus)
 
-    # Balance 1000.0 USDT -> 1% risk = 10 USDT.
-    # ATR is 2.5. Entry is 100.0.
-    # Long SL = 100.0 - (2 * 2.5) = 95.0. TP = 100.0 + (4 * 2.5) = 110.0.
-    # Price distance is 5.0. Position size quote_qty = (10 USDT / 5.0) * 100.0 = 200 USDT.
     adapter = _make_mock_adapter(balance=1000.0, ticker_price=100.0)
     
     event = TradeApproved(
@@ -238,9 +243,9 @@ async def test_r2_atr_based_sl_tp_and_sizing():
 
         adapter.execute_smart_order.assert_awaited_once()
         called_kwargs = adapter.execute_smart_order.call_args[1]
-        assert called_kwargs["sl_price"] == 95.0
-        assert called_kwargs["tp_price"] == 110.0
-        assert called_kwargs["quote_qty"] == 200.0
+        assert called_kwargs["sl_price"] == 95.0   # entry - (atr_sl_mul=2.0 * atr=2.5)
+        assert called_kwargs["tp_price"] == 120.0  # entry + (atr_tp_mul=8.0 * atr=2.5) ← BTC Matrix
+        assert called_kwargs["quote_qty"] == 200.0  # (risk=10 / dist=5) * 100
 
     set_bus(None)
 

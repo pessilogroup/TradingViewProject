@@ -74,21 +74,28 @@ async def test_scan_all_concurrency_and_stress():
 
     async def mock_fetch_candles_with_retry(session, exchange_name, symbol, **kwargs):
         nonlocal active_requests, max_active_requests, semaphore_violation
+        semaphore = kwargs.get("semaphore")
         
-        async with request_lock:
-            active_requests += 1
-            if active_requests > max_active_requests:
-                max_active_requests = active_requests
-            if active_requests > 15:
-                # If we exceed the semaphore limit, record it
-                semaphore_violation = True
-                logger.error(f"Semaphore violation! Active requests: {active_requests}")
-                
-        # Simulate network latency of 15ms to make concurrent overlap visible
-        await asyncio.sleep(0.015)
-        
-        async with request_lock:
-            active_requests -= 1
+        if semaphore:
+            await semaphore.acquire()
+        try:
+            async with request_lock:
+                active_requests += 1
+                if active_requests > max_active_requests:
+                    max_active_requests = active_requests
+                if active_requests > 15:
+                    # If we exceed the semaphore limit, record it
+                    semaphore_violation = True
+                    logger.error(f"Semaphore violation! Active requests: {active_requests}")
+                    
+            # Simulate network latency of 15ms to make concurrent overlap visible
+            await asyncio.sleep(0.015)
+            
+            async with request_lock:
+                active_requests -= 1
+        finally:
+            if semaphore:
+                semaphore.release()
             
         return mock_candles
 
