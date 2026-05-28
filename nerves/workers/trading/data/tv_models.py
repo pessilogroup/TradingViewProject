@@ -39,4 +39,7 @@ class TradingViewAlertPayload(BaseModel):
     strategy: Optional[str] = Field(default=None, description="Name of the strategy")
     message: Optional[str] = Field(default=None, description="Custom text message")
     
+    # Strategy execution mode (from OPTIMIZED_PARAMETERS_MATRIX)
+    mode: Optional[str] = Field(default=None, description="Strategy mode: 'MTT' (Daily Trend Follower) or 'MIS' (1H Momentum/Mean Reversion)")
+
     model_config = ConfigDict(populate_by_name=True, extra="allow")
