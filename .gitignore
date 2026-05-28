@@ -55,3 +55,6 @@ refactor_styles.py
 .agents/
 memory/
 nerves/workers/trading/test_runs.log
+
+# Directory junctions/symlinks
+server/

@@ -312,4 +312,65 @@ Khi phát hiện bài test thất bại hoặc dịch vụ ngắt kết nối:
 - [ ] Lỗi kiểm thử được ghi nhận đầy đủ vào `test_runs.log`.
 - [ ] Tin nhắn Telegram được gửi đi chính xác khi có kiểm thử thất bại.
 
+## Follow-up — 2026-05-29T01:41:19+07:00
 
+# Teamwork Project Prompt — Draft
+
+> Status: Launched — Đội ngũ Agent đang thực thi kiểm tra hệ thống
+> Goal: Chạy xác minh độc lập bằng teamwork_preview để đảm bảo không còn lỗi hồi quy (regression) và rò rỉ bộ nhớ.
+
+Kiểm tra và xác minh toàn bộ các thay đổi kiến trúc tối ưu hóa Telegram Bot, MCP Client, và REST Fallback đã thực hiện trong dự án.
+
+Working directory: `C:\Users\pesil\working\mj_trading\TradingViewProject`
+
+## Requirements
+
+### R1. Kiểm tra tính ổn định và Concurrency của MCP Client
+- Xác minh xem cơ chế `asyncio.gather` và `asyncio.Semaphore(5)` trong `mcp_client.py` có chạy ổn định dưới điều kiện thực tế (ví dụ: quét 10-15 symbols liên tục).
+- Đảm bảo không xảy ra hiện tượng chồng chéo tài nguyên (Resource collision) hoặc rò rỉ tiến trình con Node.js.
+
+### R2. Xác minh tính phản hồi của Telegram Bot
+- Xác minh các lệnh `/scan`, `/scan_all`, `/scan_mtf`, `/recommend` hoạt động trơn tru trên môi trường thực tế.
+- Kiểm tra xem các background tasks có bị "lạc trôi" (orphan tasks) khi người dùng spam lệnh hoặc hủy phiên chat không.
+
+### R3. Kiểm tra hồi quy toàn bộ hệ thống (Regression Testing)
+- Chạy toàn bộ 434 tests của hệ thống để xác định nguyên nhân gây treo/deadlock khi chạy chung toàn bộ test suite.
+- Sửa đổi hoặc tối ưu hóa các phần test bị ảnh hưởng để đảm bảo toàn bộ test suite chạy thành công 100% không bị treo.
+
+## Acceptance Criteria
+
+### Verification & Stability
+- Tất cả 434 tests trong bộ test suite của hệ thống chạy hoàn tất thành công (PASSED) mà không gặp bất kỳ lỗi treo hay deadlock nào.
+- Xác minh độc lập cơ chế Semaphore của MCP Client hoạt động chính xác trong môi trường multi-threaded/multi-process.
+
+## Follow-up — 2026-05-29T05:00:10+07:00
+
+Implement a true Multi-Timeframe (MTF) execution in the consolidated Pine Script strategy and compile a central optimized parameters matrix for BTC, ETH, and SOL.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. True Multi-Timeframe (MTF) Pine Script Upgrade
+- Upgrade `pine/v2/minervini_strategy.pine` to support true MTF calculations.
+- When `strat_mode` is set to "Daily Trend Follower (MTT v1.005-b)", calculate EMA 20/50/100 from the Daily timeframe even when the strategy is run on lower timeframes (e.g., 1H, 4H).
+- Enforce strict lookahead-free security calculations using `barmerge.lookahead_off` and series indexing offsets (e.g., `[1]`) to prevent any future lookahead bias in backtests.
+
+### R2. Central Configuration Matrix
+- Create `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` containing a structured matrix/table of optimal parameters for BTC, ETH, and SOL.
+- For ETH and SOL, adapt parameters from BTC and scale position sizing/ATR multipliers based on historical relative volatility (e.g., standard beta multipliers).
+- The parameters should include MA configurations, ATR Multipliers, Stop-Loss/Take-Profit thresholds, Position Sizing, and Webhook payload parameters.
+
+### R3. Multi-Asset Performance Summary
+- Update `docs/reports/STRATEGY_GENEALOGY.md` to map out the strategy evolution including performance metrics (Profit Factor, Max Drawdown, Recovery Factor, Expectancy, Win Rate) across BTC, ETH, and SOL.
+
+## Acceptance Criteria
+
+### Pine Script Compilation & Lookahead Validation
+- [ ] The updated `pine/v2/minervini_strategy.pine` compiles in TradingView (or conforms perfectly to v5 syntax rules without syntax errors).
+- [ ] No lookahead bias is present in the `request.security` calls (verifiable by using `[1]` offset on requested variables).
+
+### Documentation Correctness
+- [ ] `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` contains complete, non-placeholder tables for BTC, ETH, and SOL.
+- [ ] `docs/reports/STRATEGY_GENEALOGY.md` has updated performance comparison tables for all three assets.
