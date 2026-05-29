@@ -91,6 +91,12 @@ if ! id "trader" &>/dev/null 2>&1; then
 fi
 
 # ── 5. Build & Start ─────────────────────────────────────────
+# Create server symlink if missing
+if [ ! -L "server" ] && [ ! -d "server" ]; then
+    echo "Creating server/ symlink..."
+    ln -s nerves/workers/trading server
+fi
+
 info "Building Docker image..."
 docker compose build --no-cache
 log "Docker image built successfully"

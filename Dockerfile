@@ -17,7 +17,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (Docker layer cache)
-COPY server/requirements.txt .
+COPY nerves/workers/trading/requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
@@ -38,7 +38,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 
 # Copy application code
-COPY server/ ./
+COPY nerves/workers/trading/ ./
 COPY docs/knowledge/ /app/knowledge/
 
 # Create directories for persistent data

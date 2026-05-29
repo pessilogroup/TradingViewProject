@@ -162,7 +162,7 @@ jobs:
         id: deploy_a
         run: |
           echo "🚀 Deploying Server A..."
-          ssh root@100.x.x.1 'bash -s' << 'EOF'
+          ssh botuser@100.x.x.1 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             # Lưu commit SHA cũ phòng trường hợp rollback
@@ -191,7 +191,7 @@ jobs:
         if: failure() && steps.deploy_a.outcome == 'failure'
         run: |
           echo "⚠️ Server A deployment failed! Initiating rollback..."
-          ssh root@100.x.x.1 'bash -s' << 'EOF'
+          ssh botuser@100.x.x.1 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)
@@ -210,7 +210,7 @@ jobs:
         id: deploy_c
         run: |
           echo "🚀 Deploying Server C..."
-          ssh root@100.x.x.3 'bash -s' << 'EOF'
+          ssh botuser@100.x.x.3 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             git rev-parse HEAD > .rollback_sha
@@ -238,7 +238,7 @@ jobs:
         if: failure() && steps.deploy_c.outcome == 'failure'
         run: |
           echo "⚠️ Server C deployment failed! Initiating rollback..."
-          ssh root@100.x.x.3 'bash -s' << 'EOF'
+          ssh botuser@100.x.x.3 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)
@@ -341,7 +341,7 @@ Hãy cấu hình các biến bảo mật sau trong mục **Settings > Secrets an
 | Tên Secret | Kiểu Dữ Liệu | Vai Trò |
 | :--- | :--- | :--- |
 | `TAILSCALE_AUTHKEY` | Chuỗi (Auth Key) | Khóa dùng một lần (Ephemeral Key) từ bảng điều khiển Tailscale để cho phép GitHub Runner join mạng ảo. |
-| `SSH_PRIVATE_KEY` | Private Key PEM | Khóa SSH Private dùng để đăng nhập vào `root@Server A`, `root@Server C`, và `Administrator@Server B`. |
+| `SSH_PRIVATE_KEY` | Private Key PEM | Khóa SSH Private dùng để đăng nhập vào `botuser@Server A`, `botuser@Server C`, và `Administrator@Server B`. |
 | `SERVER_B_SECRET` | Token Hex 64 kí tự | Token xác thực API giữa Server C và Server B. |
 | `VPS_BUFFER_SECRET` | Token Hex 64 kí tự | Token bảo mật giữa Server C và Server A. |
 | `WEBHOOK_SECRET` | Token Hex 64 kí tự | Token xác thực webhook TradingView gửi đến Server A. |
@@ -359,11 +359,11 @@ Hệ thống được trang bị 2 lớp bảo vệ rollback:
    Nếu hệ thống không lỗi cứng (vẫn qua Health Check) nhưng sếp phát hiện bot trade sai logic hoặc có lỗi nghiệp vụ ẩn, sếp có thể chạy rollback trực tiếp từ máy của mình bằng một dòng lệnh SSH qua Tailscale:
    - **Đối với Server A:**
      ```bash
-     ssh root@100.x.x.1 "cd /opt/trading-bot && git checkout HEAD@{1} && docker compose -f deploy/docker-compose.server-a.yml up -d --build"
+     ssh botuser@100.x.x.1 "cd /opt/trading-bot && git checkout HEAD@{1} && docker compose -f deploy/docker-compose.server-a.yml up -d --build"
      ```
    - **Đối với Server C:**
      ```bash
-     ssh root@100.x.x.3 "cd /opt/trading-bot && git checkout HEAD@{1} && docker compose -f deploy/docker-compose.server-c.yml up -d --build"
+     ssh botuser@100.x.x.3 "cd /opt/trading-bot && git checkout HEAD@{1} && docker compose -f deploy/docker-compose.server-c.yml up -d --build"
      ```
    - **Đối với Server B (Windows):**
      ```bash
