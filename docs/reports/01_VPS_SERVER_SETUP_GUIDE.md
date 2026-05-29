@@ -43,7 +43,7 @@
 | **Python mặc định** | 3.5 ❌ | 3.7 ❌ | 3.9 ⚠️ | 🐍 **3.11+** ✅ |
 | **Docker compat** | ❌ Lỗi glibc | ❌ Thư viện cũ | ⚠️ Trung bình | ✅ **Tốt nhất** |
 | **OpenSSL** | 1.1.0 ❌ | 1.1.1 ⚠️ | 1.1.1 ⚠️ | **3.0.x** ✅ |
-| **Node.js compat** | ❌ Không chạy | ❌ v14 max | ⚠️ v16-18 | ✅ **v18-22** |
+| **Node.js compat** | ❌ Không chạy | ❌ v14 max | ⚠️ v16-18 | ✅ **v18-24+** |
 | **SystemD version** | 232 | 241 | 247 | **252** |
 | **Chiếm đĩa sau cài** | ~1.2GB | ~1.5GB | ~1.8GB | 🚀 **~800MB** |
 
@@ -449,11 +449,11 @@ tailscale ping server-c
     // SERVER C → SERVER A (consume signals)
     {"action": "accept", "src": ["server-c"], "dst": ["server-a:5000"]},
     // SERVER C → SERVER B (forward trades)
-    {"action": "accept", "src": ["server-c"], "dst": ["server-b:5000"]},
+    {"action": "accept", "src": ["server-c"], "dst": ["server-b:5002"]},
     // SERVER C → SERVER A (health check)
     {"action": "accept", "src": ["server-c"], "dst": ["server-a:5000"]},
     // SERVER C → SERVER B (health check)
-    {"action": "accept", "src": ["server-c"], "dst": ["server-b:5000"]},
+    {"action": "accept", "src": ["server-c"], "dst": ["server-b:5002"]},
     // SSH từ admin machines
     {"action": "accept", "src": ["tag:admin"], "dst": ["*:22"]},
     // Block everything else
@@ -820,13 +820,13 @@ SERVER C là nơi tốt nhất để chạy monitoring vì có dư tài nguyên:
 │                                                                │
 │  ┌──────────────────────────────────────────────┐              │
 │  │  Windows Firewall                            │              │
-│  │  ✅ Allow: 100.0.0.0/8:5000 (Tailscale only) │              │
-│  │  ❌ Block: 0.0.0.0/0:5000 (Internet)          │              │
+│  │  ✅ Allow: 100.0.0.0/8:5002 (Tailscale only) │              │
+│  │  ❌ Block: 0.0.0.0/0:5002 (Internet)          │              │
 │  └──────────────────┬───────────────────────────┘              │
 │                     │                                          │
 │                     ▼                                          │
 │  ┌────────────────────────────────────────────────────────┐    │
-│  │         Execution Server (FastAPI — Port 5000)         │    │
+│  │         Execution Server (FastAPI — Port 5002)         │    │
 │  │                                                        │    │
 │  │  POST /api/execute-trade                               │    │
 │  │    1. Verify X-Server-B-Secret (constant-time)         │    │
@@ -937,12 +937,12 @@ w32tm /resync /force
 # ── Layer 1: Windows Firewall ──
 # Chỉ cho phép Tailscale subnet
 New-NetFirewallRule -DisplayName "Trading Bot - Tailscale Only" `
-    -Direction Inbound -Protocol TCP -LocalPort 5000 `
+    -Direction Inbound -Protocol TCP -LocalPort 5002 `
     -RemoteAddress 100.0.0.0/8 -Action Allow
 
-# Block tất cả kết nối khác đến port 5000
+# Block tất cả kết nối khác đến port 5002
 New-NetFirewallRule -DisplayName "Trading Bot - Block WAN" `
-    -Direction Inbound -Protocol TCP -LocalPort 5000 `
+    -Direction Inbound -Protocol TCP -LocalPort 5002 `
     -Action Block
 
 # ── Layer 2: Windows Credential Manager ──
@@ -1050,7 +1050,7 @@ cp server/.env.example server/.env
 #   CHROMA_REMOTE=false (local trên chính C)
 #   VPS_BUFFER_URL=http://100.x.x.1:5000
 #   VPS_BUFFER_SECRET=<same as BUFFER_SECRET on A>
-#   SERVER_B_EXECUTE_URL=http://100.x.x.2:5000/api/execute-trade
+#   SERVER_B_EXECUTE_URL=http://100.x.x.2:5002/api/execute-trade
 #   SERVER_B_SECRET=<generate new secret>
 
 # Deploy
@@ -1090,7 +1090,7 @@ Start-Service TradingBotExecution
 
 ## 11. Checklist Hoàn Tất
 
-### 9.1 SERVER A — Gateway (Debian 12 Minimal)
+### 11.1 SERVER A — Gateway (Debian 12 Minimal)
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
@@ -1110,7 +1110,7 @@ Start-Service TradingBotExecution
 | 14 | BUFFER_SECRET sinh ngẫu nhiên (≥32 bytes) | ☐ |
 | 15 | Telegram notification test thành công | ☐ |
 
-### 9.2 SERVER C — AI Core (Debian 12)
+### 11.2 SERVER C — AI Core (Debian 12)
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
@@ -1127,7 +1127,7 @@ Start-Service TradingBotExecution
 | 11 | Disk monitor cấu hình | ☐ |
 | 12 | Circuit Breaker LLM cấu hình | ☐ |
 
-### 9.3 SERVER B — Execution Vault (Windows Server)
+### 11.3 SERVER B — Execution Vault (Windows Server)
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
@@ -1135,14 +1135,14 @@ Start-Service TradingBotExecution
 | 2 | Python 3.11+ cài | ☐ |
 | 3 | NTP w32time đồng bộ | ☐ |
 | 4 | Tailscale VPN kết nối, IP 100.x.x.2 | ☐ |
-| 5 | Firewall: port 5000 chỉ allow 100.0.0.0/8 | ☐ |
+| 5 | Firewall: port 5002 chỉ allow 100.0.0.0/8 | ☐ |
 | 6 | Execution Server chạy | ☐ |
 | 7 | SERVER_B_SECRET cấu hình | ☐ |
 | 8 | Exchange API Keys cấu hình (Binance/Bybit/Weex) | ☐ |
 | 9 | Test: POST `/api/execute-trade` từ SERVER C | ☐ |
 | 10 | Telegram notification test | ☐ |
 
-### 9.4 Cross-Server Verification
+### 11.4 Cross-Server Verification
 
 | # | Test | Trạng thái |
 |---|------|-----------|

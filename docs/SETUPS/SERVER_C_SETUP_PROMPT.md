@@ -352,7 +352,7 @@ VPS_BUFFER_URL=http://100.x.x.1:5000
 VPS_BUFFER_SECRET=<THAY_BUFFER_SECRET_TỪ_SERVER_A>
 
 # ── Kết nối đến SERVER B (Execution Vault) ──
-SERVER_B_EXECUTE_URL=http://100.x.x.2:5000/api/execute-trade
+SERVER_B_EXECUTE_URL=http://100.x.x.2:5002/api/execute-trade
 SERVER_B_SECRET=$SERVER_B_SECRET
 
 # ── AI / LLM Configuration ──
@@ -421,7 +421,7 @@ if [ "$A_STATUS" != "200" ]; then
 fi
 
 # Check SERVER B
-B_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://100.x.x.2:5000/health)
+B_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://100.x.x.2:5002/health)
 if [ "$B_STATUS" != "200" ]; then
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
@@ -469,7 +469,7 @@ curl -s http://100.x.x.1:5000/health | python3 -m json.tool
 # → {"status": "healthy", "queue_size": 0} ✅
 
 # ── Test 3: Tailscale → SERVER B ──
-curl -s http://100.x.x.2:5000/health | python3 -m json.tool
+curl -s http://100.x.x.2:5002/health | python3 -m json.tool
 # → {"status": "healthy"} ✅
 # (Nếu SERVER B chưa setup → skip, verify sau)
 

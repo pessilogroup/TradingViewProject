@@ -246,7 +246,7 @@ SERVER C Worker (vps_analyzer.py)
 
 ```dotenv
 # ── Pipeline Forwarding (Phase 5) ────────────────────
-SERVER_B_EXECUTE_URL=http://100.x.x.2:5000/api/execute-trade
+SERVER_B_EXECUTE_URL=http://100.x.x.2:5002/api/execute-trade
 SERVER_B_SECRET=<secrets.token_hex(32)>
 ```
 
@@ -269,7 +269,7 @@ SERVER_B_SECRET=<secrets.token_hex(32)>
 
 **Request:**
 ```http
-POST http://100.x.x.2:5000/api/execute-trade
+POST http://100.x.x.2:5002/api/execute-trade
 X-Server-B-Secret: <SERVER_B_SECRET>
 Content-Type: application/json
 

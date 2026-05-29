@@ -148,7 +148,7 @@ log = logging.getLogger(__name__)
 
 SERVERS = {
     "SERVER_A": "http://100.x.x.1:5000/health",
-    "SERVER_B": "http://100.x.x.2:5000/health",
+    "SERVER_B": "http://100.x.x.2:5002/health",
 }
 
 DRIFT_THRESHOLD_MS = 500  # Alert nếu > 500ms
@@ -1040,7 +1040,7 @@ LOG_JSON_FORMAT=false              # true = JSON structured logging
 │                                                         │
 │  SERVER C (8U16G — có dư tài nguyên) chạy:             │
 │  • GET http://100.x.x.1:5000/health  → check A        │
-│  • GET http://100.x.x.2:5000/health  → check B        │
+│  • GET http://100.x.x.2:5002/health  → check B        │
 │  • Nếu bất kỳ server nào không respond → Telegram      │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -1109,7 +1109,7 @@ class ServerHealth:
 
 SERVERS = [
     ServerHealth(name="SERVER_A (Gateway)", url="http://100.x.x.1:5000/health"),
-    ServerHealth(name="SERVER_B (Execution)", url="http://100.x.x.2:5000/health"),
+    ServerHealth(name="SERVER_B (Execution)", url="http://100.x.x.2:5002/health"),
 ]
 
 ALERT_AFTER_FAILURES = 2  # Alert sau 2 lần check liên tiếp thất bại (10 phút)
