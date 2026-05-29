@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import platform
 import secrets
 import time
 from datetime import datetime, timezone
@@ -174,10 +175,11 @@ async def queue_status(x_buffer_secret: Optional[str] = Header(None, alias="X-Bu
 
 @router.get("/health")
 async def health():
-    """Lightweight check to monitor service health.
+    """Comprehensive health check — supports external and internal monitoring.
 
-    V2: Adds server_time_epoch and server_time_iso for cross-server NTP drift
-    monitoring via ntp_monitor.py running on SERVER C.
+    V2: server_time_epoch + server_time_iso for NTP drift monitoring.
+    V2: hostname for multi-server identification in alerts.
+    V2: optional psutil system metrics (cpu, memory, disk).
     """
     now = time.time()
     uptime_s = int(now - _START_TIME)
@@ -185,10 +187,12 @@ async def health():
     status_data = {
         "status": "healthy",
         "uptime_seconds": uptime_s,
-        "server_time_epoch": now,                                      # V2: NTP check
-        "server_time_iso": datetime.now(timezone.utc).isoformat(),    # V2: NTP check
+        "server_time_epoch": now,
+        "server_time_iso": datetime.now(timezone.utc).isoformat(),
+        "hostname": platform.node(),
     }
 
+    # Database check
     try:
         pending_count = await database.get_pending_count()
         status_data["db"] = "ok"
@@ -197,5 +201,16 @@ async def health():
         status_data["status"] = "degraded"
         status_data["db"] = f"error: {str(e)}"
         status_data["pending_count"] = 0
+
+    # System resources (psutil optional — not required in slim containers)
+    try:
+        import psutil
+        status_data["system"] = {
+            "cpu_percent":    psutil.cpu_percent(interval=0),
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_percent":   psutil.disk_usage("/").percent,
+        }
+    except Exception:
+        pass  # psutil not installed or platform unsupported
 
     return status_data

@@ -28,6 +28,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   analyzer:
     build:
@@ -56,6 +61,17 @@ services:
       - AI_PROVIDER=${AI_PROVIDER:-anthropic}
       - RISK_PER_TRADE=${RISK_PER_TRADE:-0.02}
       - STOP_LOSS_PCT=${STOP_LOSS_PCT:-0.08}
+      # V2 Hardening — Logging & Monitoring
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/analyzer.log
+      - LOG_MAX_SIZE_MB=${LOG_MAX_SIZE_MB:-10}
+      - LOG_BACKUP_COUNT=${LOG_BACKUP_COUNT:-5}
+      - SERVER_A_HEALTH_URL=http://${SERVER_A_IP}:5000/health
+      - SERVER_B_HEALTH_URL=http://${SERVER_B_IP}:5002/health
+      - NTP_DRIFT_THRESHOLD_MS=${NTP_DRIFT_THRESHOLD_MS:-500}
+      - DISK_WARNING_THRESHOLD_PCT=${DISK_WARNING_THRESHOLD_PCT:-80}
+      - DISK_CRITICAL_THRESHOLD_PCT=${DISK_CRITICAL_THRESHOLD_PCT:-90}
+      - LIVENESS_ALERT_AFTER_FAILURES=${LIVENESS_ALERT_AFTER_FAILURES:-2}
     networks:
       - analyzer
     healthcheck:
@@ -76,6 +92,11 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   chroma_data:

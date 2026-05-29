@@ -145,7 +145,69 @@ def create_scheduler() -> AsyncIOScheduler:
     else:
         logger.info("[Scheduler] BRIEF_ENABLED=false — no scheduled brief")
 
+    # ── V2 Hardened: Monitoring Jobs ──────────────────────────────────────────
+    # Only register when running in ANALYZER_MODE (SERVER C).
+    # Gracefully skip if monitor modules are absent (e.g. on local Windows dev).
+
+    import os as _os
+    if _os.getenv("ANALYZER_MODE", "").lower() == "true":
+        _register_monitoring_jobs(scheduler)
+
     return scheduler
+
+
+def _register_monitoring_jobs(scheduler: AsyncIOScheduler) -> None:
+    """Register V2 monitoring APScheduler jobs on SERVER C."""
+
+    # ── Liveness monitor: check SERVER A & B every 5 minutes ──────────────────
+    try:
+        from workers.liveness_monitor import run_liveness_check
+        scheduler.add_job(
+            run_liveness_check,
+            trigger="interval",
+            minutes=5,
+            id="liveness_check",
+            name="Cross-server Liveness Check (A + B from C)",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        logger.info("[Scheduler] V2: Liveness monitor scheduled every 5 min")
+    except ImportError:
+        logger.warning("[Scheduler] V2: liveness_monitor not found — skipping")
+
+    # ── Disk space monitor: check every 30 minutes ────────────────────────────
+    try:
+        from workers.disk_monitor import check_disk_usage
+        scheduler.add_job(
+            check_disk_usage,
+            trigger="interval",
+            minutes=30,
+            id="disk_monitor",
+            name="Disk Space Monitor",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        logger.info("[Scheduler] V2: Disk monitor scheduled every 30 min")
+    except ImportError:
+        logger.warning("[Scheduler] V2: disk_monitor not found — skipping")
+
+    # ── NTP / clock drift monitor: check every 5 minutes ─────────────────────
+    try:
+        from workers.ntp_monitor import check_clock_drift
+        scheduler.add_job(
+            check_clock_drift,
+            trigger="interval",
+            minutes=5,
+            id="ntp_monitor",
+            name="Cross-server Clock Drift Monitor",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        logger.info("[Scheduler] V2: NTP drift monitor scheduled every 5 min")
+    except ImportError:
+        logger.warning("[Scheduler] V2: ntp_monitor not found — skipping")
+
+
 
 
 def get_scheduler() -> AsyncIOScheduler | None:
