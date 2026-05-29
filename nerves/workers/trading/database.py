@@ -157,6 +157,7 @@ async def init_db():
             "ALTER TABLE trades ADD COLUMN order_type TEXT DEFAULT 'MARKET'",
             "ALTER TABLE trades ADD COLUMN combined_score TEXT",
             "ALTER TABLE trades ADD COLUMN exchange TEXT DEFAULT 'binance'",
+            "ALTER TABLE trades ADD COLUMN vbs_queue_id INTEGER",
         ]:
             try:
                 await db.execute(col_def)
@@ -183,6 +184,13 @@ async def init_db():
             await db.commit()
         except Exception:
             pass  # Column already exists
+
+        # VPS Buffer: Add vbs_queue_id column to signals
+        try:
+            await db.execute("ALTER TABLE signals ADD COLUMN vbs_queue_id INTEGER")
+            await db.commit()
+        except Exception:
+            pass
 
     log.info(f"Database initialized: {config.DB_PATH}")
 

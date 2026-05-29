@@ -153,6 +153,26 @@ async def init_vector_db() -> bool:
         log.error("RAG unavailable: chromadb not installed.")
         return False
 
+    # ── Remote ChromaDB (Phase 4: 3-Server Pipeline) ─────────────────────
+    if getattr(config, "CHROMA_REMOTE", False):
+        import chromadb
+        _chroma_client = chromadb.HttpClient(
+            host=config.CHROMA_SERVER_HOST,
+            port=config.CHROMA_SERVER_PORT,
+        )
+        ef = _get_embedding_function()
+        _collection = _chroma_client.get_or_create_collection(
+            name="minervini_knowledge",
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+        log.info(
+            f"RAG: Connected to remote ChromaDB at "
+            f"{config.CHROMA_SERVER_HOST}:{config.CHROMA_SERVER_PORT}"
+        )
+        return True
+
+    # ── Local PersistentClient (default) ─────────────────────────────────
     knowledge_dir = Path(config.KNOWLEDGE_DIR)
     if not knowledge_dir.exists():
         log.error(f"RAG: Knowledge dir not found: {knowledge_dir}")

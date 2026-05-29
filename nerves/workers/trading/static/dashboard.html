@@ -295,6 +295,10 @@
               <span class="health-dot" id="hd-binance"></span>
               <span class="health-label">RAG</span>
             </div>
+            <div class="health-item">
+              <span class="health-dot" id="hd-vbs"></span>
+              <span class="health-label">VBS Queue</span>
+            </div>
           </div>
         </section>
 
@@ -985,6 +989,17 @@
     <div id="statusGrid" class="status-grid">
       <div class="loading"><div class="spinner"></div></div>
     </div>
+
+    <!-- VPS Buffer Queue Status Panel -->
+    <section class="glass-section mt-20" id="vbsStatusPanel">
+      <div class="section-header">
+        <div class="section-title">📦 VPS Buffer Queue Status</div>
+        <button class="qbtn btn-sm-3" onclick="refreshVBSStatus()">🔄 Refresh</button>
+      </div>
+      <div id="vbsStatusContent" class="vision-status-grid">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </section>
 
     <!-- CDP Vision Status -->
     <section class="glass-section mt-20" >

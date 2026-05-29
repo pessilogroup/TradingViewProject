@@ -300,9 +300,35 @@ async def lifespan(app: FastAPI):
     else:
         log.info("Claude SDK: TẮT (CLAUDE_CLI_ENABLED=false). Property 8 — no SDK, no handlers.")
 
+    # ── VPS Buffer Consumer (VBS) ──────────────────────────────────
+    if config.VPS_BUFFER_ENABLED:
+        try:
+            from workers.vps_consumer import VpsSignalConsumer
+            vps_consumer = VpsSignalConsumer()
+            app.state.vps_consumer = vps_consumer
+            
+            # Startup recovery: drains queue
+            await vps_consumer.on_startup()
+            
+            # Start background polling loop
+            app.state.vps_consumer_task = asyncio.create_task(vps_consumer.poll_loop())
+            log.info("VPS Buffer Consumer: ✅ Running background poller.")
+        except Exception as vbs_err:
+            log.exception(f"VPS Buffer Consumer: ⚠️ Initialization failed: {vbs_err}")
+
     yield
 
     # ── Shutdown ──────────────────────────────────────────────
+    # Stop VBS Consumer background task
+    if hasattr(app.state, 'vps_consumer_task'):
+        app.state.vps_consumer_task.cancel()
+        try:
+            await app.state.vps_consumer_task
+        except asyncio.CancelledError:
+            pass
+    if hasattr(app.state, 'vps_consumer'):
+        await app.state.vps_consumer.close()
+
     # Stop Capture Daemon first (long-running child process)
     if hasattr(app.state, 'daemon_manager'):
         await app.state.daemon_manager.stop()
@@ -469,6 +495,33 @@ async def mcp_status():
     mcp = _mcp_module.get_mcp_client()
     health = await mcp.health_check()
     return {"enabled": True, **health}
+
+
+# ── VPS Buffer Queue Status ───────────────────────────────────
+@app.get("/api/queue-status")
+async def get_queue_status():
+    """Proxy queue status request to VPS Buffer Service."""
+    if not config.VPS_BUFFER_ENABLED or not config.VPS_BUFFER_URL:
+        return {"enabled": False, "summary": {"pending": 0, "dispatched": 0, "acked_today": 0, "stale_today": 0}}
+        
+    url = f"{config.VPS_BUFFER_URL}/queue-status"
+    headers = {
+        "X-Buffer-Secret": config.VPS_BUFFER_SECRET
+    }
+    
+    import aiohttp
+    import socket
+    conn = aiohttp.TCPConnector(family=socket.AF_INET)
+    try:
+        async with aiohttp.ClientSession(connector=conn) as session:
+            async with session.get(url, headers=headers, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return {"enabled": True, **data}
+                else:
+                    return {"enabled": True, "error": f"VPS HTTP {response.status}", "summary": {"pending": 0, "dispatched": 0, "acked_today": 0, "stale_today": 0}}
+    except Exception as e:
+        return {"enabled": True, "error": str(e), "summary": {"pending": 0, "dispatched": 0, "acked_today": 0, "stale_today": 0}}
 
 
 # ═══ P6: WATCHLIST CRUD ═══════════════════════════════════════
@@ -1639,6 +1692,31 @@ async def system_status_endpoint():
     except Exception:
         pass
 
+    # VBS status
+    vbs_status = {"enabled": False, "connected": False, "pending_count": 0}
+    if config.VPS_BUFFER_ENABLED and config.VPS_BUFFER_URL:
+        try:
+            url = f"{config.VPS_BUFFER_URL}/health"
+            headers = {"X-Buffer-Secret": config.VPS_BUFFER_SECRET}
+            import aiohttp
+            import socket
+            conn = aiohttp.TCPConnector(family=socket.AF_INET)
+            async with aiohttp.ClientSession(connector=conn) as session:
+                async with session.get(url, headers=headers, timeout=2.0) as resp:
+                    if resp.status == 200:
+                        h_data = await resp.json()
+                        vbs_status = {
+                            "enabled": True,
+                            "connected": True,
+                            "pending_count": h_data.get("pending_count", 0),
+                            "db": h_data.get("db", "unknown"),
+                            "uptime": h_data.get("uptime_seconds", 0)
+                        }
+                    else:
+                        vbs_status = {"enabled": True, "connected": False, "error": f"HTTP {resp.status}"}
+        except Exception as e:
+            vbs_status = {"enabled": True, "connected": False, "error": str(e)}
+
     return {
         "server": {
             "version": "7.6",
@@ -1663,6 +1741,7 @@ async def system_status_endpoint():
         "health_database": health_database,
         "test_runner_status": test_runner_status,
         "last_test_run": last_test_run,
+        "vbs": vbs_status,
     }
 
 

@@ -387,6 +387,9 @@ async function loadSystemStatus() {
   updateCDPBadge(mcp);
   updateProtectionStatus(data.protection || {});
   loadWebhookLog();
+  if (typeof refreshVBSStatus === 'function') {
+    refreshVBSStatus();
+  }
 }
 
 function updateCDPBadge(mcp) {
@@ -541,5 +544,76 @@ async function init() {
   const el = document.getElementById(id);
   if (el) el.addEventListener('input', updateRR);
 });
+
+async function refreshVBSStatus() {
+  const el = document.getElementById('vbsStatusContent');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await apiFetch('/api/queue-status');
+  if (!data) {
+    el.innerHTML = '<p class="muted-label">Không thể kết nối VPS Buffer Service</p>';
+    return;
+  }
+  if (!data.enabled) {
+    el.innerHTML = `
+      <div class="status-card-val text-muted" style="grid-column: 1 / -1; padding: 20px; text-align: center;">
+        VPS Buffer Service (VBS) is disabled. Set <code>VPS_BUFFER_ENABLED=true</code> to enable queueing.
+      </div>
+    `;
+    return;
+  }
+  
+  if (data.error) {
+    el.innerHTML = `
+      <div class="status-card-val status-warn" style="grid-column: 1 / -1; padding: 20px; text-align: center;">
+        Lỗi kết nối VPS: ${data.error}
+      </div>
+    `;
+    return;
+  }
+
+  const s = data.summary || {};
+  const oldestStr = s.oldest_pending_age_minutes !== null ? `${Math.round(s.oldest_pending_age_minutes)}m` : '—';
+  
+  let signalsHtml = '';
+  if (data.pending_signals && data.pending_signals.length > 0) {
+    signalsHtml = data.pending_signals.map(sig => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 4px; border: 1px solid rgba(255,255,255,0.04); font-size: 0.8rem; font-family: var(--mono)">
+        <div>
+          <span class="badge ${sig.action === 'buy' ? 'badge-buy' : 'badge-sell'}">${sig.action.toUpperCase()}</span>
+          <strong>${sig.symbol}</strong>
+          <span style="opacity:0.5; margin-left:8px">ID #${sig.queue_id}</span>
+        </div>
+        <div>
+          <span style="opacity:0.6">Nhận lúc: ${sig.received_at}</span>
+          <span style="color:var(--warn); margin-left:12px">TTL: ${Math.round(sig.ttl_remaining_minutes)}m</span>
+        </div>
+      </div>
+    `).join('');
+  } else {
+    signalsHtml = '<div style="text-align:center; padding: 12px; opacity:0.5">Không có signal nào đang chờ xử lý</div>';
+  }
+
+  el.innerHTML = `
+    <div style="grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+      <div class="status-card" style="margin:0"><div class="status-card-icon">📥</div><div class="status-card-body">
+        <div class="status-card-name">Pending Queue</div><div class="status-card-val ${s.pending > 0 ? 'status-warn' : 'status-ok'}">${s.pending} signals</div></div></div>
+      <div class="status-card" style="margin:0"><div class="status-card-icon">⚡</div><div class="status-card-body">
+        <div class="status-card-name">Dispatched</div><div class="status-card-val">${s.dispatched} signals</div></div></div>
+      <div class="status-card" style="margin:0"><div class="status-card-icon">✅</div><div class="status-card-body">
+        <div class="status-card-name">ACKed Today</div><div class="status-card-val status-ok">${s.acked_today} signals</div></div></div>
+      <div class="status-card" style="margin:0"><div class="status-card-icon">❌</div><div class="status-card-body">
+        <div class="status-card-name">Stale Today</div><div class="status-card-val ${s.stale_today > 0 ? 'status-warn' : 'status-ok'}">${s.stale_today} signals</div></div></div>
+      <div class="status-card" style="margin:0"><div class="status-card-icon">⏱️</div><div class="status-card-body">
+        <div class="status-card-name">Oldest Pending</div><div class="status-card-val">${oldestStr}</div></div></div>
+    </div>
+    <div style="grid-column: 1 / -1;">
+      <div class="section-title mb-8" style="font-size:0.85rem">📋 Pending Signals in Queue</div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        ${signalsHtml}
+      </div>
+    </div>
+  `;
+}
 
 document.addEventListener('DOMContentLoaded', init);

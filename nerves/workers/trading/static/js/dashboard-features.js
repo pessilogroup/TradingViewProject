@@ -1422,15 +1422,17 @@ async function loadOverviewHealth() {
   try {
     const status = await apiFetch('/api/system/status');
     if (status) {
-      // Actual schema: mcp.connected, telegram_bot.enabled, rag.enabled
+      // Actual schema: mcp.connected, telegram_bot.enabled, rag.enabled, vbs.connected
       setDot('hd-mcp',      status.mcp?.connected  ? 'ok' : 'err');
       setDot('hd-telegram', status.telegram_bot?.enabled ? 'ok' : 'warn');
       setDot('hd-binance',  status.rag?.enabled ? 'ok' : 'warn');  // use RAG as 4th indicator
+      setDot('hd-vbs',      status.vbs?.connected ? 'ok' : (status.vbs?.enabled ? 'err' : 'warn'));
     }
   } catch(e) {
     setDot('hd-mcp', 'err');
     setDot('hd-telegram', 'err');
     setDot('hd-binance', 'err');
+    setDot('hd-vbs', 'err');
   }
 }
 

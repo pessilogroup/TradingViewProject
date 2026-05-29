@@ -1,0 +1,18 @@
+services:
+  vbs:
+    build: ./vbs
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - vbs-data:/app/data
+    env_file: vbs/.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  vbs-data:
+    name: vbs-signal-queue
