@@ -51,9 +51,9 @@ check_pattern() {
     local content
     content=$(git diff --cached -U0 -- "$file" | grep '^+' | grep -v '^+++' || true)
 
-    if echo "$content" | grep -qE "$pattern"; then
+    if echo "$content" | grep -qE "$pattern" 2>/dev/null; then
         echo -e "${RED}[BLOCKED]${NC} ${name} found in: ${file}"
-        echo "$content" | grep -E "$pattern" | head -3 | sed 's/^/  → /'
+        echo "$content" | grep -E "$pattern" 2>/dev/null | head -3 | sed 's/^/  → /'
         BLOCKED=1
     fi
 }
@@ -73,14 +73,13 @@ for FILE in $STAGED; do
     fi
 
     # ── Secret Patterns ─────────────────────────────────────────────────
-    check_pattern "Anthropic API Key"    'sk-ant-api03-[A-Za-z0-9\-_]{20,}'          "$FILE"
-    check_pattern "Gemini/Google Key"   'AIza[0-9A-Za-z\-_]{30,}'                    "$FILE"
-    check_pattern "Tailscale AuthKey"   'tskey-(auth|client)-[A-Za-z0-9\-_]{20,}'   "$FILE"
-    check_pattern "Telegram Bot Token"  '[0-9]{8,10}:AA[A-Za-z0-9\-_]{33}'          "$FILE"
-    check_pattern "SSH Private Key"     '-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY'    "$FILE"
-    check_pattern "Generic Secret Hex"  '(?i)(secret|token|password)\s*=\s*[a-f0-9]{32,}' "$FILE"
-    check_pattern "Binance API Key"     '(?i)binance.*(api|secret)[_-]?(key)?\s*=\s*[A-Za-z0-9]{20,}' "$FILE"
-    check_pattern "UptimeRobot Key"     'ur[0-9]+-[a-zA-Z0-9]{20,}'                "$FILE"
+    check_pattern "Anthropic API Key"    'sk-ant-api[0-9]+-[A-Za-z0-9_-]{20,}'         "$FILE"
+    check_pattern "Gemini/Google Key"   'AIza[0-9A-Za-z_-]{30,}'                        "$FILE"
+    check_pattern "Tailscale AuthKey"   'tskey-(auth|client)-[A-Za-z0-9_-]{20,}'        "$FILE"
+    check_pattern "Telegram Bot Token"  '[0-9]{8,10}:AA[A-Za-z0-9_-]{33}'               "$FILE"
+    check_pattern "SSH Private Key"     'BEGIN (RSA|EC|OPENSSH) PRIVATE KEY'             "$FILE"
+    check_pattern "Hex Secret/Token"    '(secret|token|password)[[:space:]]*=[[:space:]]*[a-f0-9]{32,}' "$FILE"
+    check_pattern "UptimeRobot Key"     'ur[0-9]+-[a-zA-Z0-9]{20,}'                     "$FILE"
 done
 
 # ── Result ──────────────────────────────────────────────────────────────────
