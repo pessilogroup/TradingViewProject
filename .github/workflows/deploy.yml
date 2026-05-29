@@ -62,7 +62,7 @@ jobs:
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          python -m pytest tests/ -v --tb=short
+          python -m pytest tests/ -n auto --tb=short
 
   # ── 2. CONTINUOUS DEPLOYMENT (CD) ────────────────────────────────────
   continuous-deployment:
