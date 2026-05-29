@@ -129,6 +129,8 @@ CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(cre
 -- Composite indexes for frequent query patterns
 CREATE INDEX IF NOT EXISTS idx_ind_sig_date_sym  ON indicator_signals(created_at, symbol);
 CREATE INDEX IF NOT EXISTS idx_ind_sig_sym_type  ON indicator_signals(symbol, signal_type);
+-- Covering index: feed query WHERE symbol=? ORDER BY created_at DESC LIMIT n
+CREATE INDEX IF NOT EXISTS idx_ind_sig_sym_date  ON indicator_signals(symbol, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,

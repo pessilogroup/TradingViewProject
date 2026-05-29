@@ -1,5 +1,21 @@
 // ═══ INDICATORS TAB — USE /api/scan/trigger ═══
 let indVersion = 'v1';
+
+// ── Capture Studio live chart state ──────────────────────────────────────────
+let _csLiveTimer    = null;   // interval handle for 30s auto-refresh
+let _captureRunning = false;  // prevent concurrent captures
+let _csChart        = null;   // LightweightCharts instance
+let _csCandleSeries = null;   // candleSeries reference
+let _csEma9Series   = null;
+let _csEma21Series  = null;
+let _csEma50Series  = null;
+let _csBollUpper    = null;
+let _csBollLower    = null;
+let _csVolSeries    = null;
+let _csLastSymbol   = null;
+let _csLastInterval = null;
+let _csDebounceTimer = null;
+
 function setIndVersion(v) {
   indVersion = v;
   const p1 = document.getElementById('pill-v1');

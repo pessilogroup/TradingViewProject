@@ -5,13 +5,15 @@
 
 /* ── State ───────────────────────────────────────────────────────── */
 const SIG = {
-  page:      0,
-  pageSize:  20,
-  total:     0,
-  typeFilter: '',
+  page:          0,
+  pageSize:      20,
+  total:         0,
+  typeFilter:    '',
   debounceTimer: null,
-  chart:     null,
-  activeSymbol: 'BTCUSDT',
+  chart:         null,
+  activeSymbol:  'BTCUSDT',
+  _statsLoading: false,    // prevent duplicate stats calls
+  _initDone:     false,    // prevent re-init when switching tabs quickly
 };
 
 /* ── SSE connection ───────────────────────────────────────────────── */
@@ -59,12 +61,22 @@ function stopSignalsSSE() {
 
 /* ── Bootstrap: called by switchTab('signals') ───────────────────── */
 async function initSignalsTab() {
-  // Run feed + stats in parallel — don't wait for one before starting other
-  await Promise.all([
-    loadSignalFeedOnly(),
-    loadSignalStats(null),
-    loadWatchlist(),
-  ]);
+  // PERF FIX: Fire all 3 in true parallel.
+  // Feed shows data first (fast indexed query).
+  // Stats + watchlist fill in behind the scenes — no blocking wait.
+  const feedPromise  = loadSignalFeedOnly();
+  const statsPromise = loadSignalStats(null);  // null = unfiltered, fast enough for first paint
+  const wlPromise    = loadWatchlist();
+
+  // Await feed only — user sees signal cards immediately
+  await feedPromise;
+
+  // Stats + watchlist resolve in background (already running, just not awaited)
+  // No need to await — they update DOM independently when done
+  Promise.all([statsPromise, wlPromise]).catch(e =>
+    console.warn('[Signals] Background init error:', e)
+  );
+
   startSignalsSSE();
 }
 
@@ -155,14 +167,13 @@ async function loadSignalStats(symbol) {
 
 /* ── Load signal feed (data rows only) ──────────────────────────── */
 async function loadSignalFeedOnly() {
-  const symbol    = (document.getElementById('sigSymbolFilter')?.value || '').trim();
-  const indName   = (document.getElementById('sigNameFilter')?.value   || '').trim();
-  const offset    = SIG.page * SIG.pageSize;
+  const symbol  = (document.getElementById('sigSymbolFilter')?.value || '').trim();
+  const indName = (document.getElementById('sigNameFilter')?.value   || '').trim();
+  const offset  = SIG.page * SIG.pageSize;
 
+  // I2 FIX: only sync the symbol select — don't touch indSelect here
   const symSelect = document.getElementById('sigChartSymbolSelect');
   if (symSelect) symSelect.value = symbol.toUpperCase();
-  const indSelect = document.getElementById('sigChartIndicatorSelect');
-  if (indSelect) indSelect.value = indName;
 
   const params = new URLSearchParams({ limit: SIG.pageSize, offset });
   if (symbol)         params.set('symbol',         symbol.toUpperCase());
@@ -174,7 +185,18 @@ async function loadSignalFeedOnly() {
 
   try {
     const res = await apiFetch(`/api/indicator-signals?${params}`);
-    if (!res) return;
+
+    // BUG FIX: clear spinner on null (auth error / server error)
+    if (!res) {
+      if (feedList) feedList.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">⚠️</div>
+          <h3>Could not load signals</h3>
+          <p style="font-size:0.8rem;color:#64748b;">Server error or session expired.</p>
+          <button onclick="loadSignals()" style="margin-top:8px;padding:6px 16px;border-radius:8px;background:#3b82f6;color:#fff;border:none;cursor:pointer;font-size:0.8rem;">🔄 Retry</button>
+        </div>`;
+      return;
+    }
 
     SIG.total = res.total;
     setText('sigFeedCount', `${res.total.toLocaleString()} signal${res.total !== 1 ? 's' : ''}`);
@@ -184,6 +206,7 @@ async function loadSignalFeedOnly() {
     const firstEntry = (res.signals || []).find(s => s.signal_type === 'entry');
     if (firstEntry) renderRiskPanel(firstEntry);
 
+    // I3 FIX: resolve activeSymbol so callers can use it for stats
     let activeSymbol = symbol.trim();
     if (!activeSymbol && res.signals && res.signals.length > 0) {
       activeSymbol = res.signals[0].symbol;
@@ -191,18 +214,18 @@ async function loadSignalFeedOnly() {
     SIG.activeSymbol = (activeSymbol || 'BTCUSDT').toUpperCase();
   } catch (e) {
     console.error('[Signals] Feed error:', e);
-    if (feedList) feedList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading signals</h3></div>`;
+    if (feedList) feedList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading signals</h3><button onclick="loadSignals()" style="margin-top:8px;padding:6px 16px;border-radius:8px;background:#3b82f6;color:#fff;border:none;cursor:pointer;font-size:0.8rem;">🔄 Retry</button></div>`;
   }
 }
 
 /* ── Load signal feed + stats together (for filter/pagination updates) ── */
 async function loadSignals() {
-  // Fire feed rows and stats in parallel
-  const symbol = (document.getElementById('sigSymbolFilter')?.value || '').trim();
-  await Promise.all([
-    loadSignalFeedOnly(),
-    loadSignalStats(symbol.toUpperCase() || null),
-  ]);
+  // I3 FIX: feed first to get SIG.activeSymbol, then stats with correct symbol
+  const filterSym = (document.getElementById('sigSymbolFilter')?.value || '').trim().toUpperCase();
+  await loadSignalFeedOnly();
+  // Use explicit filter if provided, otherwise use the symbol resolved from first signal
+  const statsSym = filterSym || SIG.activeSymbol || null;
+  await loadSignalStats(statsSym);
 }
 
 /* ── Render single signal card HTML ──────────────────────────────── */
@@ -1054,7 +1077,15 @@ function renderSignalFeed(signals) {
 
 /* ── Render donut chart ──────────────────────────────────────────── */
 /* ── Render Candlestick Chart ────────────────────────────────────── */
-async function loadCandleChart(symbol) {
+/* ── Candle chart debounce timer ───────────────────────────── */
+let _candleChartTimer = null;
+function loadCandleChart(symbol) {
+  // I4 FIX: debounce — avoid calling Binance API on every rapid symbol change
+  clearTimeout(_candleChartTimer);
+  _candleChartTimer = setTimeout(() => _loadCandleChartNow(symbol), 300);
+}
+
+async function _loadCandleChartNow(symbol) {
   const canvas = document.getElementById('sigTypeChart');
   if (!canvas) return;
 

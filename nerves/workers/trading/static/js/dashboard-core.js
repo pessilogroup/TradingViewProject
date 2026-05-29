@@ -120,13 +120,25 @@ function switchTab(name) {
 // ═══ API FETCH ═══
 async function apiFetch(url, opts = {}) {
   try {
-    const res = await fetch(API_BASE + url, { headers: headers(), ...opts });
-    if (res.status === 401) {
-      document.getElementById('loginOverlay').style.display = 'flex';
-      document.getElementById('loginError').style.display = 'block';
+    const res = await fetch(API_BASE + url, {
+      credentials: 'include',           // always send session cookie
+      headers: headers(),
+      ...opts,
+    });
+
+    // Auth failures: 401 or redirect to login page
+    if (res.status === 401 || res.redirected && res.url.includes('auth/login') || res.url.includes('auth/login')) {
+      const overlay = document.getElementById('loginOverlay');
+      if (overlay) overlay.style.display = 'flex';
+      const errEl = document.getElementById('loginError');
+      if (errEl) { errEl.textContent = 'Session expired. Please re-authenticate.'; errEl.style.display = 'block'; }
       return null;
     }
-    if (!res.ok) return null;
+
+    if (!res.ok) {
+      console.warn('[apiFetch] Non-OK response:', res.status, url);
+      return null;
+    }
     return await res.json();
   } catch (e) {
     console.error('API error:', url, e);

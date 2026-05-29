@@ -35,6 +35,28 @@ import json as _json
 
 _sse_clients: set[asyncio.Queue] = set()   # one Queue per connected browser tab
 
+# ── Stats TTL cache (30s) — avoids repeated full-table GROUP BY scans ─────────
+import time as _time
+_stats_cache: dict[tuple, tuple] = {}   # key=(symbol,ind_name) → (result, expire_at)
+_STATS_TTL = 30.0   # seconds
+
+
+def _stats_cache_get(key: tuple):
+    entry = _stats_cache.get(key)
+    if entry and _time.monotonic() < entry[1]:
+        return entry[0]
+    _stats_cache.pop(key, None)
+    return None
+
+
+def _stats_cache_set(key: tuple, value: dict) -> None:
+    _stats_cache[key] = (value, _time.monotonic() + _STATS_TTL)
+    # Prune stale entries (keep cache small)
+    if len(_stats_cache) > 50:
+        now = _time.monotonic()
+        for k in [k for k, (_, exp) in list(_stats_cache.items()) if exp < now]:
+            _stats_cache.pop(k, None)
+
 
 def push_sse_event(event_type: str, data: dict) -> None:
     """Broadcast an SSE event to ALL currently connected browser clients.
@@ -306,9 +328,26 @@ app.include_router(_auth_router)
 # ── P10: AuthMiddleware (replaces legacy dashboard_auth_middleware) ───────────
 app.add_middleware(AuthMiddleware, auth_service=getattr(app.state, 'auth_service', None))
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# ── No-cache override for JS files — MUST be declared BEFORE app.mount ───────
+@app.get("/static/js/{filename:path}")
+async def serve_js_nocache(filename: str):
+    """Serve JS with no-cache headers so browser always fetches latest version."""
+    js_path = STATIC_DIR / "js" / filename
+    if not js_path.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(
+        path=str(js_path),
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma":        "no-cache",
+            "Expires":       "0",
+        },
+    )
 
+
+# Mount static files (AFTER specific routes so /static/js/* route wins)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ═══ MIDDLEWARE: IP WHITELISTING ══════════════════════════════
 # SEC-001 fix: Use the RIGHTMOST entry of X-Forwarded-For (appended by our
@@ -714,38 +753,32 @@ async def get_indicator_signals(
         conditions.append("signal_type = ?")
         params.append(signal_type.lower())
     if indicator_name:
+        # PREFIX match (not '%x%') so idx_indicator_signals_name index is usable
         conditions.append("indicator_name LIKE ?")
-        params.append(f"%{indicator_name}%")
+        params.append(f"{indicator_name}%")
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params_tuple = tuple(params)
 
-    import aiosqlite
+    import aiosqlite, json as _json
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        # Total count
-        count_row = await db.execute_fetchall(
-            f"SELECT COUNT(*) AS cnt FROM indicator_signals {where_clause}",
-            params_tuple,
-        )
-        total = count_row[0]["cnt"] if count_row else 0
-
-        # Paginated rows
+        # Single query: window function gives total count + paginated rows in one pass
         rows = await db.execute_fetchall(
             f"""
             SELECT id, signal_id, created_at, symbol, indicator_name,
                    signal_type, interval, price, confidence_score,
-                   conditions_met, metadata, source_ip, exchange
+                   conditions_met, metadata, source_ip, exchange,
+                   COUNT(*) OVER() AS _total
             FROM indicator_signals
             {where_clause}
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
-            params_tuple + (limit, offset),
+            params + [limit, offset],
         )
 
-    import json as _json
+    total = rows[0]["_total"] if rows else 0
     signals = []
     for r in rows:
         try:
@@ -925,6 +958,44 @@ async def get_indicator_signals_stats(
     """KPI stats for the Signals dashboard: total, by type, avg confidence, top indicators, direction mix."""
     import aiosqlite
 
+    sym_key = (symbol or '').upper()
+    ind_key = (indicator_name or '').strip()
+    cache_key = (sym_key, ind_key)
+
+    # ── Fast path: return cached result if fresh ──────────────────────────────
+    cached = _stats_cache_get(cache_key)
+    if cached is not None:
+        # direction_mix is always live (last-5-min window) — refresh it quickly
+        try:
+            async with aiosqlite.connect(config.DB_PATH) as _db:
+                _db.row_factory = aiosqlite.Row
+                dir_q = (
+                    "SELECT json_extract(metadata, '$.direction') AS direction, "
+                    "signal_type, COUNT(*) AS cnt, AVG(price) AS avg_price "
+                    "FROM indicator_signals WHERE created_at >= datetime('now', '-5 minutes') "
+                )
+                dir_p: list = []
+                if symbol:
+                    dir_q += "AND symbol = ? "; dir_p.append(symbol.upper())
+                if indicator_name:
+                    dir_q += "AND indicator_name = ? "; dir_p.append(indicator_name)
+                dir_q += "GROUP BY direction, signal_type LIMIT 20"
+                dir_rows = await _db.execute_fetchall(dir_q, dir_p)
+
+            direction_mix = {
+                "long":  {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+                "short": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+            }
+            for r in dir_rows:
+                d = (r["direction"] or "long").lower()
+                if d not in ("long", "short"): d = "long"
+                st = r["signal_type"]
+                if st in ("entry", "exit"):
+                    direction_mix[d][st] = {"count": r["cnt"], "avg_price": round(r["avg_price"] or 0.0, 2)}
+            return {**cached, "direction_mix": direction_mix}
+        except Exception:
+            return cached  # fallback to fully-cached response on error
+
     # Build shared WHERE clause once
     conditions: list[str] = []
     params: list = []
@@ -1015,7 +1086,7 @@ async def get_indicator_signals_stats(
                 "avg_price": round(r["avg_price"] or 0.0, 2),
             }
 
-    return {
+    result = {
         "total":             total_all,
         "by_type":           by_type,
         "avg_confidence":    overall_conf,
@@ -1025,6 +1096,9 @@ async def get_indicator_signals_stats(
         "direction_mix":     direction_mix,
         "market_regime":     market_regime,
     }
+    # Cache everything except direction_mix (direction_mix is live on cache hits)
+    _stats_cache_set(cache_key, {k: v for k, v in result.items() if k != "direction_mix"})
+    return result
 
 
 # ═══ RAG TEST ENDPOINT ════════════════════════════════════════
