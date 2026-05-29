@@ -19,11 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Check for code changes
+      - name: Check for changes
         id: filter
         uses: dorny/paths-filter@v3
         with:
@@ -32,6 +33,12 @@ jobs:
               - 'nerves/workers/trading/**'
               - 'Dockerfile'
               - 'pine/**'
+              - '.github/workflows/**'
+            deploy:
+              - 'nerves/workers/trading/**'
+              - 'Dockerfile'
+              - 'deploy/**'
+              - 'vbs/**'
               - '.github/workflows/**'
 
   # ── 1A. LINT & SECURITY (Fast ~40s) ────────────────────────────────
@@ -154,9 +161,13 @@ jobs:
   # ── 2A. DEPLOY SERVER A (Gateway) ──────────────────────────────────
   deploy-server-a:
     name: Deploy Server A (Gateway)
-    needs: [ci-lint-security, ci-tests]
-
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [changes, ci-lint-security, ci-tests]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+      needs.changes.outputs.deploy == 'true' &&
+      (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
+      (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -224,8 +235,13 @@ jobs:
   # ── 2B. DEPLOY SERVER C (AI Core) ──────────────────────────────────
   deploy-server-c:
     name: Deploy Server C (AI Core)
-    needs: [ci-lint-security, ci-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [changes, ci-lint-security, ci-tests]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+      needs.changes.outputs.deploy == 'true' &&
+      (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
+      (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -306,8 +322,13 @@ jobs:
   # ── 2C. DEPLOY SERVER B (Execution Vault — Windows) ─────────────────
   deploy-server-b:
     name: Deploy Server B (Execution Vault)
-    needs: [ci-lint-security, ci-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [changes, ci-lint-security, ci-tests]
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' && github.event_name == 'push' &&
+      needs.changes.outputs.deploy == 'true' &&
+      (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
+      (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
