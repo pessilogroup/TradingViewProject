@@ -25,6 +25,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: |
+            nerves/workers/trading/requirements.txt
+            nerves/workers/trading/requirements-test.txt
 
       - name: Install Dependencies
         run: |
@@ -32,13 +35,21 @@ jobs:
           pip install -r server/requirements.txt
           pip install -r server/requirements-test.txt
 
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('nerves/workers/trading/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
       - name: Install Playwright Chromium Browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: Code Linting (Ruff)
-        run: |
-          pip install ruff
-          ruff check server/ --exit-zero
+        run: ruff check server/ --exit-zero
 
       - name: Security AST Scan
         run: |
