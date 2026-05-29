@@ -125,6 +125,8 @@ async def execute_trade(event: TradeApproved) -> None:
             )
             sl_price = clamped_sl
 
+    try:
+        tp_price = float(str(event.tp).replace(',', '')) if event.tp else None
         if tp_price is not None and tp_price <= 0.0:
             tp_price = None
     except (ValueError, TypeError):
