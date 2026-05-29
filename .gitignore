@@ -50,4 +50,4 @@ refactor_styles.py
 # SQLite temp files
 *.db-shm
 *.db-wal
-memory/V3_brain.db
+memory/*.db
