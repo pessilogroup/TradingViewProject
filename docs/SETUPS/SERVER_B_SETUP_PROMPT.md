@@ -43,6 +43,22 @@ New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled Tru
 
 # 4. Ép OpenSSH sử dụng PowerShell làm Shell mặc định (Thay vì cmd.exe)
 New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name "DefaultShell" -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
+
+# 5. Cấu hình SSH Public Key cho Administrator (Thêm Deploy Key GitHub Actions)
+$adminKeysFile = "C:\ProgramData\ssh\administrators_authorized_keys"
+$deployKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMVNH4cvW86zP84BLyQkOxW9GATWDQovGFn0imOVPLv"
+
+if (Test-Path $adminKeysFile) {
+    Add-Content -Path $adminKeysFile -Value $deployKey -Encoding utf8
+} else {
+    New-Item -ItemType File -Path $adminKeysFile -Force
+    [System.IO.File]::WriteAllLines($adminKeysFile, @($deployKey), [System.Text.Encoding]::UTF8)
+}
+
+# Sửa phân quyền (ACL) bắt buộc cho administrators_authorized_keys
+icacls.exe $adminKeysFile /inheritance:r
+icacls.exe $adminKeysFile /grant:r "NT AUTHORITY\SYSTEM:F"
+icacls.exe $adminKeysFile /grant:r "BUILTIN\Administrators:F"
 ```
 
 ---

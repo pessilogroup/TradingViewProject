@@ -101,9 +101,11 @@ ClientAliveCountMax 2
 X11Forwarding no
 EOF
 
-# Copy SSH key cho botuser
+# Copy SSH key cho botuser & thêm Deploy Key cho CI/CD Github Actions
 mkdir -p /home/botuser/.ssh
 cp ~/.ssh/authorized_keys /home/botuser/.ssh/
+# Thêm public key deploy để Github Actions có thể SSH vào deploy
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMVNH4cvW86zP84BLyQkOxW9GATWDQovGFn0imOVPLv" >> /home/botuser/.ssh/authorized_keys
 chown -R botuser:botuser /home/botuser/.ssh
 chmod 700 /home/botuser/.ssh
 chmod 600 /home/botuser/.ssh/authorized_keys
