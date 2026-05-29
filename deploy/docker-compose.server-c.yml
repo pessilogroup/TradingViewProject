@@ -58,7 +58,6 @@ services:
       - STOP_LOSS_PCT=${STOP_LOSS_PCT:-0.08}
     networks:
       - analyzer
-      - tailscale
     healthcheck:
       test:
         - "CMD"
@@ -83,5 +82,3 @@ volumes:
 
 networks:
   analyzer:
-  tailscale:
-    external: true

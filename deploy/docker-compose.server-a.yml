@@ -29,8 +29,6 @@ services:
       - DB_PATH=/app/data/signal_queue.db
     volumes:
       - vbs_data:/app/data
-    networks:
-      - tailscale
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
@@ -39,7 +37,3 @@ services:
 
 volumes:
   vbs_data:
-
-networks:
-  tailscale:
-    external: true

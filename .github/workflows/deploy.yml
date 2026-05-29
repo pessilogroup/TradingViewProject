@@ -8,11 +8,17 @@ on:
     branches:
       - main
 
+# Fix Node.js 20 deprecation warning — force all actions to use Node.js 24
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  # ── 1. CONTINUOUS INTEGRATION (CI) ───────────────────────────────────
-  continuous-integration:
-    name: Run Linting, Security Scan & Unit Tests
+  # ── 0. CHANGE DETECTION ────────────────────────────────────────────
+  changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -27,39 +33,21 @@ jobs:
               - 'Dockerfile'
               - 'pine/**'
               - '.github/workflows/**'
-            deploy_only:
-              - 'deploy/**'
-              - 'docs/**'
-              - '*.md'
 
-      # Hash toàn bộ source code để kiểm tra test đã pass với code giống hệt chưa
-      - name: Compute code hash for test cache
-        if: steps.filter.outputs.code == 'true'
-        id: code-hash
-        run: |
-          CODE_HASH=$(find nerves/workers/trading -type f -name '*.py' | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
-          echo "hash=$CODE_HASH" >> $GITHUB_OUTPUT
-          echo "📎 Code hash: $CODE_HASH"
-
-      # Kiểm tra cache: nếu hash code đã pass test trước đó → bypass
-      - name: Check test result cache
-        if: steps.filter.outputs.code == 'true'
-        id: test-cache
-        uses: actions/cache@v4
-        with:
-          path: .test-passed
-          key: test-passed-${{ steps.code-hash.outputs.hash }}
-
-      - name: Skip tests (cache hit — code unchanged)
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit == 'true'
-        run: echo "⚡ Tests already passed for this code hash. Skipping full test suite."
+  # ── 1A. LINT & SECURITY (Fast ~40s) ────────────────────────────────
+  ci-lint-security:
+    name: Lint & Security Scan
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Create server symlink
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
         run: ln -s nerves/workers/trading server
 
       - name: Set up Python 3.11
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -69,14 +57,71 @@ jobs:
             nerves/workers/trading/requirements-test.txt
 
       - name: Install Dependencies
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+          pip install -r server/requirements-test.txt
+
+      - name: Code Linting (Ruff)
+        run: ruff check server/ --exit-zero
+
+      - name: Security AST Scan
+        run: |
+          cd server
+          python -m security.cli scan || echo "Warning: Review security scan report"
+
+  # ── 1B. TESTS (Slow ~4min — skipped if cache hit) ──────────────────
+  ci-tests:
+    name: Run Test Suite (520+ Tests)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Hash source code để bypass nếu test đã pass cho code giống hệt
+      - name: Compute code hash for test cache
+        id: code-hash
+        run: |
+          CODE_HASH=$(find nerves/workers/trading -type f -name '*.py' | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+          echo "hash=$CODE_HASH" >> $GITHUB_OUTPUT
+          echo "📎 Code hash: $CODE_HASH"
+
+      - name: Check test result cache
+        id: test-cache
+        uses: actions/cache@v4
+        with:
+          path: .test-passed
+          key: test-passed-${{ steps.code-hash.outputs.hash }}
+
+      - name: Skip tests (cache hit — code unchanged)
+        if: steps.test-cache.outputs.cache-hit == 'true'
+        run: echo "⚡ Tests already passed for this code hash. Skipping full test suite."
+
+      - name: Create server symlink
+        if: steps.test-cache.outputs.cache-hit != 'true'
+        run: ln -s nerves/workers/trading server
+
+      - name: Set up Python 3.11
+        if: steps.test-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            nerves/workers/trading/requirements.txt
+            nerves/workers/trading/requirements-test.txt
+
+      - name: Install Dependencies
+        if: steps.test-cache.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r server/requirements.txt
           pip install -r server/requirements-test.txt
 
       - name: Cache Playwright browsers
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true'
         id: playwright-cache
         uses: actions/cache@v4
         with:
@@ -86,21 +131,11 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium Browser
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
-      - name: Code Linting (Ruff)
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
-        run: ruff check server/ --exit-zero
-
-      - name: Security AST Scan
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
-        run: |
-          cd server
-          python -m security.cli scan || echo "Warning: Review security scan report"
-
       - name: Run Test Suite (520+ Tests)
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
@@ -110,7 +145,7 @@ jobs:
 
       # Đánh dấu test đã pass cho hash này → lần sau bypass
       - name: Mark tests passed for cache
-        if: steps.filter.outputs.code == 'true' && steps.test-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p .test-passed
           echo "${{ steps.code-hash.outputs.hash }}" > .test-passed/hash.txt
@@ -119,7 +154,8 @@ jobs:
   # ── 2A. DEPLOY SERVER A (Gateway) ──────────────────────────────────
   deploy-server-a:
     name: Deploy Server A (Gateway)
-    needs: continuous-integration
+    needs: [ci-lint-security, ci-tests]
+
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -188,7 +224,7 @@ jobs:
   # ── 2B. DEPLOY SERVER C (AI Core) ──────────────────────────────────
   deploy-server-c:
     name: Deploy Server C (AI Core)
-    needs: continuous-integration
+    needs: [ci-lint-security, ci-tests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -270,7 +306,7 @@ jobs:
   # ── 2C. DEPLOY SERVER B (Execution Vault — Windows) ─────────────────
   deploy-server-b:
     name: Deploy Server B (Execution Vault)
-    needs: continuous-integration
+    needs: [ci-lint-security, ci-tests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
