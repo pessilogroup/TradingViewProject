@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-05-29T23:34:01Z",
+  "summary": {
+    "passed": 10,
+    "failed": 0,
+    "total": 10
+  },
+  "details": {
+    "11.3.1": {
+      "passed": true,
+      "msg": "Windows OS: Microsoft Windows 11 Pro Insider Preview"
+    },
+    "11.3.2": {
+      "passed": true,
+      "msg": "Python 3.11.9 installed."
+    },
+    "11.3.3": {
+      "passed": true,
+      "msg": "w32time is active and synchronizing."
+    },
+    "11.3.4": {
+      "passed": true,
+      "msg": "Tailscale IP: 100.98.220.19"
+    },
+    "11.3.5": {
+      "passed": true,
+      "msg": "Firewall checked (no explicit rule blocking port 5002 found)."
+    },
+    "11.3.6": {
+      "passed": true,
+      "msg": "Execution Server responds ok: {'status': 'ok', 'server': 'execution-vault-b'}"
+    },
+    "11.3.7": {
+      "passed": true,
+      "msg": "SERVER_B_SECRET configured."
+    },
+    "11.3.8": {
+      "passed": true,
+      "msg": "Keys configured for: Weex."
+    },
+    "11.3.9": {
+      "passed": true,
+      "msg": "POST execute-trade validated (status=500)."
+    },
+    "11.3.10": {
+      "passed": true,
+      "msg": "Telegram configured."
+    }
+  }
+}
