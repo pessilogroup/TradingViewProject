@@ -66,10 +66,11 @@ class DaemonLifecycleManager:
             return
 
         if not _DAEMON_ENTRY.exists():
-            logger.error(
-                f"Daemon entry point not found at {_DAEMON_ENTRY}. "
-                "Run: cd tradingview-mcp && npm install"
+            logger.warning(
+                f"CaptureDaemon entry not found at {_DAEMON_ENTRY} — "
+                "capture features disabled. Run: cd tradingview-mcp && npm install"
             )
+            self._stopping = True   # prevent health monitor from looping
             return
 
         self._stopping = False
@@ -169,8 +170,15 @@ class DaemonLifecycleManager:
         if len(self._restart_times) >= self._max_restarts:
             logger.error(
                 f"Restart budget exhausted ({self._max_restarts} restarts in "
-                f"{self._restart_window_sec}s). Manual intervention required."
+                f"{self._restart_window_sec}s). Capture daemon disabled for "
+                f"{self._restart_window_sec}s. Check Node.js / tradingview-mcp setup."
             )
+            # Pause the monitor for one full window so we don't spam logs every 10s
+            self._stopping = True
+            await asyncio.sleep(self._restart_window_sec)
+            # Allow retrying after cooldown
+            self._stopping = False
+            self._restart_times.clear()
             return
 
         self._restart_times.append(now)
