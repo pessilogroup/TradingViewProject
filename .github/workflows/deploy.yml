@@ -188,18 +188,46 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SERVER_A_IP }} >> ~/.ssh/known_hosts || true
 
+      - name: Pre-check SSH connectivity
+        id: ssh_check_a
+        run: |
+          echo "🔌 Testing SSH to Server A..."
+          if ssh -o ConnectTimeout=10 -o BatchMode=yes botuser@${{ secrets.SERVER_A_IP }} "echo ok" 2>/dev/null; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
+            echo "✅ Server A reachable"
+          else
+            echo "reachable=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Server A unreachable — skipping deploy"
+          fi
+
       - name: Deploy Server A
         id: deploy_a
+        if: steps.ssh_check_a.outputs.reachable == 'true'
         run: |
           echo "🚀 Deploying Server A..."
           ssh botuser@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
-            git rev-parse HEAD > .rollback_sha
+            OLD_SHA=$(git rev-parse HEAD)
+            echo "$OLD_SHA" > .rollback_sha
             git fetch origin
             git checkout main
-            git pull origin main
+            PULL_OUTPUT=$(git pull origin main 2>&1)
+            echo "$PULL_OUTPUT"
+            NEW_SHA=$(git rev-parse HEAD)
             
+            # Nếu code không đổi → skip rebuild, health check only
+            if [ "$OLD_SHA" = "$NEW_SHA" ]; then
+              echo "📎 No new commits — skipping rebuild"
+              if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
+                echo "✅ Server A already healthy (no changes)"
+                exit 0
+              fi
+              echo "⚠️ No changes but service unhealthy — rebuilding..."
+            fi
+            
+            # Đánh dấu đã deploy (cho rollback logic)
+            echo "DEPLOYED" > /tmp/.deploy_state
             docker compose -f deploy/docker-compose.server-a.yml up -d --build
             
             echo "🔍 Testing Gateway Health..."
@@ -215,22 +243,27 @@ jobs:
           EOF
 
       - name: Rollback Server A (On Failure)
-        if: failure() && steps.deploy_a.outcome == 'failure'
+        if: failure() && steps.deploy_a.outcome == 'failure' && steps.ssh_check_a.outputs.reachable == 'true'
         run: |
-          echo "⚠️ Server A deployment failed! Initiating rollback..."
+          echo "⚠️ Checking if rollback is needed..."
           ssh botuser@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             cd /opt/trading-bot
-            if [ -f .rollback_sha ]; then
-              ROLLBACK_SHA=$(cat .rollback_sha)
-              echo "🔄 Reverting Server A to $ROLLBACK_SHA..."
-              git checkout $ROLLBACK_SHA
-              docker compose -f deploy/docker-compose.server-a.yml up -d --build
-              echo "✅ Rollback Server A completed"
-            else
-              echo "❌ Rollback SHA file not found!"
+            # Chỉ rollback nếu deploy đã thực sự thay đổi code
+            if [ ! -f .rollback_sha ]; then
+              echo "⏭️ No rollback SHA — nothing to revert"
+              exit 0
             fi
+            CURRENT_SHA=$(git rev-parse HEAD)
+            ROLLBACK_SHA=$(cat .rollback_sha)
+            if [ "$CURRENT_SHA" = "$ROLLBACK_SHA" ]; then
+              echo "⏭️ Code unchanged — rollback not needed"
+              exit 0
+            fi
+            echo "🔄 Reverting Server A to $ROLLBACK_SHA..."
+            git checkout $ROLLBACK_SHA
+            docker compose -f deploy/docker-compose.server-a.yml up -d --build
+            echo "✅ Rollback Server A completed"
           EOF
-          exit 1
 
   # ── 2B. DEPLOY SERVER C (AI Core) ──────────────────────────────────
   deploy-server-c:
@@ -262,27 +295,51 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SERVER_C_IP }} >> ~/.ssh/known_hosts || true
 
+      - name: Pre-check SSH connectivity
+        id: ssh_check_c
+        run: |
+          echo "🔌 Testing SSH to Server C..."
+          if ssh -o ConnectTimeout=10 -o BatchMode=yes botuser@${{ secrets.SERVER_C_IP }} "echo ok" 2>/dev/null; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
+            echo "✅ Server C reachable"
+          else
+            echo "reachable=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Server C unreachable — skipping deploy"
+          fi
+
       - name: Deploy Server C
         id: deploy_c
+        if: steps.ssh_check_c.outputs.reachable == 'true'
         run: |
           echo "🚀 Deploying Server C..."
           ssh botuser@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             set -e
             DEPLOY_DIR="/opt/trading-bot"
-            # Fallback: nếu /opt/trading-bot không tồn tại, dùng home dir
             [ ! -d "$DEPLOY_DIR/.git" ] && DEPLOY_DIR="/home/botuser/trading-bot"
             cd "$DEPLOY_DIR"
-            git rev-parse HEAD > .rollback_sha
+            OLD_SHA=$(git rev-parse HEAD)
+            echo "$OLD_SHA" > .rollback_sha
             git fetch origin
             git checkout main
-            git pull origin main
+            PULL_OUTPUT=$(git pull origin main 2>&1)
+            echo "$PULL_OUTPUT"
+            NEW_SHA=$(git rev-parse HEAD)
             
-            # Khởi chạy docker compose nếu file tồn tại
+            # Nếu code không đổi → skip rebuild
+            if [ "$OLD_SHA" = "$NEW_SHA" ]; then
+              echo "📎 No new commits — skipping rebuild"
+              if curl -sf http://localhost:5000/health > /dev/null 2>&1 || curl -sf http://localhost:8000/api/v1/heartbeat > /dev/null 2>&1; then
+                echo "✅ Server C already healthy (no changes)"
+                exit 0
+              fi
+              echo "⚠️ No changes and no running service — soft-pass"
+              exit 0
+            fi
+            
             if [ -f deploy/docker-compose.server-c.yml ]; then
               docker compose -f deploy/docker-compose.server-c.yml up -d --build
             fi
             
-            # Health check — ưu tiên VBS gateway, fallback ChromaDB
             echo "🔍 Testing Server C Health..."
             for i in {1..10}; do
               if curl -sf http://localhost:5000/health > /dev/null 2>&1; then
@@ -294,30 +351,35 @@ jobs:
               fi
               sleep 2
             done
-            # Soft-pass nếu git pull thành công nhưng chưa có service chạy
             echo "⚠️ No running service detected, but git pull succeeded. Soft-pass."
             exit 0
           EOF
 
       - name: Rollback Server C (On Failure)
-        if: failure() && steps.deploy_c.outcome == 'failure'
+        if: failure() && steps.deploy_c.outcome == 'failure' && steps.ssh_check_c.outputs.reachable == 'true'
         run: |
-          echo "⚠️ Server C deployment failed! Initiating rollback..."
+          echo "⚠️ Checking if rollback is needed..."
           ssh botuser@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             DEPLOY_DIR="/opt/trading-bot"
             [ ! -d "$DEPLOY_DIR/.git" ] && DEPLOY_DIR="/home/botuser/trading-bot"
             cd "$DEPLOY_DIR"
-            if [ -f .rollback_sha ]; then
-              ROLLBACK_SHA=$(cat .rollback_sha)
-              echo "🔄 Reverting Server C to $ROLLBACK_SHA..."
-              git checkout $ROLLBACK_SHA
-              if [ -f deploy/docker-compose.server-c.yml ]; then
-                docker compose -f deploy/docker-compose.server-c.yml up -d --build
-              fi
-              echo "✅ Rollback Server C completed"
+            if [ ! -f .rollback_sha ]; then
+              echo "⏭️ No rollback SHA — nothing to revert"
+              exit 0
             fi
+            CURRENT_SHA=$(git rev-parse HEAD)
+            ROLLBACK_SHA=$(cat .rollback_sha)
+            if [ "$CURRENT_SHA" = "$ROLLBACK_SHA" ]; then
+              echo "⏭️ Code unchanged — rollback not needed"
+              exit 0
+            fi
+            echo "🔄 Reverting Server C to $ROLLBACK_SHA..."
+            git checkout $ROLLBACK_SHA
+            if [ -f deploy/docker-compose.server-c.yml ]; then
+              docker compose -f deploy/docker-compose.server-c.yml up -d --build
+            fi
+            echo "✅ Rollback Server C completed"
           EOF
-          exit 1
 
   # ── 2C. DEPLOY SERVER B (Execution Vault — Windows) ─────────────────
   deploy-server-b:
@@ -349,19 +411,49 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SERVER_B_IP }} >> ~/.ssh/known_hosts || true
 
+      - name: Pre-check SSH connectivity
+        id: ssh_check_b
+        run: |
+          echo "🔌 Testing SSH to Server B..."
+          if ssh -o ConnectTimeout=10 -o BatchMode=yes Administrator@${{ secrets.SERVER_B_IP }} "echo ok" 2>/dev/null; then
+            echo "reachable=true" >> $GITHUB_OUTPUT
+            echo "✅ Server B reachable"
+          else
+            echo "reachable=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Server B unreachable — skipping deploy"
+          fi
+
       - name: Deploy Server B (Windows)
         id: deploy_b
+        if: steps.ssh_check_b.outputs.reachable == 'true'
         run: |
           echo "🚀 Deploying Server B (Windows)..."
           ssh Administrator@${{ secrets.SERVER_B_IP }} << 'EOF'
             $ErrorActionPreference = "Stop"
             cd C:\opt\trading-bot
             
-            git rev-parse HEAD | Out-File -FilePath .rollback_sha -Encoding utf8
+            $OldSha = (git rev-parse HEAD).Trim()
+            $OldSha | Out-File -FilePath .rollback_sha -Encoding utf8
             
             git fetch origin
             git checkout main
             git pull origin main
+            
+            $NewSha = (git rev-parse HEAD).Trim()
+            
+            # Nếu code không đổi → skip rebuild
+            if ($OldSha -eq $NewSha) {
+              Write-Output "📎 No new commits — skipping rebuild"
+              try {
+                $response = Invoke-RestMethod -Uri "http://localhost:5002/health" -Method Get -ErrorAction Stop
+                if ($response.status -eq "healthy" -or $response.status -eq "ok") {
+                  Write-Output "✅ Server B already healthy (no changes)"
+                  exit 0
+                }
+              } catch {
+                Write-Output "⚠️ No changes but service unavailable — rebuilding..."
+              }
+            }
             
             docker compose -f deploy/docker-compose.server-b.yml up -d --build
             
@@ -383,18 +475,23 @@ jobs:
           EOF
 
       - name: Rollback Server B (On Failure)
-        if: failure() && steps.deploy_b.outcome == 'failure'
+        if: failure() && steps.deploy_b.outcome == 'failure' && steps.ssh_check_b.outputs.reachable == 'true'
         run: |
-          echo "⚠️ Server B deployment failed! Initiating rollback..."
+          echo "⚠️ Checking if rollback is needed..."
           ssh Administrator@${{ secrets.SERVER_B_IP }} << 'EOF'
             cd C:\opt\trading-bot
-            if (Test-Path .rollback_sha) {
-              $ROLLBACK_SHA = Get-Content .rollback_sha -Raw
-              Write-Output "🔄 Reverting Server B to $ROLLBACK_SHA..."
-              git checkout $ROLLBACK_SHA
-              docker compose -f deploy/docker-compose.server-b.yml up -d --build
-              Write-Output "✅ Rollback Server B completed"
+            if (-not (Test-Path .rollback_sha)) {
+              Write-Output "⏭️ No rollback SHA — nothing to revert"
+              exit 0
             }
+            $CurrentSha = (git rev-parse HEAD).Trim()
+            $RollbackSha = (Get-Content .rollback_sha -Raw).Trim()
+            if ($CurrentSha -eq $RollbackSha) {
+              Write-Output "⏭️ Code unchanged — rollback not needed"
+              exit 0
+            }
+            Write-Output "🔄 Reverting Server B to $RollbackSha..."
+            git checkout $RollbackSha
+            docker compose -f deploy/docker-compose.server-b.yml up -d --build
+            Write-Output "✅ Rollback Server B completed"
           EOF
-          exit 1
-
