@@ -396,3 +396,87 @@ Ensure deployment files (e.g., docker-compose.server-a.yml, deploy.sh, and relat
 - [ ] The deployment script / compose config is corrected such that the Gateway (Server A) starts successfully.
 - [ ] Gateway health check `curl -sf http://localhost:5000/health` or equivalent is healthy.
 - [ ] No regression introduced to other deployments (Server B/C).
+
+## Follow-up — 2026-05-29T23:13:04Z
+
+Build a provisioning verification suite that programmatically checks all 43 infrastructure items from the VPS deployment checklist, and auto-ticks the checklist markdown when items pass. CI/CD deployment is already complete — this project ONLY verifies that the one-time server provisioning (OS, users, SSH, firewall, NTP, Docker, VPN, tunnels) was done correctly on each server.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Architecture Reference
+
+| Server | Role | OS | Location | Specs |
+|--------|------|----|----------|-------|
+| A | Ingest Gateway (VBS) | Debian 12 Minimal | Remote VPS | 1U2G |
+| B | Execution Vault | Windows | Local Machine | 2U4G |
+| C | AI Core (RAG + Analyzer) | **Oracle Linux 9** | Remote VPS | 8U16G |
+
+**Network**: All 3 servers connected via Tailscale VPN (100.x.x.0/8). Server A also has Cloudflare Tunnel for public ingress.
+
+**What already exists (DO NOT rebuild):**
+- `scripts/init_server_debian.sh` — Debian 12 provisioning (Server A)
+- `scripts/init_server_ol9.sh` — Oracle Linux 9 provisioning (Server C)
+- `setup_tunnel.ps1` — Cloudflare Tunnel setup (Server A)
+- `setup_server_c.ps1` — Server C deployment wizard
+- `.github/workflows/deploy.yml` — Full CI/CD pipeline (lint → test → deploy A/C/B)
+- `deploy/docker-compose.server-{a,b,c}.yml` — Per-server Docker Compose
+- All health endpoints already implemented in application code
+
+**Health endpoints (already live):**
+- Server A: `GET :5000/health` → `{"status":"healthy", "pending_count": N}`
+- Server B: `GET :5002/health` → `{"status":"ok", "server":"execution-vault-b"}`
+- Server C ChromaDB: `GET :8000/api/v1/heartbeat`
+
+**The checklist to verify** is in `docs/SETUPS/01_VPS_SERVER_SETUP_GUIDE.md`, Section 11 (lines 1091-1155), containing 43 items across 4 subsections:
+- 11.1 SERVER A (15 items): OS, apt, botuser, SSH, Fail2Ban, UFW, NTP, Swap, Docker, log limits, Tailscale, Cloudflare, VBS health, BUFFER_SECRET, Telegram
+- 11.2 SERVER C (12 items): OS, botuser+SSH, NTP, Docker, Tailscale, ChromaDB, Analyzer, connect→A, connect→B, liveness monitor, disk monitor, circuit breaker
+- 11.3 SERVER B (10 items): Windows Update, Python 3.11+, NTP, Tailscale, Firewall, Execution Server, SERVER_B_SECRET, API Keys, test execute-trade, Telegram
+- 11.4 Cross-Server (6 items): ping A↔C, ping B↔C, clock drift <50ms, E2E pipeline, Telegram from all 3, UptimeRobot active
+
+## Requirements
+
+### R1. Per-Server Provisioning Verification Probes
+
+Create a Python verification module (`scripts/verify_provisioning.py`) that can SSH into each server (or run locally for Server B) and check infrastructure provisioning status. For each of the 43 checklist items, implement a concrete probe:
+
+- **SSH-based probes** (Server A + C): Check OS version, user existence, SSH config, service status (fail2ban, chrony/chronyd, docker, tailscale, cloudflared, ufw/firewalld), swap, docker log config, Tailscale IP
+- **Local probes** (Server B): Check Python version, Windows service status, firewall rules, Tailscale connection, NTP sync
+- **HTTP probes** (all): Hit health endpoints over Tailscale IPs to verify application layer
+- Each probe returns a structured result: `{item_id, server, description, status: PASS|FAIL|SKIP, detail}`
+- Support `--server a|b|c|all` flag to target specific servers
+- Support `--dry-run` to show what would be checked without running probes
+
+### R2. Cross-Server E2E Verification
+
+Implement the 6 cross-server verification checks from Section 11.4:
+- Tailscale ping between C↔A and C↔B
+- NTP clock drift measurement across all 3 servers (must be <50ms)
+- E2E signal flow test: simulate a webhook → verify it arrives at A's queue → verify C can consume → verify C can reach B's endpoint (connectivity only, no real trade)
+- Telegram delivery verification from each server
+- UptimeRobot/Cloudflare monitoring status check
+
+### R3. Checklist Auto-Ticker
+
+After verification runs, auto-update the checklist in `docs/SETUPS/01_VPS_SERVER_SETUP_GUIDE.md`:
+- Replace `☐` with `☑` for items that PASS
+- Leave `☐` unchanged for FAIL or SKIP items
+- Also update the identical copy at `docs/reports/01_VPS_SERVER_SETUP_GUIDE.md`
+- Generate a summary report (JSON + human-readable markdown) saved to `docs/reports/provisioning_verification_report.md`
+- Support `--no-tick` flag to generate the report without modifying checklist files
+
+## Acceptance Criteria
+
+### Verification Coverage
+- [ ] `verify_provisioning.py --server a --dry-run` lists all 15 Server A items with their probe descriptions
+- [ ] `verify_provisioning.py --server c --dry-run` lists all 12 Server C items (using Oracle Linux 9 probes, NOT Debian)
+- [ ] `verify_provisioning.py --server b --dry-run` lists all 10 Server B items (Windows-native checks)
+
+### Probe Accuracy
+- [ ] SSH probes correctly detect: OS version (Debian 12 vs Oracle Linux 9), running services (systemctl/firewalld), user existence, SSH config values
+- [ ] HTTP probes correctly distinguish healthy vs unreachable endpoints with proper timeout handling (5s connect, 10s read)
+- [ ] Cross-server NTP drift measurement uses `chronyc tracking` (Linux) and `w32tm /stripchart` (Windows) and correctly compares timestamps
+
+### Checklist Updates
+- [ ] Running `verify_provisioning.py --all --auto-tick` updates BOTH copies of the checklist (docs/SETUPS/ and docs/reports/) consistently
+- [ ] Only PASS items get ticked; FAIL/SKIP items remain `☐`
