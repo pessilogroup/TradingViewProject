@@ -21,6 +21,6 @@ python-telegram-bot>=21.0
 # ── Charting and Data dependencies ─────────────────────────────
 pandas>=2.0.0
 matplotlib>=3.7.0
-mplfinance>=0.12.9
+mplfinance>=0.12.9b0
 ccxt>=4.0.0
 playwright>=1.40.0
