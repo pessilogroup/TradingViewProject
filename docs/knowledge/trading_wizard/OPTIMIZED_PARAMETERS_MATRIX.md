@@ -1,76 +1,130 @@
-# 📊 Optimized Parameters Matrix: The "Winning Edge"
+# 📊 Central Configuration Matrix: Optimized Parameters for Multi-Asset Trading
 
-Bản tổng hợp các bộ tham số tối ưu (Winning Parameters) đã được kiểm chứng qua backtest thực tế trên dữ liệu lịch sử của cặp **BTCUSDT.P (Bybit/Binance)**. Bộ tham số này được thiết kế làm nguồn dữ liệu cấu hình tĩnh cho hệ thống Webhook Server và Auto-Trading Engine.
+Bản tổng hợp ma trận cấu hình tham số tối ưu (Optimized Parameters Matrix) được đồng bộ giữa TradingView Pine Script (V2) và Python execution engine đối với các cặp giao dịch: **BTC**, **ETH**, và **SOL**.
 
----
-
-## 🚀 1. CHIẾN LƯỢC 1: MIS V1.6 ( momentum & mean-reversion 1H)
-Chiến lược này phù hợp giao dịch chủ động trên khung thời gian nhỏ, lọc tín hiệu qua Trend Template và VCP.
-
-### 📐 Tham số Chỉ báo & Đầu vào (Inputs)
-| Nhóm tham số | Tên biến | Giá trị tối ưu | Vai trò & Ý nghĩa |
-| :--- | :--- | :---: | :--- |
-| **Timeframe** | `timeframe` | **1H (60m)** | Khung thời gian duy nhất sinh lãi ổn định cho chiến lược này. |
-| **Trend Template** | `use_tt` | **True** | Bắt buộc kiểm tra 8 tiêu chí xu hướng Minervini. |
-| | `rs_bench` | `"BINANCE:BTCUSDT"` | Cặp tiền benchmark để so sánh Relative Strength (RS). |
-| **Moving Averages** | `ema_fast` | **20** | EMA nhanh xác định xu hướng ngắn hạn. |
-| | `ema_mid` | **50** | EMA trung bình (mốc hỗ trợ động quan trọng). |
-| | `ema_slow` | **200** | EMA chậm làm trục xu hướng chính. |
-| **RSI Gate** | `rsi_len` | **14** | Độ dài chu kỳ RSI. |
-| | `rsi_floor` | **50** | Chỉ enter khi RSI > 50 (mua khi đà tăng mạnh, không mua pullback yếu). |
-| **VCP Pivot** | `vcp_lookback` | **20** | Số lượng nến để quét tìm điểm pivot tích lũy (volume dry-up). |
-| | `vcp_dry_pct` | **0.6 (60%)** | Khối lượng tại nến Pivot phải < 60% so với Volume MA 50. |
-| | `vcp_tight_atr`| **0.7 (70%)** | Biên độ nến Pivot (High - Low) phải hẹp hơn 70% của ATR 14. |
-| | `breakout_window`| **15** | Breakout vượt đỉnh Pivot phải xảy ra trong vòng 15 nến kể từ Pivot. |
-| **Volume Confirm** | `vol_mult` | **1.5x** | Khối lượng nến breakout phải lớn hơn ít nhất 1.5 lần Volume MA 50. |
-
-### 🛡️ Tham số Quản lý Rủi ro (Risk Management)
-| Tên tham số | Giá trị tối ưu | Vai trò & Ý nghĩa |
-| :--- | :---: | :--- |
-| `risk_pct` | **1.0%** | Rủi ro tối đa trên mỗi deal tính theo vốn chủ sở hữu (Equity). |
-| `atr_sl_mul` | **2.0** | Stop-Loss = Entry - (2.0 × ATR 14). |
-| `atr_tp_mul` | **8.0** | Take-Profit = Entry + (8.0 × ATR 14) (Tỷ lệ R:R = 4:1 tối ưu cho Crypto). |
-| `hard_sl_pct` | **8.0%** | Giới hạn Stop-loss tối đa cố định để tránh biến động quét sâu bất ngờ. |
-| `max_pos_pct` | **95.0%** | Tổng quy mô vị thế danh nghĩa tối đa không vượt quá 95% Equity. |
-| `use_atr_trail` | **True** | Bật Trailing Stop theo Chandelier (ATR × 3.0) để khóa lợi nhuận. |
-| `cooldown_bars` | **3** | Nghỉ 3 nến sau khi đóng lệnh để tránh re-entry vội vã. |
+Các tham số của **ETH** và **SOL** được điều chỉnh và nhân tỷ lệ (scaled) từ bộ tham số cơ sở của **BTC** dựa trên hệ số biến động lịch sử tương đối (Beta / Volatility) nhằm duy trì mức chịu đựng rủi ro đồng đều trên toàn bộ danh mục đầu tư.
 
 ---
 
-## 📈 2. CHIẾN LƯỢC 2: MTT V1.005-B ( trend following DAILY)
-Chiến lược giao dịch theo xu hướng dài hạn, tối ưu hóa để ăn các con sóng lớn (Bull Run) và phòng vệ tối đa trong thị trường giá xuống.
+## 📈 1. CENTRAL MULTI-ASSET CONFIGURATION MATRIX
 
-### 📐 Tham số Chỉ báo & Đầu vào (Inputs)
-| Nhóm tham số | Tên biến | Giá trị tối ưu | Vai trò & Ý nghĩa |
-| :--- | :--- | :---: | :--- |
-| **Timeframe** | `timeframe` | **1D (Daily)** | Khung thời gian vĩ mô, lọc sạch 99% nhiễu Crypto. |
-| **MA Setup** | `ma_type` | **"EMA"** | **EMA vượt trội SMA** về mặt tốc độ phản ứng (Win Rate 54% vs 44%). |
-| | `fast_len` | **20** | EMA 20. |
-| | `med_len` | **50** | EMA 50. |
-| | `slow_len` | **100** | EMA 100 (V1.005 tuning chọn EMA 100 thay vì EMA 200 vì EMA 200 quá trễ). |
-
-### 🛡️ Quy mô lệnh (Profile Sizing - Không Đòn Bẩy)
-| Profile | Tỷ lệ quy mô (% Equity) | Ghi chú vận hành |
-| :--- | :---: | :--- |
-| **Spot** | **10.0%** | Đầu tư dài hạn giao dịch Spot, tối đa 1 vị thế. |
-| **Margin** | **20.0%** | Ký quỹ (tương đương quy mô danh nghĩa 60% với đòn bẩy thực tế 3x). |
-| **Futures** | **10.0%** | Hợp đồng tương lai (tương đương quy mô danh nghĩa 100% với đòn bẩy thực tế 10x). |
-
-### 🚦 Quy tắc Kích hoạt Lệnh (Execution Rules)
-- **Long Entry (Bull Start)**: Khi `EMA 20 > EMA 50 > EMA 100` bắt đầu xếp chồng song song (Bull Stack).
-- **Long Exit (Bull End)**: Khi cấu trúc xếp chồng bị phá vỡ (`EMA 20 < EMA 50` hoặc `EMA 50 < EMA 100`).
-- **Breakout Long Signal (Hỗ trợ từ Short)**: Khi Bear Stack (`EMA 20 < EMA 50 < EMA 100`) chính thức kết thúc, phát tín hiệu cảnh báo có khả năng thị trường đảo chiều sang tăng mạnh (Breakout Long từ đáy).
+| Parameter Group | Parameter Name / Pine Variable | Python Config Variable | BTC (Beta = 1.0) | ETH (Beta = 1.25) | SOL (Beta = 1.6) | Scale & Adaptation Rationale |
+| :--- | :--- | :--- | :---: | :---: | :---: | :--- |
+| **Asset Identity** | — | — | **BTCUSDT** | **ETHUSDT** | **SOLUSDT** | Target assets from active watchlist |
+| **Volatility Benchmark**| — | — | **Beta = 1.00** | **Beta = 1.25** | **Beta = 1.60** | Base asset relative volatility index |
+| **Strategy Execution Mode**| `strat_mode` | — | `"Daily Trend Follower (MTT v1.005-b)"` hoặc `"1H SEPA / Momentum (MIS v1.6)"` | Chế độ chạy hợp nhất v2 |
+| **Moving Averages (MTT)**| `fast_len` / `med_len` / `slow_len_mtt` | — | **EMA 20 / 50 / 100** | **EMA 20 / 50 / 100** | **EMA 20 / 50 / 100** | Daily Trend Follower setup |
+| **Moving Averages (MIS)**| `fast_len` / `med_len` / `slow_len_mis` | — | **EMA 20 / 50 / 200** | **EMA 20 / 50 / 200** | **EMA 20 / 50 / 200** | 1H Momentum & Mean-reversion setup |
+| **Hard Stop Loss** | `hard_sl_pct` | `STOP_LOSS_PCT` | **8.0%** | **10.0%** | **13.0%** | Scaled linearly by Beta to prevent premature stopout |
+| **ATR SL Multiplier** | `atr_sl_mul` | — | **2.0** | **2.5** | **3.2** | Multiplier of ATR 14 used to place stop loss |
+| **ATR TP Multiplier** | `atr_tp_mul` | `TAKE_PROFIT_PCT` | **8.0** | **10.0** | **13.0** | Scaled to capture larger swings in higher beta assets |
+| **Risk Per Trade** | `risk_pct` | `RISK_PER_TRADE` | **1.0%** | **0.8%** | **0.6%** | Scaled down for higher volatility to prevent drawdown |
+| **Futures Position Size**| `futures_pct` (profile) | — | **10.0%** | **8.0%** | **6.0%** | Sizing cap for Futures profile |
+| **Margin Position Size** | `margin_pct` (profile) | — | **20.0%** | **16.0%** | **12.0%** | Sizing cap for Margin profile |
+| **Spot Position Size** | `spot_pct` (profile) | — | **10.0%** | **8.0%** | **6.0%** | Sizing cap for Spot profile |
+| **Maximum Position Size**| `max_pos_pct` | `MAX_QUOTE_QTY` | **95.0%** | **95.0%** | **95.0%** | Absolute limit on total portfolio margin allocation |
+| **Trailing Stop (Chandelier)**| `trail_atr_mul` | — | **3.0** | **3.75** | **4.8** | Trail stop distance scaled by Beta |
+| **Order Cooldown** | `cooldown_bars` | — | **3 bars** | **3 bars** | **3 bars** | Rest bars before re-entering |
 
 ---
 
-## 📑 3. MA TRẬN KẾT QUẢ BACKTEST THỰC TẾ (SO SÁNH)
+## 🛡️ 2. STOP-LOSS & TAKE-PROFIT CALCULATION DETAILS
 
-| Chiến lược | Khung thời gian | Giai đoạn test | Số lệnh | Win Rate | Profit Factor | Max Drawdown | Hiệu suất |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **MIS v1.6** | 1H | 6 năm (2020-2026) | 11 | **81.82%** | **3.539** | 16.15% | **+48.21%** |
-| **MTT v1.005-b** | Daily | 6 năm (2020-2026) | 13 | **53.85%** | **7.145** | **2.99%** | **+53.45%** |
+1. **Hard Stop-Loss Limit:**
+   - **BTC**: $8\%$
+   - **ETH**: $8\% \times 1.25 = 10\%$
+   - **SOL**: $8\% \times 1.625 \approx 13\%$ (Tuning chọn $13.0\%$ cố định)
+2. **Take Profit (ATR-Based):**
+   - **BTC**: $8.0 \times \text{ATR}$
+   - **ETH**: $8.0 \times 1.25 = 10.0 \times \text{ATR}$
+   - **SOL**: $8.0 \times 1.6 = 12.8 \times \text{ATR}$ (Tuning chọn $13.0 \times \text{ATR}$)
+3. **Risk-to-Reward Ratio (R:R Target):**
+   - Đối với chiến lược MIS (1H), R:R danh nghĩa tối thiểu luôn được duy trì ở mức $\ge 4:1$ (từ hệ số ATR SL 2.0x và ATR TP 8.0x đối với BTC, tương tự cho ETH và SOL).
 
-> [!TIP]
-> **Nhận định thực chiến**:
-> - MTT v1.005-b (Daily) có tỷ lệ **Profit Factor cực cao (7.145)** và **Drawdown cực thấp (2.99%)**, là chiến lược lý tưởng để tích lũy tài sản dài hạn.
-> - MIS v1.6 (1H) đòi hỏi hệ thống webhook hoạt động liên tục 24/7 để nhận các tín hiệu hiếm nhưng cực kỳ chính xác.
+---
+
+## 📡 3. WEBHOOK PAYLOAD SPECIFICATIONS
+
+Các webhook payload được chuẩn hóa gửi từ TradingView Alert đến auto-trading execution server. Các tham số bao gồm:
+* `secret`: Khóa bảo mật webhook.
+* `action`: `"alert"` (vào lệnh) hoặc `"sell"` (đóng lệnh).
+* `symbol`: Cặp giao dịch gốc.
+* `price`: Giá khớp lệnh tại TradingView.
+* `interval`: Khung thời gian hiện tại của nến phát tín hiệu.
+* `mode`: `"MTT"` hoặc `"MIS"`.
+* `quoteQty`: Giới hạn khối lượng đặt lệnh tương đối quy đổi theo độ phân bổ vốn.
+
+### A. Bitcoin (BTCUSDT) Webhook Payload
+- **Buy / Long Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "alert",
+    "symbol": "BTCUSDT",
+    "price": 65230.5,
+    "interval": "1D",
+    "mode": "MTT",
+    "quoteQty": 1000.0
+  }
+  ```
+- **Sell / Close Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "sell",
+    "symbol": "BTCUSDT",
+    "price": 68400.0,
+    "interval": "1D",
+    "mode": "MTT"
+  }
+  ```
+
+### B. Ethereum (ETHUSDT) Webhook Payload
+- **Buy / Long Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "alert",
+    "symbol": "ETHUSDT",
+    "price": 3480.25,
+    "interval": "1D",
+    "mode": "MTT",
+    "quoteQty": 800.0
+  }
+  ```
+- **Sell / Close Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "sell",
+    "symbol": "ETHUSDT",
+    "price": 3720.5,
+    "interval": "1D",
+    "mode": "MTT"
+  }
+  ```
+
+### C. Solana (SOLUSDT) Webhook Payload
+- **Buy / Long Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "alert",
+    "symbol": "SOLUSDT",
+    "price": 165.4,
+    "interval": "1D",
+    "mode": "MTT",
+    "quoteQty": 600.0
+  }
+  ```
+- **Sell / Close Alert (MTT/MIS):**
+  ```json
+  {
+    "secret": "your_webhook_secret_here",
+    "action": "sell",
+    "symbol": "SOLUSDT",
+    "price": 182.3,
+    "interval": "1D",
+    "mode": "MTT"
+  }
+  ```

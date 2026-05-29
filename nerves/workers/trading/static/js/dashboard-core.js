@@ -111,7 +111,7 @@ function switchTab(name) {
   });
   if (name === 'indicators') loadIndicators();
   if (name === 'notifications') loadNotifications();
-  if (name === 'analysis') loadBriefs();
+  if (name === 'analysis') { loadBriefs(); startCSLivePolling(); } else { stopCSLivePolling(); }
   if (name === 'trade-analysis') loadTradeAnalysis();
   if (name === 'status') loadSystemStatus();
   if (name === 'scanner') {} // load on button click
@@ -120,13 +120,25 @@ function switchTab(name) {
 // ═══ API FETCH ═══
 async function apiFetch(url, opts = {}) {
   try {
-    const res = await fetch(API_BASE + url, { headers: headers(), ...opts });
-    if (res.status === 401) {
-      document.getElementById('loginOverlay').style.display = 'flex';
-      document.getElementById('loginError').style.display = 'block';
+    const res = await fetch(API_BASE + url, {
+      credentials: 'include',           // always send session cookie
+      headers: headers(),
+      ...opts,
+    });
+
+    // Auth failures: 401 or redirect to login page
+    if (res.status === 401 || res.redirected && res.url.includes('auth/login') || res.url.includes('auth/login')) {
+      const overlay = document.getElementById('loginOverlay');
+      if (overlay) overlay.style.display = 'flex';
+      const errEl = document.getElementById('loginError');
+      if (errEl) { errEl.textContent = 'Session expired. Please re-authenticate.'; errEl.style.display = 'block'; }
       return null;
     }
-    if (!res.ok) return null;
+
+    if (!res.ok) {
+      console.warn('[apiFetch] Non-OK response:', res.status, url);
+      return null;
+    }
     return await res.json();
   } catch (e) {
     console.error('API error:', url, e);
@@ -340,6 +352,14 @@ async function loadSystemStatus() {
   const tg = data.telegram_bot || {};
   const sched = data.scheduler || {};
   const db = data.database || {};
+  
+  const apiHealth = data.health_api_server || 'UNKNOWN';
+  const cdpHealth = data.health_cdp || 'UNKNOWN';
+  const dbHealth = data.health_database || 'UNKNOWN';
+  const runnerStatus = data.test_runner_status || 'UNKNOWN';
+  const lastRun = data.last_test_run || {};
+  const lastRunTime = lastRun.timestamp ? lastRun.timestamp.replace('T', ' ').substring(0, 19) : 'N/A';
+
   grid.innerHTML = `
     <div class="status-card"><div class="status-card-icon">💚</div><div class="status-card-body">
       <div class="status-card-name">Server</div><div class="status-card-val status-ok">v${s.version} — ${s.uptime}</div></div></div>
@@ -355,6 +375,14 @@ async function loadSystemStatus() {
       <div class="status-card-name">Database</div><div class="status-card-val status-ok">${db.signals_count || 0} signals / ${db.trades_count || 0} trades / ${db.briefs_count || 0} briefs</div></div></div>
     <div class="status-card"><div class="status-card-icon">🔐</div><div class="status-card-body">
       <div class="status-card-name">Auth</div><div class="status-card-val">${data.auth_required ? 'Token Required' : 'Open Access'}</div></div></div>
+    <div class="status-card"><div class="status-card-icon">🩺</div><div class="status-card-body">
+      <div class="status-card-name">API Server Health</div><div class="status-card-val ${apiHealth === 'OK' ? 'status-ok' : 'status-warn'}">${apiHealth}</div></div></div>
+    <div class="status-card"><div class="status-card-icon">🎛</div><div class="status-card-body">
+      <div class="status-card-name">CDP Liveness</div><div class="status-card-val ${cdpHealth === 'OK' ? 'status-ok' : 'status-warn'}">${cdpHealth}</div></div></div>
+    <div class="status-card"><div class="status-card-icon">💾</div><div class="status-card-body">
+      <div class="status-card-name">Database Health</div><div class="status-card-val ${dbHealth === 'OK' ? 'status-ok' : 'status-warn'}">${dbHealth}</div></div></div>
+    <div class="status-card"><div class="status-card-icon">⚙️</div><div class="status-card-body">
+      <div class="status-card-name">Auto-Test Runner</div><div class="status-card-val ${runnerStatus === 'PASSING' ? 'status-ok' : 'status-warn'}">${runnerStatus} <span style="font-size:0.75rem;opacity:0.7">(${lastRunTime})</span></div></div></div>
   `;
   updateCDPBadge(mcp);
   updateProtectionStatus(data.protection || {});

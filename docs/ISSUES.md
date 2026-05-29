@@ -25,6 +25,23 @@
 * **Root Cause:** If tests spin up real Telegram polling or APScheduler cron tasks, the tests leak threads and network connections.
 * **Resolution:** Added explicit `config.*_ENABLED = False` statements at the very start of `conftest.py`'s `client` fixture to completely stub out all external Daemons during the test run.
 
+### 5. V9 Migration Path Drift in capture_daemon.py
+* **Symptom:** `Daemon entry point not found` error in server startup logs.
+* **Root Cause:** The V9 modular restructure moved the python code to `nerves/workers/trading/` but `_DAEMON_DIR` in `capture_daemon.py` was using `parent.parent / "tradingview-mcp"` which resolved to a non-existent subdirectory `nerves/workers/tradingview-mcp` instead of the root `tradingview-mcp`.
+* **Resolution:** Refactored the path calculation in `capture_daemon.py` to use four parent levels (`parent.parent.parent.parent`) to correctly reference the project root.
+* **Status:** FIXED.
+
+### 6. TradingView Desktop CDP Port Conflict on Port 9222
+* **Symptom:** Querying `http://localhost:9222` returned 404 (Not Found) because the port was pre-occupied by a local Chrome browser process. TradingView launched but could not bind.
+* **Resolution:** Switched `MCP_CDP_PORT` to `9223` in `.env`. Modified `capture_daemon.py` to correctly map the `TV_CDP_PORT` environment variable to the spawned daemon process, allowing it to connect to the custom CDP port.
+* **Status:** FIXED.
+
+### 7. TradingView Desktop MSIX Path Auto-detection Failure
+* **Symptom:** Auto-launch / health check failed on Windows systems where TradingView was installed via the Microsoft Store (MSIX).
+* **Root Cause:** The path resolution logic only checked standard installer static paths and `where TradingView.exe` which is not available for MSIX.
+* **Resolution:** Added dynamic detection using PowerShell query `Get-AppxPackage -Name *TradingView*` in both `tradingview-mcp/src/core/health.js` and `scripts/launch_tv_windows.ps1`.
+* **Status:** FIXED.
+
 ## Active Issues / Known Limitations
 
 ### 1. Latency under Load (Pending Test)

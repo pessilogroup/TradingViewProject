@@ -141,6 +141,7 @@ async def test_telegram_cmd_scan_mtf():
     
     mock_context = MagicMock()
     mock_context.args = ["BTCUSDT"]
+    mock_context.bot = AsyncMock()
     
     mock_scan_res = MTFScanResult(
         symbol="BTCUSDT",
@@ -173,6 +174,7 @@ async def test_telegram_cmd_scan_mtf():
          patch("telegram_bot.get_approval_timeout_mgr", return_value=None):
          
          await cmd_scan_mtf(mock_update, mock_context)
+         await asyncio.sleep(1.5)
          
          # Verify it replied with media group and then report text
          mock_update.message.reply_media_group.assert_called_once()
@@ -202,6 +204,7 @@ async def test_telegram_cmd_recommend():
     
     mock_context = MagicMock()
     mock_context.args = []
+    mock_context.bot = AsyncMock()
     
     mock_watchlist = ["BTCUSDT", "ETHUSDT"]
     
@@ -219,14 +222,16 @@ async def test_telegram_cmd_recommend():
          patch("analysis.scan_symbol_multi_timeframe", AsyncMock(return_value=mock_scan_res)):
          
          await cmd_recommend(mock_update, mock_context)
+         await asyncio.sleep(0.2)
          
-         mock_update.message.reply_text.assert_called_with(
-             ANY,
+         mock_context.bot.send_message.assert_called_with(
+             chat_id=ANY,
+             text=ANY,
              parse_mode="HTML"
          )
          
          # Check final text contains recommend list header
-         report_text = mock_update.message.reply_text.call_args[0][0]
+         report_text = mock_context.bot.send_message.call_args[1]["text"]
          assert "Gợi ý Đa Khung Thời Gian" in report_text
          assert "BTCUSDT" in report_text
 

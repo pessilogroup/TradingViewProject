@@ -41,6 +41,21 @@ class BinanceAdapter:
     async def place_oco_order(self, symbol: str, side: str, quantity: float, take_profit_price: float, stop_price: float, stop_limit_price: float) -> Dict[str, Any]:
         return await self._client.place_oco_order(symbol, side, quantity, take_profit_price, stop_price, stop_limit_price)
 
+    async def get_ticker_price(self, symbol: str) -> float:
+        return await self._client.get_ticker_price(symbol)
+
+    async def place_limit_order(self, symbol: str, side: str, price: float, quantity: float) -> Dict[str, Any]:
+        return await self._client.place_limit_order(symbol, side, price, quantity)
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        return await self._client.get_order(symbol, order_id)
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        return await self._client.cancel_order(symbol, order_id)
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        return await self._client.cancel_oco_order(symbol, order_list_id)
+
     async def execute_smart_order(self, symbol: str, side: str, **kwargs) -> OrderResult:
         result = await self._client.execute_smart_order(symbol, side, **kwargs)
         result.exchange = self.exchange_name
@@ -49,12 +64,9 @@ class BinanceAdapter:
     async def health_check(self) -> Dict[str, Any]:
         try:
             start = time.time()
-            # Note: get_symbol_info will be mocked in dry_run mode for the original BinanceClient.
-            # We may need a real ping endpoint or just accept the mock behavior.
-            # Let's ping the server via an empty /api/v3/ping using the raw _request if possible,
-            # but get_symbol_info is fine.
             await self._client.get_symbol_info("BTCUSDT")
             latency = (time.time() - start) * 1000
             return {"healthy": True, "latency_ms": round(latency, 1), "error": None}
         except Exception as e:
             return {"healthy": False, "latency_ms": 0, "error": str(e)}
+

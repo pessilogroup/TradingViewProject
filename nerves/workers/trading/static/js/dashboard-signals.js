@@ -5,18 +5,79 @@
 
 /* ── State ───────────────────────────────────────────────────────── */
 const SIG = {
-  page:      0,
-  pageSize:  20,
-  total:     0,
-  typeFilter: '',
+  page:          0,
+  pageSize:      20,
+  total:         0,
+  typeFilter:    '',
   debounceTimer: null,
-  chart:     null,
-  activeSymbol: 'BTCUSDT',
+  chart:         null,
+  activeSymbol:  'BTCUSDT',
+  _statsLoading: false,    // prevent duplicate stats calls
+  _initDone:     false,    // prevent re-init when switching tabs quickly
 };
+
+/* ── SSE connection ───────────────────────────────────────────────── */
+let _signalSSE = null;
+
+function startSignalsSSE() {
+  if (_signalSSE) return;   // already connected
+  _signalSSE = new EventSource('/api/events');
+
+  _signalSSE.addEventListener('connected', () => {
+    console.log('[SSE] connected to /api/events');
+  });
+
+  _signalSSE.addEventListener('new_signal', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const emoji = d.signal_type === 'entry' ? '🟢' : d.signal_type === 'exit' ? '🔴' : '🔵';
+      toast(`${emoji} New ${d.signal_type?.toUpperCase()} — ${d.symbol} @$${d.price ?? '?'}`, 'info');
+    } catch {}
+    // Reload the feed (debounced slightly to batch rapid webhooks)
+    clearTimeout(SIG.debounceTimer);
+    SIG.debounceTimer = setTimeout(() => {
+      SIG.page = 0;
+      loadSignals();
+    }, 600);
+  });
+
+  _signalSSE.addEventListener('scan_complete', () => {
+    // Update Scanner tab if it's active, otherwise cache is updated silently
+    if (typeof loadLastScan === 'function') loadLastScan();
+  });
+
+  _signalSSE.onerror = () => {
+    // Browser auto-reconnects — just log
+    console.warn('[SSE] connection lost, browser will retry...');
+  };
+}
+
+function stopSignalsSSE() {
+  if (_signalSSE) {
+    _signalSSE.close();
+    _signalSSE = null;
+  }
+}
 
 /* ── Bootstrap: called by switchTab('signals') ───────────────────── */
 async function initSignalsTab() {
-  await Promise.all([loadSignals(), loadWatchlist()]);
+  // PERF FIX: Fire all 3 in true parallel.
+  // Feed shows data first (fast indexed query).
+  // Stats + watchlist fill in behind the scenes — no blocking wait.
+  const feedPromise  = loadSignalFeedOnly();
+  const statsPromise = loadSignalStats(null);  // null = unfiltered, fast enough for first paint
+  const wlPromise    = loadWatchlist();
+
+  // Await feed only — user sees signal cards immediately
+  await feedPromise;
+
+  // Stats + watchlist resolve in background (already running, just not awaited)
+  // No need to await — they update DOM independently when done
+  Promise.all([statsPromise, wlPromise]).catch(e =>
+    console.warn('[Signals] Background init error:', e)
+  );
+
+  startSignalsSSE();
 }
 
 /* ── Debounce helper ─────────────────────────────────────────────── */
@@ -104,20 +165,15 @@ async function loadSignalStats(symbol) {
   }
 }
 
-/* ── Load signal feed ────────────────────────────────────────────── */
-async function loadSignals() {
-  const symbol    = (document.getElementById('sigSymbolFilter')?.value || '').trim();
-  const indName   = (document.getElementById('sigNameFilter')?.value   || '').trim();
-  const offset    = SIG.page * SIG.pageSize;
+/* ── Load signal feed (data rows only) ──────────────────────────── */
+async function loadSignalFeedOnly() {
+  const symbol  = (document.getElementById('sigSymbolFilter')?.value || '').trim();
+  const indName = (document.getElementById('sigNameFilter')?.value   || '').trim();
+  const offset  = SIG.page * SIG.pageSize;
 
+  // I2 FIX: only sync the symbol select — don't touch indSelect here
   const symSelect = document.getElementById('sigChartSymbolSelect');
-  if (symSelect) {
-    symSelect.value = symbol.toUpperCase();
-  }
-  const indSelect = document.getElementById('sigChartIndicatorSelect');
-  if (indSelect) {
-    indSelect.value = indName;
-  }
+  if (symSelect) symSelect.value = symbol.toUpperCase();
 
   const params = new URLSearchParams({ limit: SIG.pageSize, offset });
   if (symbol)         params.set('symbol',         symbol.toUpperCase());
@@ -129,31 +185,47 @@ async function loadSignals() {
 
   try {
     const res = await apiFetch(`/api/indicator-signals?${params}`);
-    if (!res) return;
+
+    // BUG FIX: clear spinner on null (auth error / server error)
+    if (!res) {
+      if (feedList) feedList.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">⚠️</div>
+          <h3>Could not load signals</h3>
+          <p style="font-size:0.8rem;color:#64748b;">Server error or session expired.</p>
+          <button onclick="loadSignals()" style="margin-top:8px;padding:6px 16px;border-radius:8px;background:#3b82f6;color:#fff;border:none;cursor:pointer;font-size:0.8rem;">🔄 Retry</button>
+        </div>`;
+      return;
+    }
 
     SIG.total = res.total;
     setText('sigFeedCount', `${res.total.toLocaleString()} signal${res.total !== 1 ? 's' : ''}`);
     renderSignalFeed(res.signals || []);
     renderSigPagination();
 
-    // Show ATR risk panel if first entry signal has metadata
     const firstEntry = (res.signals || []).find(s => s.signal_type === 'entry');
     if (firstEntry) renderRiskPanel(firstEntry);
 
-    // Resolve active symbol: input value -> first signal's symbol -> default 'BTCUSDT'
+    // I3 FIX: resolve activeSymbol so callers can use it for stats
     let activeSymbol = symbol.trim();
     if (!activeSymbol && res.signals && res.signals.length > 0) {
       activeSymbol = res.signals[0].symbol;
     }
     SIG.activeSymbol = (activeSymbol || 'BTCUSDT').toUpperCase();
-
-    // Load stats and chart for active symbol
-    loadSignalStats(SIG.activeSymbol);
-
   } catch (e) {
     console.error('[Signals] Feed error:', e);
-    if (feedList) feedList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading signals</h3></div>`;
+    if (feedList) feedList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading signals</h3><button onclick="loadSignals()" style="margin-top:8px;padding:6px 16px;border-radius:8px;background:#3b82f6;color:#fff;border:none;cursor:pointer;font-size:0.8rem;">🔄 Retry</button></div>`;
   }
+}
+
+/* ── Load signal feed + stats together (for filter/pagination updates) ── */
+async function loadSignals() {
+  // I3 FIX: feed first to get SIG.activeSymbol, then stats with correct symbol
+  const filterSym = (document.getElementById('sigSymbolFilter')?.value || '').trim().toUpperCase();
+  await loadSignalFeedOnly();
+  // Use explicit filter if provided, otherwise use the symbol resolved from first signal
+  const statsSym = filterSym || SIG.activeSymbol || null;
+  await loadSignalStats(statsSym);
 }
 
 /* ── Render single signal card HTML ──────────────────────────────── */
@@ -1005,7 +1077,15 @@ function renderSignalFeed(signals) {
 
 /* ── Render donut chart ──────────────────────────────────────────── */
 /* ── Render Candlestick Chart ────────────────────────────────────── */
-async function loadCandleChart(symbol) {
+/* ── Candle chart debounce timer ───────────────────────────── */
+let _candleChartTimer = null;
+function loadCandleChart(symbol) {
+  // I4 FIX: debounce — avoid calling Binance API on every rapid symbol change
+  clearTimeout(_candleChartTimer);
+  _candleChartTimer = setTimeout(() => _loadCandleChartNow(symbol), 300);
+}
+
+async function _loadCandleChartNow(symbol) {
   const canvas = document.getElementById('sigTypeChart');
   if (!canvas) return;
 
@@ -1059,91 +1139,165 @@ async function loadCandleChart(symbol) {
   }
 }
 
-function drawCandlestickChart(canvas, candles) {
+function drawCandlestickChart(canvas, candles, opts) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
   const width = canvas.width;
   const height = canvas.height;
-
   ctx.clearRect(0, 0, width, height);
 
-  const paddingLeft = 12;
-  const paddingRight = 60;
-  const paddingTop = 20;
-  const paddingBottom = 20;
+  // ── Layout ──
+  const extraR = (opts && opts.extraPaddingRight) || 0;
+  const extraL = (opts && opts.extraPaddingLeft)  || 0;
+  const priceColW = 72;
+  const paddingLeft = 8 + extraL;
+  const paddingRight = priceColW + extraR;
+  const paddingTop = 12;
+  const paddingBottom = 12;
+  const chartW = width - paddingLeft - paddingRight;
+  const chartH = height - paddingTop - paddingBottom;
+  const volumeH = Math.round(chartH * 0.18);
 
-  const chartWidth = width - paddingLeft - paddingRight;
-  const chartHeight = height - paddingTop - paddingBottom;
+  // ── TradingView colors ──
+  const TV_GREEN = '#26a69a';
+  const TV_RED   = '#ef5350';
+  const TV_GRID  = 'rgba(42, 46, 57, 0.6)';
+  const TV_TEXT  = '#787b86';
 
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  candles.forEach(c => {
-    const low = parseFloat(c[3]);
-    const high = parseFloat(c[2]);
-    if (low < minPrice) minPrice = low;
-    if (high > maxPrice) maxPrice = high;
+  // ── Parse candles ──
+  let minP = Infinity, maxP = -Infinity, maxVol = 0;
+  const parsed = candles.map(c => {
+    const o = parseFloat(c[1]), h = parseFloat(c[2]);
+    const l = parseFloat(c[3]), cl = parseFloat(c[4]);
+    const v = parseFloat(c[5]) || 0;
+    if (l < minP) minP = l;
+    if (h > maxP) maxP = h;
+    if (v > maxVol) maxVol = v;
+    return { o, h, l, c: cl, v, t: c[0] };
   });
 
-  const priceRange = maxPrice - minPrice;
-  minPrice -= priceRange * 0.08;
-  maxPrice += priceRange * 0.08;
-  const finalRange = maxPrice - minPrice || 1;
+  const rawRange = maxP - minP;
+  minP -= rawRange * 0.06;
+  maxP += rawRange * 0.06;
+  const range = maxP - minP || 1;
+  const getY = val => paddingTop + chartH * (1 - (val - minP) / range);
 
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
-  ctx.fillStyle = '#64748b';
-  ctx.font = '9px "JetBrains Mono", monospace';
+  // ── Price scale column (right) ──
+  const priceColX = width - priceColW;
+  ctx.fillStyle = 'rgba(19, 23, 34, 0.95)';
+  ctx.fillRect(priceColX, 0, priceColW, height);
+  ctx.strokeStyle = 'rgba(42, 46, 57, 0.8)';
   ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(priceColX, 0);
+  ctx.lineTo(priceColX, height);
+  ctx.stroke();
 
-  const gridCount = 3;
-  for (let i = 0; i <= gridCount; i++) {
-    const y = paddingTop + (chartHeight * i) / gridCount;
-    const price = maxPrice - (finalRange * i) / gridCount;
-
-    ctx.beginPath();
-    ctx.moveTo(paddingLeft, y);
-    ctx.lineTo(width - paddingRight, y);
-    ctx.stroke();
-
-    ctx.fillText(`$${Math.round(price).toLocaleString()}`, width - paddingRight + 6, y + 3);
+  // ── Smart grid ──
+  const steps = [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
+  const targetLines = Math.max(4, Math.min(10, Math.floor(chartH / 40)));
+  let gridStep = steps[steps.length - 1];
+  for (const s of steps) {
+    if (rawRange / s <= targetLines + 2) { gridStep = s; break; }
   }
 
-  const candleCount = candles.length;
-  const spacing = chartWidth / candleCount;
-  const candleWidth = spacing * 0.65;
-
-  candles.forEach((c, index) => {
-    const open = parseFloat(c[1]);
-    const high = parseFloat(c[2]);
-    const low = parseFloat(c[3]);
-    const close = parseFloat(c[4]);
-
-    const isBullish = close >= open;
-    const color = isBullish ? '#22c55e' : '#ef4444';
-
-    const x = paddingLeft + index * spacing + spacing / 2;
-
-    const getY = (val) => {
-      return paddingTop + chartHeight * (1 - (val - minPrice) / finalRange);
-    };
-
-    const yOpen = getY(open);
-    const yClose = getY(close);
-    const yHigh = getY(high);
-    const yLow = getY(low);
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.2;
+  const firstGrid = Math.ceil(minP / gridStep) * gridStep;
+  ctx.setLineDash([2, 3]);
+  ctx.lineWidth = 0.5;
+  for (let p = firstGrid; p <= maxP; p += gridStep) {
+    const y = getY(p);
+    if (y < paddingTop - 5 || y > height - paddingBottom + 5) continue;
+    ctx.strokeStyle = TV_GRID;
     ctx.beginPath();
-    ctx.moveTo(x, yHigh);
-    ctx.lineTo(x, yLow);
+    ctx.moveTo(paddingLeft, y);
+    ctx.lineTo(priceColX, y);
+    ctx.stroke();
+    ctx.fillStyle = TV_TEXT;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(_tvFmtPrice(p), width - 6, y + 3.5);
+  }
+  ctx.setLineDash([]);
+
+  // ── Volume bars ──
+  if (maxVol > 0) {
+    const spacing = chartW / parsed.length;
+    const volBarW = spacing * 0.7;
+    const volBase = height - paddingBottom;
+    parsed.forEach((cd, i) => {
+      ctx.fillStyle = cd.c >= cd.o ? 'rgba(38, 166, 154, 0.25)' : 'rgba(239, 83, 80, 0.25)';
+      const barH = (cd.v / maxVol) * volumeH;
+      const x = paddingLeft + i * spacing + spacing / 2;
+      ctx.fillRect(x - volBarW / 2, volBase - barH, volBarW, barH);
+    });
+  }
+
+  // ── Candlesticks ──
+  const spacing = chartW / parsed.length;
+  const candleW = Math.max(spacing * 0.7, 2);
+  parsed.forEach((cd, i) => {
+    const bull = cd.c >= cd.o;
+    const color = bull ? TV_GREEN : TV_RED;
+    const x = paddingLeft + i * spacing + spacing / 2;
+
+    // Wick
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x, getY(cd.h));
+    ctx.lineTo(x, getY(cd.l));
     ctx.stroke();
 
+    // Body
+    const yO = getY(cd.o), yC = getY(cd.c);
+    const bodyH = Math.abs(yC - yO) || 1.2;
     ctx.fillStyle = color;
-    const bodyHeight = Math.abs(yClose - yOpen) || 1.5;
-    const bodyY = Math.min(yOpen, yClose);
-    ctx.fillRect(x - candleWidth / 2, bodyY, candleWidth, bodyHeight);
+    ctx.fillRect(x - candleW / 2, Math.min(yO, yC), candleW, bodyH);
   });
+
+  // ── Current price line + badge ──
+  if (parsed.length > 0) {
+    const last = parsed[parsed.length - 1];
+    const curY = getY(last.c);
+    const curColor = last.c >= last.o ? TV_GREEN : TV_RED;
+
+    // Dashed line
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = curColor;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, curY);
+    ctx.lineTo(priceColX, curY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Price badge (arrow-left shape)
+    const bW = priceColW - 4, bH = 18;
+    const bX = priceColX + 2, bY = curY - bH / 2;
+    ctx.fillStyle = curColor;
+    ctx.beginPath();
+    ctx.moveTo(bX + 5, bY);
+    ctx.lineTo(bX + bW, bY);
+    ctx.lineTo(bX + bW, bY + bH);
+    ctx.lineTo(bX + 5, bY + bH);
+    ctx.lineTo(bX, curY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(_tvFmtPrice(last.c), bX + bW - 4, curY + 3.5);
+  }
+
+  ctx.textAlign = 'left';
+}
+
+function _tvFmtPrice(p) {
+  if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (p >= 1) return p.toFixed(2);
+  return p.toFixed(4);
 }
 
 function renderSignalTypeChart(byType) {

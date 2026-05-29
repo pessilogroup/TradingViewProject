@@ -285,21 +285,27 @@ async def generate_trading_advice(
     has_genai = GENAI_AVAILABLE and getattr(config, "GEMINI_API_KEY", None)
     has_gemini = bool(has_vertex or has_genai)
 
-    # Determine if Anthropic is available (non-mock, non-empty)
-    has_anthropic = (
+    # Determine if Anthropic is available via SDK (non-mock, non-placeholder key)
+    has_anthropic_sdk = (
         ANTHROPIC_AVAILABLE
         and bool(getattr(config, "ANTHROPIC_API_KEY", None))
         and not getattr(config, "ANTHROPIC_API_KEY", "").startswith("sk-ant-xxx")
     )
+
+    # Claude CLI auth session (OAuth login — no API key needed)
+    has_claude_cli = True   # always available as long as `claude` binary exists; verified at call time
 
     if provider == "claude_cli":
         pass  # không cần check key, sẽ verify binary khi gọi
     elif provider == "gemini":
         if not has_gemini:
             return "⚠️ RAG Analysis không khả dụng (thiếu GEMINI_API_KEY hoặc GCP_PROJECT_ID)."
+    elif provider == "anthropic":
+        # Priority: Claude CLI (OAuth) → SDK (API key) → Gemini fallback
+        # User dùng Claude login session — không cần ANTHROPIC_API_KEY
+        pass  # will try CLI first, then SDK, then Gemini in execution block
     else:
-        # Defaults or explicit anthropic provider
-        if not has_anthropic:
+        if not has_anthropic_sdk:
             if has_gemini:
                 log.info("RAG: Anthropic not configured/mock. Switching to Gemini fallback.")
                 provider = "gemini"
@@ -404,7 +410,42 @@ Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ 
             
             log.info(f"RAG: Gemini generated advice for {symbol} ({action})")
             return advice
+
+        elif provider in ("anthropic", "claude_cli"):
+            # Priority chain: Claude CLI (OAuth session) → SDK (API key) → Gemini fallback
+            # Step 1: Try Claude CLI (uses user's Claude login — no API key needed)
+            try:
+                advice = await _call_claude_cli(prompt)
+                log.info(f"RAG: Claude CLI (auth session) generated advice for {symbol} ({action})")
+                return advice
+            except ClaudeCLIError as cli_err:
+                log.warning(f"RAG: Claude CLI fail ({cli_err}). Trying SDK fallback...")
+
+            # Step 2: Try Anthropic SDK (if real API key is configured)
+            if has_anthropic_sdk:
+                try:
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+                    message = client.messages.create(
+                        model="claude-sonnet-4-5",
+                        max_tokens=512,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    advice = message.content[0].text
+                    log.info(f"RAG: Claude SDK generated advice for {symbol} ({action})")
+                    return advice
+                except Exception as sdk_err:
+                    log.warning(f"RAG: Anthropic SDK fail ({sdk_err}). Trying Gemini fallback...")
+
+            # Step 3: Gemini fallback
+            if has_gemini:
+                log.info("RAG: Falling back to Gemini...")
+                provider = "gemini"  # will be caught by fallback block below
+            else:
+                return f"⚠️ Claude không khả dụng (CLI + SDK failed). Cài đặt GEMINI_API_KEY để fallback."
+
         else:
+            # Unknown provider — try anthropic SDK directly
             try:
                 import anthropic
                 client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)

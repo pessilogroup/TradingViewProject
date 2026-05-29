@@ -8,6 +8,8 @@ nerves/workers/trading/.env
 
 # Database
 nerves/workers/trading/trades.db
+nerves/workers/trading/trading.db
+trading.db
 
 # Python
 nerves/workers/trading/__pycache__/
@@ -50,4 +52,10 @@ refactor_styles.py
 # SQLite temp files
 *.db-shm
 *.db-wal
-memory/*.db
+# Local Agent Workspaces & Logs
+.agents/
+memory/
+nerves/workers/trading/test_runs.log
+
+# Directory junctions/symlinks
+server/

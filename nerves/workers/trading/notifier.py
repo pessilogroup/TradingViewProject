@@ -166,3 +166,42 @@ async def notify_all(message: str):
     await send_telegram_alert(message)
     await send_discord_alert(message)
 
+
+async def send_scan_summary_to_telegram(serialised_results: list) -> None:
+    """Gửi tóm tắt kết quả scan từ website lên Telegram.
+
+    Called by /api/scan/trigger so that when the user clicks "Run Scan"
+    on the dashboard, a short summary is also forwarded to the bot chat.
+
+    Args:
+        serialised_results: List of scan result dicts (same shape as /api/scan/trigger response).
+    """
+    if not serialised_results:
+        return
+
+    n = len(serialised_results)
+    vcp_syms = [r["symbol"] for r in serialised_results if r.get("vcp_detected")]
+
+    lines = [f"🔍 <b>Scan kết thúc ({n} symbols)</b> <i>[từ Dashboard]</i>\n"]
+    lines.append("<pre>")
+    lines.append(f"{'Symbol':<10} {'Price':>10} {'TT':>4}  {'VCP':>5}  {'Vol%':>5}")
+    lines.append("─" * 38)
+
+    for r in serialised_results:
+        if r.get("error"):
+            lines.append(f"{r['symbol']:<10} {'ERROR':>10}")
+            continue
+        price = r.get("price", 0)
+        price_str = f"{price:,.2f}" if price >= 1 else f"{price:.4f}"
+        tt    = r.get("trend_template_score", 0)
+        vcp   = "⭐" if r.get("vcp_detected") else ""
+        vol   = f"{r.get('volume_ratio', 0)*100:.0f}%"
+        lines.append(f"{r['symbol']:<10} {price_str:>10} {tt}/8  {vcp:<3} {vol:>5}")
+
+    lines.append("</pre>")
+
+    if vcp_syms:
+        lines.append(f"\n🎯 <b>VCP detected:</b> {', '.join(vcp_syms)}")
+
+    message = "\n".join(lines)
+    await send_telegram_alert(message)

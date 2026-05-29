@@ -472,6 +472,10 @@ tr:hover td { background: var(--glass); }
   0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,200,150,0.5); }
   50% { opacity: 0.6; box-shadow: 0 0 0 5px rgba(0,200,150,0); }
 }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
+  50% { opacity: 0.5; box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+}
 .ticker-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -873,15 +877,56 @@ tr:hover td { background: var(--glass); }
   grid-template-columns: 1fr 340px;
   gap: 16px; align-items: start;
 }
-.cs-canvas-col { display: flex; flex-direction: column; gap: 14px; }
+.cs-canvas-col { display: flex; flex-direction: column; gap: 0; }
+.cs-canvas-col > :not(.cs-live-bar):not(.cs-chart-frame) { margin-top: 14px; }
 .cs-side-col   { display: flex; flex-direction: column; gap: 14px; }
+
+/* ── Live Status Bar (above chart — no overlap) ── */
+.cs-live-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  background: rgba(10, 14, 22, 0.85);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  min-height: 28px;
+}
+.cs-live-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #22c55e; flex-shrink: 0;
+  animation: pulse-dot 1.5s infinite;
+}
+.cs-live-label {
+  font-size: 0.72rem; color: var(--text-muted);
+  font-family: var(--mono); letter-spacing: 0.03em;
+}
+/* ── Regime Badge (TREND / CHOP) ── */
+.cs-regime-badge {
+  display: inline-flex; align-items: center;
+  font-size: 0.65rem; font-family: var(--mono);
+  font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 8px; border-radius: 4px;
+  opacity: 0; transition: opacity 0.4s;
+  flex-shrink: 0;
+}
+.cs-regime-badge:not(:empty) { opacity: 1; }
+.cs-regime-badge.trend {
+  background: rgba(38, 166, 154, 0.18);
+  color: #26a69a;
+  border: 1px solid rgba(38, 166, 154, 0.4);
+}
+.cs-regime-badge.chop {
+  background: rgba(239, 83, 80, 0.15);
+  color: #ef5350;
+  border: 1px solid rgba(239, 83, 80, 0.3);
+}
 
 /* ── Chart Frame ── */
 .cs-chart-frame {
   background: #000;
   border: 1px solid rgba(0,212,170,0.15);
-  border-radius: 12px;
-  min-height: 340px; position: relative; overflow: hidden;
+  border-radius: 0 0 12px 12px;
+  min-height: 360px; position: relative; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
 .cs-chart-frame:hover { border-color: rgba(0,212,170,0.35); }

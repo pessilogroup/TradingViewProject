@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -28,6 +28,56 @@ import scheduler as scheduler_module
 import telegram_bot as tg_bot_module
 import vision as vision_module
 import binance_client as binance_module
+
+# ── SSE: Server-Sent Events hub ──────────────────────────────────────────────
+import asyncio
+import json as _json
+
+_sse_clients: set[asyncio.Queue] = set()   # one Queue per connected browser tab
+
+# ── Stats TTL cache (30s) — avoids repeated full-table GROUP BY scans ─────────
+import time as _time
+_stats_cache: dict[tuple, tuple] = {}   # key=(symbol,ind_name) → (result, expire_at)
+_STATS_TTL = 30.0   # seconds
+
+
+def _stats_cache_get(key: tuple):
+    entry = _stats_cache.get(key)
+    if entry and _time.monotonic() < entry[1]:
+        return entry[0]
+    _stats_cache.pop(key, None)
+    return None
+
+
+def _stats_cache_set(key: tuple, value: dict) -> None:
+    _stats_cache[key] = (value, _time.monotonic() + _STATS_TTL)
+    # Prune stale entries (keep cache small)
+    if len(_stats_cache) > 50:
+        now = _time.monotonic()
+        for k in [k for k, (_, exp) in list(_stats_cache.items()) if exp < now]:
+            _stats_cache.pop(k, None)
+
+
+def push_sse_event(event_type: str, data: dict) -> None:
+    """Broadcast an SSE event to ALL currently connected browser clients.
+
+    Non-blocking: if a client queue is full we skip it to avoid back-pressure.
+    Called from webhook handler or any background task.
+
+    Args:
+        event_type: e.g. 'new_signal', 'scan_complete', 'heartbeat'
+        data:       JSON-serialisable dict
+    """
+    msg = f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+    dead = set()
+    for q in _sse_clients:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.add(q)
+        except Exception:
+            dead.add(q)
+    _sse_clients.difference_update(dead)
 
 # ── P9: Claude SDK package ────────────────────────────────────────────────────
 from claude_cli import SdkClient, ClaudeService
@@ -278,9 +328,26 @@ app.include_router(_auth_router)
 # ── P10: AuthMiddleware (replaces legacy dashboard_auth_middleware) ───────────
 app.add_middleware(AuthMiddleware, auth_service=getattr(app.state, 'auth_service', None))
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# ── No-cache override for JS files — MUST be declared BEFORE app.mount ───────
+@app.get("/static/js/{filename:path}")
+async def serve_js_nocache(filename: str):
+    """Serve JS with no-cache headers so browser always fetches latest version."""
+    js_path = STATIC_DIR / "js" / filename
+    if not js_path.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(
+        path=str(js_path),
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma":        "no-cache",
+            "Expires":       "0",
+        },
+    )
 
+
+# Mount static files (AFTER specific routes so /static/js/* route wins)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ═══ MIDDLEWARE: IP WHITELISTING ══════════════════════════════
 # SEC-001 fix: Use the RIGHTMOST entry of X-Forwarded-For (appended by our
@@ -456,27 +523,32 @@ async def scan_watchlist_endpoint(
     mcp = _mcp_module.get_mcp_client()
     results = await analysis_module.scan_symbols(symbol_list, mcp)
 
+    # ── Save to shared cache ──────────────────────────────────────────────────
+    import scan_cache
+    serialised = [
+        {
+            "symbol": r.symbol,
+            "price": r.price,
+            "change_pct": r.change_pct,
+            "trend_template_score": r.trend_template.score if r.trend_template else 0,
+            "trend_template_stage": r.trend_template.stage if r.trend_template else "-",
+            "trend_template_criteria": r.trend_template.criteria if r.trend_template else [],
+            "vcp_detected": r.vcp.detected if r.vcp else False,
+            "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+            "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp else 0,
+            "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp else 0,
+            "pivot_level": r.vcp.pivot_level if r.vcp else None,
+            "vcp_note": r.vcp.note if r.vcp else None,
+            "error": r.error,
+        }
+        for r in results
+    ]
+    scan_cache.save_scan_results(serialised, source="web", symbol_list=symbol_list)
+
     return {
         "scanned": len(results),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": [
-            {
-                "symbol": r.symbol,
-                "price": r.price,
-                "change_pct": r.change_pct,
-                "trend_template_score": r.trend_template.score,
-                "trend_template_stage": r.trend_template.stage,
-                "trend_template_criteria": r.trend_template.criteria,
-                "vcp_detected": r.vcp.detected,
-                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
-                "volume_ratio": round(r.vcp.volume_ratio, 2),
-                "range_ratio": round(r.vcp.range_ratio, 2),
-                "pivot_level": r.vcp.pivot_level,
-                "vcp_note": r.vcp.note,
-                "error": r.error,
-            }
-            for r in results
-        ],
+        "results": serialised,
     }
 
 
@@ -681,38 +753,32 @@ async def get_indicator_signals(
         conditions.append("signal_type = ?")
         params.append(signal_type.lower())
     if indicator_name:
+        # PREFIX match (not '%x%') so idx_indicator_signals_name index is usable
         conditions.append("indicator_name LIKE ?")
-        params.append(f"%{indicator_name}%")
+        params.append(f"{indicator_name}%")
 
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params_tuple = tuple(params)
 
-    import aiosqlite
+    import aiosqlite, json as _json
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        # Total count
-        count_row = await db.execute_fetchall(
-            f"SELECT COUNT(*) AS cnt FROM indicator_signals {where_clause}",
-            params_tuple,
-        )
-        total = count_row[0]["cnt"] if count_row else 0
-
-        # Paginated rows
+        # Single query: window function gives total count + paginated rows in one pass
         rows = await db.execute_fetchall(
             f"""
             SELECT id, signal_id, created_at, symbol, indicator_name,
                    signal_type, interval, price, confidence_score,
-                   conditions_met, metadata, source_ip, exchange
+                   conditions_met, metadata, source_ip, exchange,
+                   COUNT(*) OVER() AS _total
             FROM indicator_signals
             {where_clause}
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
-            params_tuple + (limit, offset),
+            params + [limit, offset],
         )
 
-    import json as _json
+    total = rows[0]["_total"] if rows else 0
     signals = []
     for r in rows:
         try:
@@ -743,6 +809,147 @@ async def get_indicator_signals(
     return {"total": total, "limit": limit, "offset": offset, "signals": signals}
 
 
+@app.get("/api/chart-markers")
+async def get_chart_markers(
+    symbol:   str           = Query(..., description="Symbol e.g. BTCUSDT"),
+    interval: Optional[str] = Query(None, description="Timeframe e.g. 1h, 4h, 1d"),
+    from_ts:  Optional[int] = Query(None, alias="from", description="Start time ms"),
+    to_ts:    Optional[int] = Query(None, alias="to",   description="End time ms"),
+    limit:    int           = Query(200, ge=1, le=500),
+):
+    """
+    Chart markers for LightweightCharts — MIS/MTT buy/sell arrows.
+    Queries signals table (mode=MTT|MIS) and indicator_signals table.
+    Returns markers sorted by time (unix seconds) for candleSeries.setMarkers().
+    """
+    import aiosqlite, json as _json
+
+    sym = symbol.upper().split(":")[1] if ":" in symbol else symbol.upper()
+    markers: list[dict] = []
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # ── Source 1: signals table (MTT/MIS from webhook alerts) ──
+        sig_conds = ["symbol = ?"]
+        sig_params: list = [sym]
+
+        if from_ts:
+            sig_conds.append("created_at >= datetime(?, 'unixepoch', 'localtime')")
+            sig_params.append(from_ts // 1000)
+        if to_ts:
+            sig_conds.append("created_at <= datetime(?, 'unixepoch', 'localtime')")
+            sig_params.append(to_ts // 1000)
+
+        sig_where = "WHERE " + " AND ".join(sig_conds) + " AND mode IN ('MTT','MIS')"
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT created_at, action, mode, price, payload
+            FROM signals
+            {sig_where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            tuple(sig_params) + (limit,),
+        )
+        for r in rows:
+            try:
+                ts_str = r["created_at"]  # "2024-05-29 08:00:00"
+                # Parse to unix timestamp
+                from datetime import datetime
+                dt = datetime.fromisoformat(ts_str)
+                unix_ts = int(dt.timestamp())
+            except Exception:
+                continue
+
+            action = (r["action"] or "").lower()
+            if action not in ("buy", "sell"):
+                continue
+
+            # Extract confidence from payload JSON if available
+            conf = 0
+            try:
+                payload = _json.loads(r["payload"]) if r["payload"] else {}
+                conf = int(payload.get("confidence_score", 0))
+            except Exception:
+                pass
+
+            markers.append({
+                "time":       unix_ts,
+                "action":     action,
+                "mode":       r["mode"] or "MTT",
+                "price":      r["price"],
+                "confidence": conf,
+                "source":     "webhook",
+            })
+
+        # ── Source 2: indicator_signals table (from Pine indicator alerts) ──
+        ind_conds = ["symbol = ?"]
+        ind_params: list = [sym]
+
+        if interval:
+            # normalize: "1h" → "60" or keep as-is
+            ind_conds.append("(interval = ? OR interval = ?)")
+            tf_map = {"1h": "60", "4h": "240", "1d": "D", "15m": "15"}
+            alt = tf_map.get(interval, interval)
+            ind_params.extend([interval, alt])
+        if from_ts:
+            ind_conds.append("created_at >= datetime(?, 'unixepoch', 'localtime')")
+            ind_params.append(from_ts // 1000)
+        if to_ts:
+            ind_conds.append("created_at <= datetime(?, 'unixepoch', 'localtime')")
+            ind_params.append(to_ts // 1000)
+
+        ind_conds.append("signal_type IN ('entry','exit')")
+        ind_where = "WHERE " + " AND ".join(ind_conds)
+
+        ind_rows = await db.execute_fetchall(
+            f"""
+            SELECT created_at, signal_type, price, confidence_score, metadata
+            FROM indicator_signals
+            {ind_where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            tuple(ind_params) + (limit,),
+        )
+        for r in ind_rows:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(r["created_at"])
+                unix_ts = int(dt.timestamp())
+            except Exception:
+                continue
+
+            # Derive action from metadata
+            try:
+                meta = _json.loads(r["metadata"]) if r["metadata"] else {}
+                direction = meta.get("direction", "long")
+            except Exception:
+                direction = "long"
+
+            sig_type = r["signal_type"] or "entry"
+            # entry long = buy, entry short = sell, exit long = sell, exit short = buy
+            if sig_type == "entry":
+                action = "buy" if direction == "long" else "sell"
+            else:
+                action = "sell" if direction == "long" else "buy"
+
+            markers.append({
+                "time":       unix_ts,
+                "action":     action,
+                "mode":       "MIS",  # indicator_signals are MIS (1H momentum)
+                "price":      r["price"],
+                "confidence": int(r["confidence_score"] or 0),
+                "source":     "indicator",
+            })
+
+    # Sort by time ascending (LightweightCharts requirement)
+    markers.sort(key=lambda m: m["time"])
+
+    return {"markers": markers, "total": len(markers)}
+
+
 @app.get("/api/indicator-signals/stats")
 async def get_indicator_signals_stats(
     symbol: Optional[str] = Query(None),
@@ -751,12 +958,47 @@ async def get_indicator_signals_stats(
     """KPI stats for the Signals dashboard: total, by type, avg confidence, top indicators, direction mix."""
     import aiosqlite
 
-    totals_query = "SELECT signal_type, COUNT(*) AS cnt, AVG(confidence_score) AS avg_conf FROM indicator_signals"
-    top_ind_query = "SELECT indicator_name, COUNT(*) AS cnt FROM indicator_signals"
-    recent_high_query = "SELECT COUNT(*) AS cnt FROM indicator_signals WHERE confidence_score > 80 AND created_at >= datetime('now', '-24 hours')"
+    sym_key = (symbol or '').upper()
+    ind_key = (indicator_name or '').strip()
+    cache_key = (sym_key, ind_key)
 
-    params = []
-    conditions = []
+    # ── Fast path: return cached result if fresh ──────────────────────────────
+    cached = _stats_cache_get(cache_key)
+    if cached is not None:
+        # direction_mix is always live (last-5-min window) — refresh it quickly
+        try:
+            async with aiosqlite.connect(config.DB_PATH) as _db:
+                _db.row_factory = aiosqlite.Row
+                dir_q = (
+                    "SELECT json_extract(metadata, '$.direction') AS direction, "
+                    "signal_type, COUNT(*) AS cnt, AVG(price) AS avg_price "
+                    "FROM indicator_signals WHERE created_at >= datetime('now', '-5 minutes') "
+                )
+                dir_p: list = []
+                if symbol:
+                    dir_q += "AND symbol = ? "; dir_p.append(symbol.upper())
+                if indicator_name:
+                    dir_q += "AND indicator_name = ? "; dir_p.append(indicator_name)
+                dir_q += "GROUP BY direction, signal_type LIMIT 20"
+                dir_rows = await _db.execute_fetchall(dir_q, dir_p)
+
+            direction_mix = {
+                "long":  {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+                "short": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+            }
+            for r in dir_rows:
+                d = (r["direction"] or "long").lower()
+                if d not in ("long", "short"): d = "long"
+                st = r["signal_type"]
+                if st in ("entry", "exit"):
+                    direction_mix[d][st] = {"count": r["cnt"], "avg_price": round(r["avg_price"] or 0.0, 2)}
+            return {**cached, "direction_mix": direction_mix}
+        except Exception:
+            return cached  # fallback to fully-cached response on error
+
+    # Build shared WHERE clause once
+    conditions: list[str] = []
+    params: list = []
     if symbol:
         conditions.append("symbol = ?")
         params.append(symbol.upper())
@@ -764,51 +1006,64 @@ async def get_indicator_signals_stats(
         conditions.append("indicator_name = ?")
         params.append(indicator_name)
 
-    if conditions:
-        where_str = " WHERE " + " AND ".join(conditions)
-        totals_query += where_str
-        top_ind_query += where_str
-        recent_high_query += " AND " + " AND ".join(conditions)
-
-    totals_query += " GROUP BY signal_type"
-    top_ind_query += " GROUP BY indicator_name ORDER BY cnt DESC LIMIT 5"
+    where_str = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        totals = await db.execute_fetchall(totals_query, params)
-        top_indicators = await db.execute_fetchall(top_ind_query, params)
-        recent_high = await db.execute_fetchall(recent_high_query, params)
+        # ── All queries in ONE connection, executed sequentially but without
+        #    re-opening the connection (aiosqlite overhead is connection open) ──
 
-        # top_symbols is global/unfiltered
+        totals = await db.execute_fetchall(
+            f"SELECT signal_type, COUNT(*) AS cnt, AVG(confidence_score) AS avg_conf "
+            f"FROM indicator_signals{where_str} GROUP BY signal_type",
+            params,
+        )
+
+        top_indicators = await db.execute_fetchall(
+            f"SELECT indicator_name, COUNT(*) AS cnt FROM indicator_signals"
+            f"{where_str} GROUP BY indicator_name ORDER BY cnt DESC LIMIT 5",
+            params,
+        )
+
+        # Recent high-confidence (last 24h)
+        hp_where = (where_str + " AND" if where_str else " WHERE") + " confidence_score > 80 AND created_at >= datetime('now', '-24 hours')"
+        recent_high = await db.execute_fetchall(
+            f"SELECT COUNT(*) AS cnt FROM indicator_signals{hp_where}",
+            params,
+        )
+
+        # Top symbols — global (no filter)
         top_symbols = await db.execute_fetchall(
             "SELECT symbol, COUNT(*) AS cnt FROM indicator_signals "
             "GROUP BY symbol ORDER BY cnt DESC LIMIT 6"
         )
 
+        # Market regime from settings
         regime_row = await db.execute_fetchall(
-            "SELECT value FROM settings WHERE key = 'market_regime'"
+            "SELECT value FROM settings WHERE key = 'market_regime' LIMIT 1"
         )
         market_regime = regime_row[0]["value"] if regime_row else "CHOP"
 
-        # dir_totals for direction_mix (restricted to the last 5 minutes)
-        dir_query = (
+        # Direction mix — last 5 minutes only (capped for speed)
+        dir_base = (
             "SELECT json_extract(metadata, '$.direction') AS direction, "
             "       signal_type, COUNT(*) AS cnt, AVG(price) AS avg_price "
             "FROM indicator_signals "
             "WHERE created_at >= datetime('now', '-5 minutes') "
         )
-        dir_params = []
+        dir_params: list = []
         if symbol:
-            dir_query += "AND symbol = ? "
+            dir_base += "AND symbol = ? "
             dir_params.append(symbol.upper())
         if indicator_name:
-            dir_query += "AND indicator_name = ? "
+            dir_base += "AND indicator_name = ? "
             dir_params.append(indicator_name)
-        dir_query += "GROUP BY direction, signal_type"
+        dir_base += "GROUP BY direction, signal_type LIMIT 20"
 
-        dir_rows = await db.execute_fetchall(dir_query, dir_params)
+        dir_rows = await db.execute_fetchall(dir_base, dir_params)
 
+    # ── Assemble response ──
     by_type = {r["signal_type"]: {"count": r["cnt"], "avg_conf": round(r["avg_conf"] or 0, 1)}
                for r in totals}
     total_all = sum(v["count"] for v in by_type.values())
@@ -816,36 +1071,34 @@ async def get_indicator_signals_stats(
         sum(v["avg_conf"] * v["count"] for v in by_type.values()) / max(total_all, 1), 1
     )
 
-    # Structure direction mix
     direction_mix = {
-        "long": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
-        "short": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}}
+        "long":  {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
+        "short": {"entry": {"count": 0, "avg_price": 0.0}, "exit": {"count": 0, "avg_price": 0.0}},
     }
     for r in dir_rows:
-        direction = r["direction"]
-        if not direction:
+        direction = (r["direction"] or "long").lower()
+        if direction not in ("long", "short"):
             direction = "long"
-        direction = direction.lower()
-        if direction not in ["long", "short"]:
-            direction = "long"
-
         sig_type = r["signal_type"]
-        if sig_type in ["entry", "exit"]:
+        if sig_type in ("entry", "exit"):
             direction_mix[direction][sig_type] = {
                 "count": r["cnt"],
-                "avg_price": round(r["avg_price"] or 0.0, 2)
+                "avg_price": round(r["avg_price"] or 0.0, 2),
             }
 
-    return {
-        "total":           total_all,
-        "by_type":         by_type,
-        "avg_confidence":  overall_conf,
+    result = {
+        "total":             total_all,
+        "by_type":           by_type,
+        "avg_confidence":    overall_conf,
         "high_priority_24h": recent_high[0]["cnt"] if recent_high else 0,
-        "top_indicators":  [{"name": r["indicator_name"], "count": r["cnt"]} for r in top_indicators],
-        "top_symbols":     [{"symbol": r["symbol"], "count": r["cnt"]} for r in top_symbols],
-        "direction_mix":   direction_mix,
-        "market_regime":   market_regime,
+        "top_indicators":    [{"name": r["indicator_name"], "count": r["cnt"]} for r in top_indicators],
+        "top_symbols":       [{"symbol": r["symbol"], "count": r["cnt"]} for r in top_symbols],
+        "direction_mix":     direction_mix,
+        "market_regime":     market_regime,
     }
+    # Cache everything except direction_mix (direction_mix is live on cache hits)
+    _stats_cache_set(cache_key, {k: v for k, v in result.items() if k != "direction_mix"})
+    return result
 
 
 # ═══ RAG TEST ENDPOINT ════════════════════════════════════════
@@ -1356,6 +1609,36 @@ async def system_status_endpoint():
     minutes, seconds = divmod(remainder, 60)
     uptime_str = f"{hours}h {minutes}m {seconds}s"
 
+    # Retrieve health checks and test status from DB settings
+    try:
+        health_api_server = await database.get_setting("health_api_server", "UNKNOWN")
+    except Exception:
+        health_api_server = "ERROR"
+
+    try:
+        health_cdp = await database.get_setting("health_cdp", "UNKNOWN")
+    except Exception:
+        health_cdp = "ERROR"
+
+    try:
+        health_database = await database.get_setting("health_database", "UNKNOWN")
+    except Exception:
+        health_database = "ERROR"
+
+    try:
+        test_runner_status = await database.get_setting("test_runner_status", "UNKNOWN")
+    except Exception:
+        test_runner_status = "UNKNOWN"
+
+    import json as _json
+    last_test_run = None
+    try:
+        last_test_run_str = await database.get_setting("last_test_run")
+        if last_test_run_str:
+            last_test_run = _json.loads(last_test_run_str)
+    except Exception:
+        pass
+
     return {
         "server": {
             "version": "7.6",
@@ -1375,6 +1658,11 @@ async def system_status_endpoint():
         },
         "database": db_counts,
         "auth_required": bool(config.DASHBOARD_TOKEN),
+        "health_api_server": health_api_server,
+        "health_cdp": health_cdp,
+        "health_database": health_database,
+        "test_runner_status": test_runner_status,
+        "last_test_run": last_test_run,
     }
 
 
@@ -1396,28 +1684,96 @@ async def trigger_scan_endpoint(
     mcp = _mcp_module.get_mcp_client()
     results = await analysis_module.scan_symbols(symbol_list, mcp)
 
-    return {
-        "scanned": len(results),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": [
-            {
-                "symbol": r.symbol,
-                "price": r.price,
-                "change_pct": r.change_pct,
-                "trend_template_score": r.trend_template.score,
-                "trend_template_stage": r.trend_template.stage,
-                "trend_template_criteria": r.trend_template.criteria,
-                "vcp_detected": r.vcp.detected,
-                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
-                "volume_ratio": round(r.vcp.volume_ratio, 2),
-                "range_ratio": round(r.vcp.range_ratio, 2),
-                "pivot_level": r.vcp.pivot_level,
-                "vcp_note": r.vcp.note,
-                "error": r.error,
-            }
-            for r in results
-        ],
-    }
+    # ── Serialise ──────────────────────────────────────────────────────────────
+    serialised = [
+        {
+            "symbol": r.symbol,
+            "price": r.price,
+            "change_pct": r.change_pct,
+            "trend_template_score": r.trend_template.score if r.trend_template else 0,
+            "trend_template_stage": r.trend_template.stage if r.trend_template else "-",
+            "trend_template_criteria": r.trend_template.criteria if r.trend_template else [],
+            "vcp_detected": r.vcp.detected if r.vcp else False,
+            "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+            "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp else 0,
+            "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp else 0,
+            "pivot_level": r.vcp.pivot_level if r.vcp else None,
+            "vcp_note": r.vcp.note if r.vcp else None,
+            "error": r.error,
+        }
+        for r in results
+    ]
+
+    # ── Save to shared cache ──────────────────────────────────────────────────
+    import scan_cache
+    scan_cache.save_scan_results(serialised, source="web", symbol_list=symbol_list)
+
+    # ── Notify Telegram ───────────────────────────────────────────────────────
+    try:
+        from notifier import send_scan_summary_to_telegram
+        import asyncio
+        asyncio.create_task(send_scan_summary_to_telegram(serialised))
+    except Exception as _te:
+        log.warning(f"Telegram scan notify failed (non-fatal): {_te}")
+
+    ts = datetime.now(timezone.utc).isoformat()
+
+    # ── Push scan_complete SSE to all browser tabs ────────────────────────────
+    push_sse_event("scan_complete", {"scanned": len(results), "timestamp": ts, "source": "web"})
+
+    return {"scanned": len(results), "timestamp": ts, "results": serialised}
+
+
+@app.get("/api/scan/last")
+async def get_last_scan_endpoint():
+    """Return the most recent scan results from the shared in-memory cache.
+
+    Used by the dashboard to restore last scan without re-running.
+    Returns 204 if no scan has been run yet.
+    """
+    import scan_cache
+    if not scan_cache.has_results():
+        return JSONResponse(status_code=204, content=None)
+    return scan_cache.get_last_scan()
+
+
+# \u2550\u2550\u2550 SSE EVENTS STREAM \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+@app.get("/api/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream.
+
+    Browser connects once; server pushes events (new_signal, scan_complete,
+    heartbeat) without polling.  Each tab opens its own connection.
+    """
+    client_q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _sse_clients.add(client_q)
+
+    async def _stream():
+        try:
+            # Initial handshake
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(client_q.get(), timeout=15)
+                    yield msg
+                except asyncio.TimeoutError:
+                    # Heartbeat — keeps proxy/browser from closing idle connection
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            _sse_clients.discard(client_q)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering
+            "Connection": "keep-alive",
+        },
+    )
 
 
 if __name__ == "__main__":

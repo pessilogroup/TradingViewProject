@@ -18,17 +18,18 @@ async def insert_signal(
     quote_qty: Optional[float] = None,
     source_ip: Optional[str] = None,
     payload: Optional[Dict] = None,
+    mode: Optional[str] = None,
 ) -> int:
     """Luu tin hieu moi tu TradingView, tra ve signal_id."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cursor = await db.execute(
-            """INSERT INTO signals (symbol, action, price, quote_qty, source_ip, payload)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (symbol, action, price, quote_qty, source_ip, json.dumps(payload) if payload else None),
+            """INSERT INTO signals (symbol, action, price, quote_qty, source_ip, payload, mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, action, price, quote_qty, source_ip, json.dumps(payload) if payload else None, mode),
         )
         await db.commit()
         signal_id = cursor.lastrowid
-        log.info(f"Signal #{signal_id} saved: {action} {symbol}")
+        log.info(f"Signal #{signal_id} saved: {action} {symbol}" + (f" [{mode}]" if mode else ""))
         return signal_id
 
 async def update_signal_status(signal_id: int, processed: int):

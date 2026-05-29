@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS signals (
     quote_qty   REAL,
     source_ip   TEXT,
     payload     TEXT,
+    mode        TEXT,
     processed   INTEGER NOT NULL DEFAULT 0
 );
 
@@ -125,6 +126,11 @@ CREATE INDEX IF NOT EXISTS idx_indicator_signals_symbol ON indicator_signals(sym
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_name   ON indicator_signals(indicator_name);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_type   ON indicator_signals(signal_type);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(created_at);
+-- Composite indexes for frequent query patterns
+CREATE INDEX IF NOT EXISTS idx_ind_sig_date_sym  ON indicator_signals(created_at, symbol);
+CREATE INDEX IF NOT EXISTS idx_ind_sig_sym_type  ON indicator_signals(symbol, signal_type);
+-- Covering index: feed query WHERE symbol=? ORDER BY created_at DESC LIMIT n
+CREATE INDEX IF NOT EXISTS idx_ind_sig_sym_date  ON indicator_signals(symbol, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -171,6 +177,13 @@ async def init_db():
             except Exception:
                 pass  # Column already exists
 
+        # v7.0: Add mode column to signals (backward-compatible — Phase 2 MTT/MIS tracking)
+        try:
+            await db.execute("ALTER TABLE signals ADD COLUMN mode TEXT")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
+
     log.info(f"Database initialized: {config.DB_PATH}")
 
 
@@ -195,11 +208,15 @@ from data.persistence_store import (  # noqa: E402, F401
 from data.query_service import (  # noqa: E402, F401
     get_trades,
     get_stats,
+    get_stats_by_mode,
+    get_recent_trades,
     get_equity_curve,
     get_briefs,
     get_brief_by_id,
     get_db_counts,
 )
+
+
 
 
 # ═══════════════════════════════════════════════════════════════

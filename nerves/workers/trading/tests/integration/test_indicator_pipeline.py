@@ -53,7 +53,9 @@ async def test_indicator_pipeline_entry_signal(indicator_bus):
     async def on_validated(event):
         signal_validated_events.append(event)
 
-    with patch("notifier.notify_all", new_callable=AsyncMock):
+    with patch("notifier.notify_all", new_callable=AsyncMock), \
+         patch("mcp_client.MCPClient.capture_screenshot", new_callable=AsyncMock, return_value=Path("test.png")), \
+         patch("vision.analyze_chart_vision", new_callable=AsyncMock, return_value={"confidence": 8}) as mock_vision:
         await indicator_bus.emit(IndicatorSignalReceived(
             signal_id=1001,
             symbol="BTCUSDT",
@@ -67,6 +69,9 @@ async def test_indicator_pipeline_entry_signal(indicator_bus):
             source_ip="127.0.0.1",
             exchange="binance"
         ))
+        # Yield control to allow the background task to run
+        import asyncio
+        await asyncio.sleep(0.1)
 
     assert len(signal_validated_events) == 1
     event = signal_validated_events[0]

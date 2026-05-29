@@ -223,3 +223,154 @@ Integrity mode: development (Forbidden to read test source code or hardcode veri
 ### Webhook Verification
 - [ ] Successfully sends the dynamic payload to `/webhook` and receives a HTTP 200/202 confirmation.
 - [ ] A query on `/api/indicator-signals` confirms the dynamically fetched symbol, price, and ATR metadata have been persisted in the `indicator_signals` table.
+
+## Follow-up — 2026-05-27T22:49:02+07:00
+
+Thiết lập và mở rộng hệ thống tích hợp tín hiệu TradingView về Local Server thông qua Webhook và Chrome DevTools Protocol (CDP), bổ sung các tính năng tự động xác thực, quản lý vốn thích ứng ATR, tự động khôi phục kết nối và lọc nhiễu bằng AI.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Auto-Validation & Dynamic Slippage Control
+Hệ thống tự động so khớp giá kích hoạt của Webhook (`price`) với giá Market thực tế từ sàn giao dịch (Binance) tại thời điểm nhận tín hiệu. Nếu độ lệch (trượt giá) vượt quá 0.5%:
+- Chuyển lệnh từ Market Order sang Limit Order tại mức giá mong muốn của Webhook.
+- Nếu không khớp sau 30 giây, hủy lệnh và gửi cảnh báo "Slippage Warning" qua Telegram.
+
+### R2. ATR-Based Adaptive Position Sizing
+Tự động điều chỉnh kích thước vị thế giao dịch dựa trên độ biến động thực tế:
+- Trích xuất `atr_value` từ payload Webhook.
+- Tính toán Stop Loss = Entry Price - (2 * ATR) cho lệnh Long.
+- Tính toán khối lượng giao dịch (`quoteQty`) sao cho rủi ro tối đa cho mỗi lệnh không vượt quá 1.0% số dư khả dụng trên tài khoản sàn giao dịch.
+
+### R3. CDP Automatic Health Check & Keep-Alive
+Xây dựng module giám sát hoạt động của TradingView Desktop qua Chrome DevTools Protocol (CDP):
+- Định kỳ (mỗi 5 phút) kiểm tra phản hồi của tab TradingView.
+- Nếu tab bị treo (crash), mất kết nối WebSocket hoặc không phản hồi trang trong 30 giây, tự động phát lệnh reload tab thông qua CDP kết nối ở cổng `9222`.
+
+### R4. AI Market Regime Filter
+Tích hợp bộ lọc phân loại bối cảnh thị trường trước khi thực thi tín hiệu từ chiến lược A.007 + MIS:
+- Sử dụng công cụ phân tích hình ảnh biểu đồ qua Gemini Vision (tại `vision.py`) hoặc thuật toán Heuristic (được tính toán từ dữ liệu nến gần nhất) để xác định trạng thái thị trường: `TREND` hay `CHOP` (Sideway).
+- Nếu thị trường là `CHOP`, tự động giảm 50% khối lượng đặt lệnh hoặc bỏ qua các tín hiệu breakout của A.007.
+
+## Acceptance Criteria
+
+### Webhook & Slippage Control
+- [ ] Thực hiện so khớp giá webhook và giá thị trường thực tế ngay khi nhận payload.
+- [ ] Lệnh giao dịch được chuyển thành lệnh Limit khi slippage > 0.5%.
+
+### ATR Position Sizing
+- [ ] Khối lượng giao dịch được tính toán động dựa trên `atr_value` của payload và số dư tài khoản thực tế.
+- [ ] Mức Stop Loss và Take Profit của lệnh OCO được đặt chuẩn xác theo công thức ATR.
+
+### CDP Keep-Alive
+- [ ] Phát hiện trạng thái offline hoặc crash của tab TradingView.
+- [ ] Thực hiện reload tab thành công qua kết nối CDP cổng 9222.
+
+### AI Regime Filter
+- [ ] Tín hiệu giao dịch được phân loại theo trạng thái thị trường (Trend/Chop) trước khi gửi tới Trade Engine.
+- [ ] Khối lượng lệnh hoặc quyết định bỏ qua lệnh được thực thi chính xác theo trạng thái Trend/Chop được phân loại.
+
+## Follow-up — 2026-05-28T00:43:55+07:00
+
+Xây dựng hệ thống tự động kiểm thử (Auto-Test Runner) chạy dưới dạng Watcher tự động giám sát mã nguồn (Python & Pine Script). Khi phát hiện thay đổi, hệ thống chạy lại các bài kiểm thử và xác thực hệ thống (Database, API, CDP). Nếu thất bại, hệ thống ghi log, cập nhật Dashboard và gửi cảnh báo qua Telegram.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Watcher-Based Auto-Test Execution
+Xây dựng một module Watcher giám sát thư mục mã nguồn (`nerves/workers/trading/`) và thư mục Pine Script (`pine/`). 
+- Khi phát hiện thay đổi trên các file `.py` hoặc `.pine`, tự động kích hoạt `pytest` chạy lại các bài kiểm thử liên quan.
+- Đảm bảo cơ chế debounce để tránh chạy liên tiếp nhiều lần khi lưu nhiều file cùng lúc.
+
+### R2. System Health & Integration Verification
+Bên cạnh kiểm thử code, Watcher sẽ tự động xác thực:
+- Trạng thái kết nối cơ sở dữ liệu `trades.db`.
+- Liveness check của API Server (cổng 5000) và CDP (cổng 9222).
+- Cập nhật trạng thái sức khỏe này vào một bảng dữ liệu hoặc biến cấu hình hệ thống (Dashboard state) để hiển thị trực quan.
+
+### R3. Multi-Channel Alerting on Failure
+Khi phát hiện bài test thất bại hoặc dịch vụ ngắt kết nối:
+- Ghi log chi tiết lỗi ra file `test_runs.log`.
+- Cập nhật trạng thái lỗi lên Dashboard.
+- Gửi tin nhắn khẩn cấp qua Telegram Bot kèm thông tin file bị lỗi và thông điệp lỗi (traceback rút gọn).
+
+## Acceptance Criteria
+
+### Watcher Behavior
+- [ ] Watcher phát hiện chính xác khi thay đổi/lưu file `.py` hoặc `.pine` và tự động chạy `pytest`.
+- [ ] Áp dụng debounce (tối thiểu 1 giây) thành công.
+
+### Diagnostics & Dashboard Update
+- [ ] Kiểm tra được kết nối SQLite, API (5000) và CDP (9222).
+- [ ] Trạng thái kết quả chạy test và sức khỏe hệ thống được lưu trữ và cập nhật thành công lên Dashboard state (settings/DB).
+
+### Alerting & Logs
+- [ ] Lỗi kiểm thử được ghi nhận đầy đủ vào `test_runs.log`.
+- [ ] Tin nhắn Telegram được gửi đi chính xác khi có kiểm thử thất bại.
+
+## Follow-up — 2026-05-29T01:41:19+07:00
+
+# Teamwork Project Prompt — Draft
+
+> Status: Launched — Đội ngũ Agent đang thực thi kiểm tra hệ thống
+> Goal: Chạy xác minh độc lập bằng teamwork_preview để đảm bảo không còn lỗi hồi quy (regression) và rò rỉ bộ nhớ.
+
+Kiểm tra và xác minh toàn bộ các thay đổi kiến trúc tối ưu hóa Telegram Bot, MCP Client, và REST Fallback đã thực hiện trong dự án.
+
+Working directory: `C:\Users\pesil\working\mj_trading\TradingViewProject`
+
+## Requirements
+
+### R1. Kiểm tra tính ổn định và Concurrency của MCP Client
+- Xác minh xem cơ chế `asyncio.gather` và `asyncio.Semaphore(5)` trong `mcp_client.py` có chạy ổn định dưới điều kiện thực tế (ví dụ: quét 10-15 symbols liên tục).
+- Đảm bảo không xảy ra hiện tượng chồng chéo tài nguyên (Resource collision) hoặc rò rỉ tiến trình con Node.js.
+
+### R2. Xác minh tính phản hồi của Telegram Bot
+- Xác minh các lệnh `/scan`, `/scan_all`, `/scan_mtf`, `/recommend` hoạt động trơn tru trên môi trường thực tế.
+- Kiểm tra xem các background tasks có bị "lạc trôi" (orphan tasks) khi người dùng spam lệnh hoặc hủy phiên chat không.
+
+### R3. Kiểm tra hồi quy toàn bộ hệ thống (Regression Testing)
+- Chạy toàn bộ 434 tests của hệ thống để xác định nguyên nhân gây treo/deadlock khi chạy chung toàn bộ test suite.
+- Sửa đổi hoặc tối ưu hóa các phần test bị ảnh hưởng để đảm bảo toàn bộ test suite chạy thành công 100% không bị treo.
+
+## Acceptance Criteria
+
+### Verification & Stability
+- Tất cả 434 tests trong bộ test suite của hệ thống chạy hoàn tất thành công (PASSED) mà không gặp bất kỳ lỗi treo hay deadlock nào.
+- Xác minh độc lập cơ chế Semaphore của MCP Client hoạt động chính xác trong môi trường multi-threaded/multi-process.
+
+## Follow-up — 2026-05-29T05:00:10+07:00
+
+Implement a true Multi-Timeframe (MTF) execution in the consolidated Pine Script strategy and compile a central optimized parameters matrix for BTC, ETH, and SOL.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. True Multi-Timeframe (MTF) Pine Script Upgrade
+- Upgrade `pine/v2/minervini_strategy.pine` to support true MTF calculations.
+- When `strat_mode` is set to "Daily Trend Follower (MTT v1.005-b)", calculate EMA 20/50/100 from the Daily timeframe even when the strategy is run on lower timeframes (e.g., 1H, 4H).
+- Enforce strict lookahead-free security calculations using `barmerge.lookahead_off` and series indexing offsets (e.g., `[1]`) to prevent any future lookahead bias in backtests.
+
+### R2. Central Configuration Matrix
+- Create `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` containing a structured matrix/table of optimal parameters for BTC, ETH, and SOL.
+- For ETH and SOL, adapt parameters from BTC and scale position sizing/ATR multipliers based on historical relative volatility (e.g., standard beta multipliers).
+- The parameters should include MA configurations, ATR Multipliers, Stop-Loss/Take-Profit thresholds, Position Sizing, and Webhook payload parameters.
+
+### R3. Multi-Asset Performance Summary
+- Update `docs/reports/STRATEGY_GENEALOGY.md` to map out the strategy evolution including performance metrics (Profit Factor, Max Drawdown, Recovery Factor, Expectancy, Win Rate) across BTC, ETH, and SOL.
+
+## Acceptance Criteria
+
+### Pine Script Compilation & Lookahead Validation
+- [ ] The updated `pine/v2/minervini_strategy.pine` compiles in TradingView (or conforms perfectly to v5 syntax rules without syntax errors).
+- [ ] No lookahead bias is present in the `request.security` calls (verifiable by using `[1]` offset on requested variables).
+
+### Documentation Correctness
+- [ ] `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` contains complete, non-placeholder tables for BTC, ETH, and SOL.
+- [ ] `docs/reports/STRATEGY_GENEALOGY.md` has updated performance comparison tables for all three assets.

@@ -1,5 +1,21 @@
 // ═══ INDICATORS TAB — USE /api/scan/trigger ═══
 let indVersion = 'v1';
+
+// ── Capture Studio live chart state ──────────────────────────────────────────
+let _csLiveTimer    = null;   // interval handle for 30s auto-refresh
+let _captureRunning = false;  // prevent concurrent captures
+let _csChart        = null;   // LightweightCharts instance
+let _csCandleSeries = null;   // candleSeries reference
+let _csEma9Series   = null;
+let _csEma21Series  = null;
+let _csEma50Series  = null;
+let _csBollUpper    = null;
+let _csBollLower    = null;
+let _csVolSeries    = null;
+let _csLastSymbol   = null;
+let _csLastInterval = null;
+let _csDebounceTimer = null;
+
 function setIndVersion(v) {
   indVersion = v;
   const p1 = document.getElementById('pill-v1');
@@ -157,8 +173,681 @@ function clearNotifs() {
   if (badge) badge.textContent = '0';
 }
 
-// ═══ VISION CAPTURE — CAPTURE STUDIO ═══
-let _captureRunning = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  STEALTH CAPTURE STUDIO — Live Chart Engine (LightweightCharts v4)
+//  6-Phase Pine Script Virtual Layout: Candles + Vol + EMA + RSI + MACD + BB
+//  + MIS/MTT Signal Markers + Inset Parent TF Chart
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Global chart state */
+const _CS = {
+  chart:        null,   // LightweightCharts instance
+  candleSeries: null,   // Main candlestick
+  volSeries:    null,   // Volume histogram
+  ema9Series:   null,
+  ema21Series:  null,
+  ema50Series:  null,
+  bbUpper:      null,
+  bbMid:        null,
+  bbLower:      null,
+  rsiSeries:    null,
+  macdSeries:   null,
+  macdSignal:   null,
+  macdHist:     null,
+  _candles:     null,   // raw Binance candles cache
+  _sym:         '',
+  _interval:    '',
+};
+
+// ── TF map ──
+const _csTfMap        = {'15': '15m', '60': '1h', '240': '4h', 'D': '1d', 'W': '1w'};
+const _csParentTfMap  = {'15m': '1h', '1h': '4h', '4h': '1d', '1d': '1w', '1w': '1M'};
+
+// ── TV Color Palette ──
+const TV = {
+  GREEN:       '#26a69a',
+  RED:         '#ef5350',
+  BG:          '#131722',
+  GRID:        'rgba(42, 46, 57, 0.5)',
+  TEXT:        '#787b86',
+  BORDER:      'rgba(42, 46, 57, 0.8)',
+  EMA9:        '#26c6da',
+  EMA21:       '#ff9800',
+  EMA50:       '#ab47bc',
+  BB:          'rgba(33, 150, 243, 0.6)',
+  RSI:         '#e040fb',
+  MACD_LINE:   '#42a5f5',
+  MACD_SIG:    '#ef5350',
+  MACD_HIST_G: 'rgba(38,166,154,0.7)',
+  MACD_HIST_R: 'rgba(239,83,80,0.7)',
+  MTT_BUY:     '#26a69a',
+  MTT_SELL:    '#ef5350',
+  MIS_BUY:     '#ff9800',
+  MIS_SELL:    '#ab47bc',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MAIN ENTRY: loadCSLiveChart()
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadCSLiveChart() {
+  const container = document.getElementById('csLiveChart');
+  if (!container) return;
+
+  const sym       = (document.getElementById('captureSymbol')?.value || 'BTCUSDT').trim().toUpperCase();
+  const tfRaw     = document.getElementById('captureTimeframe')?.value || '60';
+  const interval  = _csTfMap[tfRaw] || '1h';
+  const showInset = document.getElementById('showParentChart')?.value === 'yes';
+  const insetPos  = document.getElementById('insetPosition')?.value || 'bottom-right';
+  const cleanSym  = sym.includes(':') ? sym.split(':')[1] : sym;
+
+  // Update live label
+  const lbl = document.getElementById('csLiveLabel');
+  if (lbl) lbl.textContent = `${sym} · ${interval.toUpperCase()} · Binance`;
+
+  // ── Phase 1: Init or reuse LightweightCharts instance ──
+  _csInitChart(container);
+
+  // ── Fetch candles ──
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${cleanSym}&interval=${interval}&limit=120`);
+    if (!res.ok) throw new Error('Binance API error');
+    const raw = await res.json();
+    if (!raw || !raw.length) throw new Error('No candle data');
+
+    _CS._candles  = raw;
+    _CS._sym      = cleanSym;
+    _CS._interval = interval;
+
+    // ── Set candle data ──
+    const ohlcv = raw.map(c => ({
+      time:  Math.floor(c[0] / 1000),
+      open:  parseFloat(c[1]),
+      high:  parseFloat(c[2]),
+      low:   parseFloat(c[3]),
+      close: parseFloat(c[4]),
+    }));
+    _CS.candleSeries.setData(ohlcv);
+
+    // ── Volume ──
+    const maxVol = Math.max(...raw.map(c => parseFloat(c[5])));
+    _CS.volSeries.setData(raw.map(c => ({
+      time:  Math.floor(c[0] / 1000),
+      value: parseFloat(c[5]),
+      color: parseFloat(c[4]) >= parseFloat(c[1]) ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)',
+    })));
+
+    // Update current price in bar
+    const lastC = raw[raw.length - 1];
+    const lastClose = parseFloat(lastC[4]);
+    const priceEl = document.getElementById('csLivePrice');
+    if (priceEl) {
+      const bull = lastClose >= parseFloat(lastC[1]);
+      priceEl.textContent = _tvFmtPrice(lastClose);
+      priceEl.style.color = bull ? TV.GREEN : TV.RED;
+    }
+
+    // ── Phase 2: EMA Overlays ──
+    const closes = raw.map(c => parseFloat(c[4]));
+    const times  = raw.map(c => Math.floor(c[0] / 1000));
+    _csSetEMA(times, closes);
+
+    // ── Regime badge (MTT SMA logic) ──
+    _csSetRegimeBadge(closes);
+
+    // ── Phase 3: RSI ──
+    _csSetRSI(times, closes);
+
+    // ── Phase 4: Signal Markers (MIS/MTT from server + MIS client-side) ──
+    // Pre-compute MIS signals client-side as fallback
+    _CS._misSignals = _calcMISSignals(times, closes);
+    await _csSetMarkers(cleanSym, interval, raw);
+
+    // ── Phase 5: Bollinger Bands + MACD ──
+    _csSetBB(times, closes);
+    _csSetMACD(times, closes);
+
+    // ── Apply visibility from toggles ──
+    updateCSIndicators();
+
+    // ── Phase 6: Inset canvas overlay ──
+    if (showInset) {
+      await _csDrawInset(cleanSym, interval, insetPos);
+    } else {
+      _csClearInset();
+    }
+
+    // Fit chart to data
+    _CS.chart.timeScale().fitContent();
+
+  } catch (e) {
+    console.warn('[CS Chart]', e);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 1: Chart Initialization
+// ─────────────────────────────────────────────────────────────────────────────
+function _csInitChart(container) {
+  if (_CS.chart) {
+    // Reuse existing chart — just update data
+    return;
+  }
+  const h = Math.max(container.clientHeight || 380, 380);
+
+  _CS.chart = LightweightCharts.createChart(container, {
+    width:  container.clientWidth  || 600,
+    height: h,
+    layout: {
+      background: { type: 'solid', color: TV.BG },
+      textColor: TV.TEXT,
+      fontFamily: '"JetBrains Mono", monospace',
+      fontSize: 10,
+    },
+    grid: {
+      vertLines:  { color: TV.GRID, style: LightweightCharts.LineStyle.Dashed },
+      horzLines:  { color: TV.GRID, style: LightweightCharts.LineStyle.Dashed },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: 'rgba(255,255,255,0.2)', width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#363a45' },
+      horzLine: { color: 'rgba(255,255,255,0.2)', width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#363a45' },
+    },
+    rightPriceScale: {
+      borderColor: TV.BORDER,
+      scaleMargins: { top: 0.05, bottom: 0.25 },
+    },
+    timeScale: {
+      borderColor: TV.BORDER,
+      timeVisible: true,
+      secondsVisible: false,
+      fixLeftEdge: false,
+      fixRightEdge: false,
+    },
+  });
+
+  // ── Candlestick series ──
+  _CS.candleSeries = _CS.chart.addCandlestickSeries({
+    upColor:        TV.GREEN,
+    downColor:      TV.RED,
+    borderUpColor:  TV.GREEN,
+    borderDownColor:TV.RED,
+    wickUpColor:    TV.GREEN,
+    wickDownColor:  TV.RED,
+    priceLineVisible: true,
+    priceLineColor:   TV.GREEN,
+    priceLineWidth:   1,
+    priceLineStyle:   LightweightCharts.LineStyle.Dashed,
+  });
+
+  // ── Volume histogram (sub-pane via scaleId overlay) ──
+  _CS.volSeries = _CS.chart.addHistogramSeries({
+    priceFormat:   { type: 'volume' },
+    priceScaleId:  'volume',
+  });
+  _CS.chart.priceScale('volume').applyOptions({
+    scaleMargins: { top: 0.82, bottom: 0.00 },
+  });
+
+  // ── EMA lines (Phase 2) ──
+  _CS.ema9Series  = _CS.chart.addLineSeries({ color: TV.EMA9,  lineWidth: 1, priceLineVisible: false, lastValueVisible: true });
+  _CS.ema21Series = _CS.chart.addLineSeries({ color: TV.EMA21, lineWidth: 1, priceLineVisible: false, lastValueVisible: true });
+  _CS.ema50Series = _CS.chart.addLineSeries({ color: TV.EMA50, lineWidth: 1, priceLineVisible: false, lastValueVisible: true, visible: false });
+
+  // ── Bollinger Bands (Phase 5) ──
+  _CS.bbUpper = _CS.chart.addLineSeries({ color: TV.BB, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, visible: false });
+  _CS.bbMid   = _CS.chart.addLineSeries({ color: TV.BB, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, visible: false });
+  _CS.bbLower = _CS.chart.addLineSeries({ color: TV.BB, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, visible: false });
+
+  // ── RSI pane (Phase 3) ──
+  _CS.rsiSeries = _CS.chart.addLineSeries({
+    color:            TV.RSI,
+    lineWidth:        1,
+    priceScaleId:     'rsi',
+    priceLineVisible: false,
+    lastValueVisible: true,
+  });
+  _CS.chart.priceScale('rsi').applyOptions({
+    scaleMargins: { top: 0.78, bottom: 0.05 },
+    borderColor: TV.BORDER,
+  });
+
+  // ── MACD pane (Phase 5) ──
+  _CS.macdHist = _CS.chart.addHistogramSeries({
+    priceScaleId: 'macd',
+    priceLineVisible: false,
+    lastValueVisible: false,
+    visible: false,
+  });
+  _CS.macdSeries = _CS.chart.addLineSeries({
+    color: TV.MACD_LINE, lineWidth: 1,
+    priceScaleId: 'macd',
+    priceLineVisible: false, lastValueVisible: false, visible: false,
+  });
+  _CS.macdSignal = _CS.chart.addLineSeries({
+    color: TV.MACD_SIG, lineWidth: 1,
+    priceScaleId: 'macd',
+    priceLineVisible: false, lastValueVisible: false, visible: false,
+  });
+  _CS.chart.priceScale('macd').applyOptions({
+    scaleMargins: { top: 0.88, bottom: 0.00 },
+    borderColor: TV.BORDER,
+  });
+
+  // Auto-resize
+  const ro = new ResizeObserver(() => {
+    if (_CS.chart && container.clientWidth > 0) {
+      _CS.chart.resize(container.clientWidth, container.clientHeight || 380);
+    }
+  });
+  ro.observe(container);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 2: EMA Calculations
+// ─────────────────────────────────────────────────────────────────────────────
+function _calcEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const result = [];
+  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period - 1; i < closes.length; i++) {
+    if (i > period - 1) ema = closes[i] * k + ema * (1 - k);
+    result.push(ema);
+  }
+  return result;
+}
+
+function _csSetEMA(times, closes) {
+  const makeData = (vals, offset) =>
+    vals.map((v, i) => ({ time: times[i + offset], value: v }));
+
+  const ema9  = _calcEMA(closes, 9);
+  const ema21 = _calcEMA(closes, 21);
+  const ema50 = _calcEMA(closes, 50);
+
+  _CS.ema9Series.setData(makeData(ema9, 8));
+  _CS.ema21Series.setData(makeData(ema21, 20));
+  _CS.ema50Series.setData(makeData(ema50, 49));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  MIS Client-Side Signals — EMA20/EMA50 crossover (replicates a007_mis_webhook.pine)
+//  Pine logic: longCondition = ta.crossover(fastEMA, slowEMA)  fast=EMA20, slow=EMA50
+// ─────────────────────────────────────────────────────────────────────────────
+function _calcMISSignals(times, closes) {
+  const ema20 = _calcEMA(closes, 20);
+  const ema50 = _calcEMA(closes, 50);
+  // ema50 starts at index 49, ema20 starts at index 19
+  // Align: ema50[i] corresponds to closes[i+49], ema20[i+30] corresponds to same bar
+  const offset = 49; // start where ema50 is available
+  const signals = [];
+
+  for (let i = 1; i < ema50.length; i++) {
+    const ema20Now  = ema20[i + 30];     // ema20 offset = 19, so +30 aligns with ema50 offset 49
+    const ema20Prev = ema20[i + 30 - 1];
+    const ema50Now  = ema50[i];
+    const ema50Prev = ema50[i - 1];
+    if (!ema20Now || !ema20Prev) continue;
+
+    const t = times[i + offset];
+    if (!t) continue;
+
+    // Crossover: ema20 crosses above ema50 → BUY
+    if (ema20Prev <= ema50Prev && ema20Now > ema50Now) {
+      signals.push({ time: t, action: 'buy', mode: 'MIS' });
+    }
+    // Crossunder: ema20 crosses below ema50 → SELL
+    else if (ema20Prev >= ema50Prev && ema20Now < ema50Now) {
+      signals.push({ time: t, action: 'sell', mode: 'MIS' });
+    }
+  }
+  return signals;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Regime Badge — TREND vs CHOP detection
+//  Based on MTT logic: price > SMA50 > SMA150 > SMA200 = TREND, else CHOP
+// ─────────────────────────────────────────────────────────────────────────────
+function _csSetRegimeBadge(closes) {
+  const badge = document.getElementById('csRegimeBadge');
+  if (!badge) return;
+
+  if (closes.length < 200) { badge.textContent = ''; return; }
+
+  const sma = (n) => closes.slice(-n).reduce((a, b) => a + b, 0) / n;
+  const sma50  = sma(50);
+  const sma150 = sma(150);
+  const sma200 = sma(200);
+  const price  = closes[closes.length - 1];
+
+  // MTT Trend Template simplified: price > SMA50 > SMA150 > SMA200
+  const isTrend = price > sma50 && sma50 > sma150 && sma150 > sma200;
+
+  badge.textContent = isTrend ? '📈 TREND' : '⚡ CHOP';
+  badge.className   = `cs-regime-badge ${isTrend ? 'trend' : 'chop'}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 3: RSI(14)
+// ─────────────────────────────────────────────────────────────────────────────
+function _calcRSI(closes, period = 14) {
+  const result = [];
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) avgGain += diff;
+    else avgLoss -= diff;
+  }
+  avgGain /= period; avgLoss /= period;
+  for (let i = period; i < closes.length; i++) {
+    if (i > period) {
+      const diff = closes[i] - closes[i - 1];
+      avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
+      avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
+    }
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    result.push(100 - (100 / (1 + rs)));
+  }
+  return result;
+}
+
+function _csSetRSI(times, closes) {
+  const rsi = _calcRSI(closes, 14);
+  _CS.rsiSeries.setData(rsi.map((v, i) => ({ time: times[i + 14], value: v })));
+
+  // Add overbought/oversold reference lines as price lines
+  _CS.rsiSeries.createPriceLine({ price: 70, color: 'rgba(239,83,80,0.4)',   lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: 'OB' });
+  _CS.rsiSeries.createPriceLine({ price: 30, color: 'rgba(38,166,154,0.4)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: 'OS' });
+  _CS.rsiSeries.createPriceLine({ price: 50, color: 'rgba(120,123,134,0.3)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 4: MIS/MTT Signal Markers
+// ─────────────────────────────────────────────────────────────────────────────
+async function _csSetMarkers(sym, interval, raw) {
+  if (!_CS.candleSeries) return;
+  const showMTT = document.getElementById('indMTT')?.checked ?? true;
+  const showMIS = document.getElementById('indMIS')?.checked ?? true;
+  if (!showMTT && !showMIS) { _CS.candleSeries.setMarkers([]); return; }
+
+  const fromTs = raw[0][0];
+  const toTs   = raw[raw.length - 1][0];
+  let markers = [];
+
+  // ── Try server-side markers (webhook signals DB) ──
+  try {
+    const res = await apiFetch(
+      `/api/chart-markers?symbol=${sym}&interval=${interval}&from=${fromTs}&to=${toTs}`
+    );
+    if (res && res.markers && res.markers.length > 0) {
+      res.markers.forEach(m => {
+        if (m.mode === 'MTT' && !showMTT) return;
+        if (m.mode === 'MIS' && !showMIS) return;
+        markers.push({
+          time:     m.time,
+          position: m.action === 'buy' ? 'belowBar' : 'aboveBar',
+          shape:    m.action === 'buy' ? 'arrowUp'  : 'arrowDown',
+          color:    m.mode === 'MTT'
+            ? (m.action === 'buy' ? TV.MTT_BUY : TV.MTT_SELL)
+            : (m.action === 'buy' ? TV.MIS_BUY : TV.MIS_SELL),
+          size:  1.2,
+          text:  `[${m.mode}]${m.confidence ? ' ' + m.confidence + '%' : ''}`,
+        });
+      });
+    }
+  } catch (e) {
+    // endpoint not yet available — fall through to client-side
+  }
+
+  // ── Fallback: use client-side MIS signals if server returned nothing ──
+  if (markers.length === 0 && showMIS && _CS._misSignals?.length) {
+    const minT = Math.floor(fromTs / 1000);
+    const maxT = Math.floor(toTs   / 1000);
+    _CS._misSignals
+      .filter(s => s.time >= minT && s.time <= maxT)
+      .forEach(s => {
+        markers.push({
+          time:     s.time,
+          position: s.action === 'buy' ? 'belowBar' : 'aboveBar',
+          shape:    s.action === 'buy' ? 'arrowUp'  : 'arrowDown',
+          color:    s.action === 'buy' ? TV.MIS_BUY : TV.MIS_SELL,
+          size:     1.0,
+          text:     '[MIS]',
+        });
+      });
+  }
+
+  _CS.candleSeries.setMarkers(markers.sort((a, b) => a.time - b.time));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 5: Bollinger Bands (20, 2σ)
+// ─────────────────────────────────────────────────────────────────────────────
+function _calcBB(closes, period = 20, stdMul = 2) {
+  const upper = [], mid = [], lower = [];
+  for (let i = period - 1; i < closes.length; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean  = slice.reduce((a, b) => a + b, 0) / period;
+    const std   = Math.sqrt(slice.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / period);
+    upper.push(mean + stdMul * std);
+    mid.push(mean);
+    lower.push(mean - stdMul * std);
+  }
+  return { upper, mid, lower };
+}
+
+function _csSetBB(times, closes) {
+  const { upper, mid, lower } = _calcBB(closes, 20, 2);
+  const offset = 19;
+  const mk = (arr) => arr.map((v, i) => ({ time: times[i + offset], value: v }));
+  _CS.bbUpper.setData(mk(upper));
+  _CS.bbMid.setData(mk(mid));
+  _CS.bbLower.setData(mk(lower));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 5: MACD (12, 26, 9)
+// ─────────────────────────────────────────────────────────────────────────────
+function _csSetMACD(times, closes) {
+  const ema12 = _calcEMA(closes, 12);
+  const ema26 = _calcEMA(closes, 26);
+  const offset26 = 25;
+
+  // MACD line = EMA12 - EMA26 (aligned to longer EMA)
+  const macdLine = ema26.map((v, i) => ema12[i + 13] - v);
+  // Signal line = EMA9 of MACD line
+  const signalLine = _calcEMA(macdLine, 9);
+  const histOffset = offset26 + 8;
+
+  const macdTimes   = times.slice(offset26);
+  const signalTimes = times.slice(histOffset);
+
+  _CS.macdSeries.setData(macdLine.map((v, i) => ({ time: macdTimes[i], value: v })));
+  _CS.macdSignal.setData(signalLine.map((v, i) => ({ time: signalTimes[i], value: v })));
+  _CS.macdHist.setData(signalLine.map((v, i) => {
+    const macdVal = macdLine[i + 8];
+    const histVal = macdVal - v;
+    return {
+      time:  signalTimes[i],
+      value: histVal,
+      color: histVal >= 0 ? TV.MACD_HIST_G : TV.MACD_HIST_R,
+    };
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Toggle handler — called by all indicator checkboxes
+// ─────────────────────────────────────────────────────────────────────────────
+function updateCSIndicators() {
+  const get = id => document.getElementById(id)?.checked ?? false;
+
+  _CS.ema9Series?.applyOptions({ visible: get('indEma9') });
+  _CS.ema21Series?.applyOptions({ visible: get('indEma21') });
+  _CS.ema50Series?.applyOptions({ visible: get('indEma50') });
+
+  const bbOn = get('indBB');
+  _CS.bbUpper?.applyOptions({ visible: bbOn });
+  _CS.bbMid?.applyOptions({ visible: bbOn });
+  _CS.bbLower?.applyOptions({ visible: bbOn });
+
+  const rsiOn = get('indRSI');
+  _CS.rsiSeries?.applyOptions({ visible: rsiOn });
+
+  const macdOn = get('indMACD');
+  _CS.macdSeries?.applyOptions({ visible: macdOn });
+  _CS.macdSignal?.applyOptions({ visible: macdOn });
+  _CS.macdHist?.applyOptions({ visible: macdOn });
+
+  // MIS/MTT markers — re-fetch if exists
+  if (_CS._candles && _CS._sym) {
+    _csSetMarkers(_CS._sym, _CS._interval, _CS._candles);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PHASE 6: Inset Parent Chart (Canvas overlay over LightweightCharts)
+// ─────────────────────────────────────────────────────────────────────────────
+async function _csDrawInset(sym, interval, position) {
+  const container  = document.getElementById('csLiveChart');
+  const insetCanvas = document.getElementById('csInsetCanvas');
+  if (!insetCanvas || !container) return;
+
+  // Sync canvas size to container
+  const w = container.clientWidth;
+  const h = container.clientHeight || 380;
+  insetCanvas.width  = w;
+  insetCanvas.height = h;
+  insetCanvas.style.width  = w + 'px';
+  insetCanvas.style.height = h + 'px';
+
+  const parentInterval = _csParentTfMap[interval] || '1d';
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${parentInterval}&limit=30`);
+    if (!res.ok) return;
+    const pCandles = await res.json();
+    if (!pCandles || pCandles.length < 5) return;
+
+    _drawInsetChart(
+      insetCanvas.getContext('2d'),
+      pCandles, _CS._candles,
+      w, h, position, sym, parentInterval
+    );
+  } catch (e) {
+    // silently skip
+  }
+}
+
+function _csClearInset() {
+  const c = document.getElementById('csInsetCanvas');
+  if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+}
+
+/**
+ * Draw a mini inset candlestick chart with yellow highlight box
+ * showing where the main timeframe candles fit in the parent view.
+ */
+function _drawInsetChart(ctx, pCandles, mainCandles, fullW, fullH, position, symbol, parentTf) {
+  // LightweightCharts renders its own price scale at the right (~72px wide)
+  const priceScaleW = 72;
+  const insetW = Math.min(Math.round(fullW * 0.30), 200);
+  const insetH = Math.min(Math.round(fullH * 0.36), 130);
+  const margin = 12;
+  const topPad = 30; // below the TV toolbar
+  const botPad = 20;
+
+  let ix, iy;
+  switch (position) {
+    case 'top-left':    ix = margin;                             iy = topPad; break;
+    case 'top-right':   ix = fullW - insetW - priceScaleW - margin; iy = topPad; break;
+    case 'bottom-left': ix = margin;                             iy = fullH - insetH - botPad; break;
+    case 'bottom-right':
+    default:            ix = fullW - insetW - priceScaleW - margin; iy = fullH - insetH - botPad; break;
+  }
+
+  // Clear inset zone
+  ctx.clearRect(ix - 2, iy - 2, insetW + 4, insetH + 4);
+
+  // Background
+  ctx.save();
+  ctx.globalAlpha = 0.94;
+  ctx.fillStyle   = 'rgba(13, 17, 28, 0.92)';
+  ctx.strokeStyle = 'rgba(42, 46, 57, 0.8)';
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(ix, iy, insetW, insetH, 6);
+  else ctx.rect(ix, iy, insetW, insetH);
+  ctx.fill();
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Label
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 10px "JetBrains Mono", monospace';
+  ctx.fillText(`${symbol} ${parentTf.toUpperCase()}`, ix + 8, iy + 14);
+
+  // Chart area
+  const padL = 6, padR = 6, padT = 22, padB = 6;
+  const cW = insetW - padL - padR;
+  const cH = insetH - padT - padB;
+  const cX = ix + padL, cY = iy + padT;
+
+  // Price range
+  let minP = Infinity, maxP = -Infinity;
+  pCandles.forEach(c => {
+    const lo = parseFloat(c[3]), hi = parseFloat(c[2]);
+    if (lo < minP) minP = lo; if (hi > maxP) maxP = hi;
+  });
+  const range = (maxP - minP) || 1;
+  minP -= range * 0.05; maxP += range * 0.05;
+  const finalR = maxP - minP || 1;
+  const getY = v => cY + cH * (1 - (v - minP) / finalR);
+  const spacing = cW / pCandles.length;
+  const cw = Math.max(spacing * 0.55, 1.5);
+
+  pCandles.forEach((c, i) => {
+    const o = parseFloat(c[1]), h = parseFloat(c[2]);
+    const l = parseFloat(c[3]), cl = parseFloat(c[4]);
+    const bull = cl >= o;
+    const color = bull ? '#26a69a' : '#ef5350';
+    const x = cX + i * spacing + spacing / 2;
+    ctx.strokeStyle = color; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.moveTo(x, getY(h)); ctx.lineTo(x, getY(l)); ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.fillRect(x - cw / 2, Math.min(getY(o), getY(cl)), cw, Math.abs(getY(cl) - getY(o)) || 1);
+  });
+
+  // Yellow highlight (main chart time range)
+  if (mainCandles && mainCandles.length > 0) {
+    const mS = mainCandles[0][0], mE = mainCandles[mainCandles.length - 1][6];
+    let hlS = -1, hlE = -1;
+    pCandles.forEach((c, i) => {
+      if (c[6] >= mS && c[0] <= mE) { if (hlS === -1) hlS = i; hlE = i; }
+    });
+    if (hlS >= 0) {
+      const hlX = cX + hlS * spacing;
+      const hlW = (hlE - hlS + 1) * spacing;
+      ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 1.5; ctx.setLineDash([]);
+      ctx.strokeRect(hlX + 1, cY, hlW, cH);
+      ctx.fillStyle = 'rgba(245,158,11,0.1)';
+      ctx.fillRect(hlX + 1, cY, hlW, cH);
+    }
+  }
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Polling lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+function startCSLivePolling() {
+  loadCSLiveChart();
+  if (_csLiveTimer) clearInterval(_csLiveTimer);
+  _csLiveTimer = setInterval(loadCSLiveChart, 30000);
+}
+
+function stopCSLivePolling() {
+  if (_csLiveTimer) { clearInterval(_csLiveTimer); _csLiveTimer = null; }
+}
+
 
 function _setStep(id, state) {
   const el = document.getElementById(id);
@@ -243,23 +932,21 @@ function _updateCapturePreview(result) {
   const verdictColor = (result.verdict || '').includes('STRONG') ? 'var(--buy)'
     : (result.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
   const conf = result.confidence || 0;
-  const circumference = 113; // 2πr where r=18
+  const circumference = 113;
   const dashVal = Math.round((conf / 10) * circumference);
 
-  // ── Chart image ──
-  const chartImg = document.getElementById('csChartImg');
-  const placeholder = document.getElementById('csChartPlaceholder');
-  const overlay = document.getElementById('csChartOverlay');
-  if (chartImg && result.screenshot_url) {
-    chartImg.src = `${result.screenshot_url}?t=${Date.now()}`;
-    chartImg.style.display = 'block';
-    if (placeholder) placeholder.style.display = 'none';
-    if (overlay) {
-      overlay.style.display = 'block';
-      const sym = document.getElementById('csOverlaySym');
-      const time = document.getElementById('csOverlayTime');
-      if (sym) sym.textContent = result.symbol || '—';
-      if (time) time.textContent = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
+  // ── Website: keep real LightweightCharts chart visible (no screenshot overlay)
+  // CDP screenshot is sent to Telegram by the server — show a small status badge instead
+  if (result.screenshot_url) {
+    const lbl = document.getElementById('csLiveLabel');
+    if (lbl) {
+      const sym = result.symbol || document.getElementById('captureSymbol')?.value || '—';
+      lbl.innerHTML = `${sym} · Captured <span style="color:#26a69a;font-size:0.7rem;margin-left:6px">📷 → Telegram</span>`;
+      setTimeout(() => {
+        const s2 = document.getElementById('captureSymbol')?.value || sym;
+        const tf = _csTfMap[document.getElementById('captureTimeframe')?.value || '60'] || '1h';
+        if (lbl) lbl.textContent = `${s2} · ${tf.toUpperCase()} · Binance`;
+      }, 4000);
     }
   }
 
@@ -372,10 +1059,8 @@ async function loadVisionHistory() {
   _histCache.clear();
   items.forEach(v => _histCache.set(String(v.id), v));
 
-  // Auto-load latest into canvas
-  if (!document.getElementById('csChartImg')?.src?.includes('/api/vision/') && items[0]) {
-    _loadInCanvas(items[0]);
-  }
+  // Auto-load latest verdict into card (NOT the screenshot — chart stays live)
+  if (items[0]) _loadVerdictCard(items[0]);
 
   container.innerHTML = items.map(v => {
     const isS = v.source === 'stealth';
@@ -425,6 +1110,28 @@ async function loadVisionHistory() {
 }
 
 function _loadInCanvas(v) {
+  // Load verdict card from history item
+  _loadVerdictCard(v);
+
+  // Reload the live LightweightChart with this item's symbol/timeframe
+  // so website always shows interactive chart, not a static screenshot
+  if (v && v.symbol) {
+    const symSel = document.getElementById('captureSymbol');
+    if (symSel) {
+      // Find option matching symbol, or set directly
+      const opts = Array.from(symSel.options);
+      const match = opts.find(o => o.value === v.symbol || v.symbol.startsWith(o.value));
+      if (match) symSel.value = match.value;
+    }
+    // Reload chart with the history item's symbol
+    loadCSLiveChart();
+  }
+}
+
+/**
+ * Update verdict card only — does NOT touch the live chart
+ */
+function _loadVerdictCard(v) {
   if (!v) return;
   const conf = v.confidence || 0;
   const circumference = 113;
@@ -433,23 +1140,6 @@ function _loadInCanvas(v) {
     : (v.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
   const confColor = conf >= 7 ? 'var(--buy)' : conf >= 5 ? 'var(--accent2)' : 'var(--sell)';
 
-  // Chart image
-  const chartImg = document.getElementById('csChartImg');
-  const placeholder = document.getElementById('csChartPlaceholder');
-  const overlay = document.getElementById('csChartOverlay');
-  if (chartImg && v.has_screenshot && v.screenshot_url) {
-    chartImg.src = `${v.screenshot_url}?t=${Date.now()}`;
-    chartImg.style.display = 'block';
-    if (placeholder) placeholder.style.display = 'none';
-    if (overlay) {
-      overlay.style.display = 'block';
-      const sym = document.getElementById('csOverlaySym');
-      const time = document.getElementById('csOverlayTime');
-      if (sym) sym.textContent = v.symbol || '—';
-      if (time) time.textContent = (v.created_at || '').slice(5, 16);
-    }
-  }
-  // Verdict card
   const card = document.getElementById('csVerdictCard');
   if (card) {
     card.style.display = 'block';
@@ -465,7 +1155,16 @@ function _loadInCanvas(v) {
     const txt = document.getElementById('csAnalysisText');
     if (txt) txt.textContent = v.ai_analysis || '—';
   }
+
+  // Screenshot thumbnail: show in History card only (small thumb) — never on main chart
+  // To view full screenshot: click the thumbnail in History panel
+  if (v.screenshot_url) {
+    // Store for potential zoom on history card click (via openImgZoom)
+    _lastScreenshotUrl = v.screenshot_url;
+  }
 }
+
+let _lastScreenshotUrl = null;
 
 
 async function submitRagQuery() {

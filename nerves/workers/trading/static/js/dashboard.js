@@ -102,9 +102,17 @@ function initTabs() {
 }
 
 let statusTimer = null;
+let scanTimer   = null;
+let _lastScanTimestamp = null;   // track last seen scan to detect new ones
 function onTabChange(tab) {
     if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+    if (scanTimer)   { clearInterval(scanTimer);   scanTimer   = null; }
     if (tab === 'watchlist') loadWatchlist();
+    if (tab === 'scanner') {
+        loadLastScan();
+        // Auto-poll every 20s so Telegram /scan results appear without clicking
+        scanTimer = setInterval(_pollScanUpdates, 20000);
+    }
     if (tab === 'status') {
         loadStatus();
         statusTimer = setInterval(loadStatus, 5000);
@@ -288,6 +296,49 @@ window.triggerBrief = async function() {
 };
 
 // ═══ SCANNER ══════════════════════════════════════════
+
+/** Fetch the cached scan results (last run, any source) and render the table. */
+async function loadLastScan() {
+    const data = await apiFetch('/api/scan/last');
+    if (!data || !data.results) return;   // 204 = no scan yet
+
+    scanResults = data.results;
+    _lastScanTimestamp = data.timestamp;
+
+    const ts  = data.timestamp ? new Date(data.timestamp).toLocaleTimeString('vi-VN') : '?';
+    const src = _srcLabel(data.source);
+    document.getElementById('scanStatus').textContent =
+        `${data.scanned} symbols · ${ts} · ${src}`;
+    renderScanTable();
+}
+
+/** Silent background poller — called every 20s when scanner tab is active. */
+async function _pollScanUpdates() {
+    const data = await apiFetch('/api/scan/last');
+    if (!data || !data.results) return;
+    if (data.timestamp === _lastScanTimestamp) return;   // nothing new
+
+    // New scan detected (e.g. from Telegram /scan or scheduler)
+    scanResults         = data.results;
+    _lastScanTimestamp  = data.timestamp;
+
+    const ts  = new Date(data.timestamp).toLocaleTimeString('vi-VN');
+    const src = _srcLabel(data.source);
+    document.getElementById('scanStatus').textContent =
+        `${data.scanned} symbols · ${ts} · ${src}`;
+    renderScanTable();
+
+    if (data.source !== 'web') {
+        toast(`🔄 Scanner cập nhật từ ${src}`, 'info');
+    }
+}
+
+function _srcLabel(source) {
+    if (source === 'telegram')  return '📱 Telegram';
+    if (source === 'scheduler') return '⏰ Scheduler';
+    return '🌐 Dashboard';
+}
+
 window.triggerScan = async function() {
     const btn = document.getElementById('scanBtn');
     btn.disabled = true;
@@ -305,7 +356,8 @@ window.triggerScan = async function() {
     }
 
     scanResults = data.results;
-    document.getElementById('scanStatus').textContent = `${data.scanned} symbols scanned at ${new Date(data.timestamp).toLocaleTimeString('vi-VN')}`;
+    document.getElementById('scanStatus').textContent =
+        `${data.scanned} symbols · ${new Date(data.timestamp).toLocaleTimeString('vi-VN')} · 🌐 Dashboard`;
     renderScanTable();
     toast(`Scan complete: ${data.scanned} symbols`, 'success');
 };

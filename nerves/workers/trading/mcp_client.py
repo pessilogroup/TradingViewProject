@@ -52,6 +52,8 @@ class MCPClient:
         self.cdp_port = config.MCP_CDP_PORT
         self.node_path = config.MCP_NODE_PATH or "node"
         self._connected: Optional[bool] = None
+        self._sem = asyncio.Semaphore(5)
+        self.lock = asyncio.Lock()
 
     async def _run(self, *args, timeout: int = 15) -> dict:
         """Run MCP CLI command and return parsed JSON."""
@@ -63,38 +65,47 @@ class MCPClient:
 
         cmd = [self.node_path, str(_MCP_CLI)] + list(args) + ["--json"]
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(_MCP_DIR),
-                env={**os.environ, "TV_CDP_PORT": str(self.cdp_port)}
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-
-            if proc.returncode != 0:
-                err = stderr.decode("utf-8", errors="replace").strip()
-                raise RuntimeError(f"MCP CLI error: {err}")
-
-            raw = stdout.decode("utf-8", errors="replace").strip()
-            # CLI emits pretty-printed JSON; try the full payload first,
-            # then fall back to scanning for a single-line JSON value.
+        async with self._sem:
+            proc = None
             try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                pass
-            for line in raw.split("\n"):
-                line = line.strip()
-                if line.startswith("{") or line.startswith("["):
-                    try:
-                        return json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-            raise RuntimeError(f"MCP CLI returned non-JSON output: {raw[:200]}")
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(_MCP_DIR),
+                    env={**os.environ, "TV_CDP_PORT": str(self.cdp_port)}
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
-        except asyncio.TimeoutError:
-            raise RuntimeError(f"MCP CLI timeout after {timeout}s")
+                if proc.returncode != 0:
+                    err = stderr.decode("utf-8", errors="replace").strip()
+                    raise RuntimeError(f"MCP CLI error: {err}")
+
+                raw = stdout.decode("utf-8", errors="replace").strip()
+                # CLI emits pretty-printed JSON; try the full payload first,
+                # then fall back to scanning for a single-line JSON value.
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+                for line in raw.split("\n"):
+                    line = line.strip()
+                    if line.startswith("{") or line.startswith("["):
+                        try:
+                            return json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                raise RuntimeError(f"MCP CLI returned non-JSON output: {raw[:200]}")
+
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"MCP CLI timeout after {timeout}s")
+            finally:
+                if proc is not None and proc.returncode is None:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception as kill_err:
+                        logger.warning(f"Failed to kill subprocess: {kill_err}")
 
     # ── Health Check ──────────────────────────────────────────────────────────
 
@@ -120,11 +131,8 @@ class MCPClient:
 
     # ── Market Data ───────────────────────────────────────────────────────────
 
-    async def get_quote(self, symbol: str) -> QuoteData:
-        """Get current price + OHLCV for a symbol."""
-        await self._run("symbol", symbol)
+    async def _get_quote_unlocked(self, symbol: str) -> QuoteData:
         raw = await self._run("quote")
-
         return QuoteData(
             symbol=symbol,
             close=float(raw.get("close", 0)),
@@ -135,19 +143,23 @@ class MCPClient:
             change_pct=float(raw.get("change_percent", 0)),
         )
 
-    async def get_ohlcv_summary(self, symbol: str, timeframe: str = "D") -> dict:
-        """Get compact OHLCV stats (summary mode = 500B)."""
-        await self._run("symbol", symbol)
-        await self._run("timeframe", timeframe)
+    async def get_quote(self, symbol: str) -> QuoteData:
+        """Get current price + OHLCV for a symbol."""
+        async with self.lock:
+            await self._run("symbol", symbol)
+            return await self._get_quote_unlocked(symbol)
+
+    async def _get_ohlcv_summary_unlocked(self) -> dict:
         return await self._run("ohlcv", "--summary")
 
-    async def get_study_values(self, symbol: str, timeframe: str = "D") -> StudyValues:
-        """
-        Read indicator values from chart.
-        Assumes Minervini indicators (SMA50/150/200, Volume MA) are added on chart.
-        """
-        await self._run("symbol", symbol)
-        await self._run("timeframe", timeframe)
+    async def get_ohlcv_summary(self, symbol: str, timeframe: str = "D") -> dict:
+        """Get compact OHLCV stats (summary mode = 500B)."""
+        async with self.lock:
+            await self._run("symbol", symbol)
+            await self._run("timeframe", timeframe)
+            return await self._get_ohlcv_summary_unlocked()
+
+    async def _get_study_values_unlocked(self) -> StudyValues:
         raw = await self._run("values")
 
         # Parse indicator values — key names depend on what's on chart
@@ -165,8 +177,11 @@ class MCPClient:
                         indicators[name] = v
                 else:
                     indicators[name] = s_vals
-        else:
+        elif isinstance(values, dict):
+            # If values is a flat dict already, just use it
             indicators = values
+        else:
+            indicators = {}
 
         def _find(keys: list) -> Optional[float]:
             for k in keys:
@@ -187,6 +202,16 @@ class MCPClient:
             high_52w=_find(["52w high", "52 week high", "yearly high"]),
             low_52w=_find(["52w low", "52 week low", "yearly low"]),
         )
+
+    async def get_study_values(self, symbol: str, timeframe: str = "D") -> StudyValues:
+        """
+        Read indicator values from chart.
+        Assumes Minervini indicators (SMA50/150/200, Volume MA) are added on chart.
+        """
+        async with self.lock:
+            await self._run("symbol", symbol)
+            await self._run("timeframe", timeframe)
+            return await self._get_study_values_unlocked()
 
     # ── Screenshot ────────────────────────────────────────────────────────────
 
@@ -226,6 +251,76 @@ class MCPClient:
             logger.warning(f"Crop failed: {e}")
             return False
 
+    async def _resolve_active_chart_cdp(self) -> tuple[Optional[str], Optional[str]]:
+        """
+        Authentic CDP DOM parsing strategy to fetch the active chart's symbol and timeframe
+        directly from the TradingView UI via Chrome DevTools Protocol Runtime.evaluate.
+        """
+        import aiohttp
+        import json
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. Discover the TradingView page CDP websocket URL
+                async with session.get(f"http://127.0.0.1:{self.cdp_port}/json", timeout=3) as resp:
+                    pages = await resp.json()
+                
+                # Prioritize TradingView page, otherwise take first available
+                page = next((p for p in pages if p.get("type") == "page" and "TradingView" in p.get("title", "")), None)
+                if not page:
+                    page = next((p for p in pages if p.get("type") == "page"), None)
+                    
+                if not page or "webSocketDebuggerUrl" not in page:
+                    return None, None
+                    
+                ws_url = page["webSocketDebuggerUrl"]
+                
+                # 2. Connect via WebSocket to issue Runtime.evaluate
+                async with session.ws_connect(ws_url, timeout=3) as ws:
+                    js_expr = """
+                    (() => {
+                        try {
+                            if (window.tvWidget) {
+                                const chart = window.tvWidget.activeChart();
+                                return { symbol: chart.symbol(), timeframe: chart.resolution() };
+                            }
+                        } catch (e) {}
+                        
+                        try {
+                            // DOM fallback parsing for TradingView Desktop
+                            const symNode = document.querySelector('.js-widget-title, .title-3sKkivG, [data-name="legend-source-title"]');
+                            const tfNode = document.querySelector('.js-button-text, .text-3sKkivG, [data-name="legend-source-interval"]');
+                            let sym = symNode ? symNode.innerText.trim() : null;
+                            let tf = tfNode ? tfNode.innerText.trim() : null;
+                            return { symbol: sym, timeframe: tf };
+                        } catch (e) {
+                            return { symbol: null, timeframe: null };
+                        }
+                    })()
+                    """
+                    
+                    req_id = 1001
+                    await ws.send_json({
+                        "id": req_id,
+                        "method": "Runtime.evaluate",
+                        "params": {
+                            "expression": js_expr,
+                            "returnByValue": True
+                        }
+                    })
+                    
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            if data.get("id") == req_id:
+                                res = data.get("result", {}).get("result", {}).get("value", {})
+                                return res.get("symbol"), res.get("timeframe")
+                                
+        except Exception as e:
+            logger.warning(f"CDP resolve active chart failed: {e}")
+            
+        return None, None
+
     async def capture_screenshot(
         self,
         symbol: str = "active",
@@ -242,94 +337,104 @@ class MCPClient:
         Uses fast local rendering (lightweight-charts/mplfinance) or daemon by default,
         and falls back to legacy subprocess mode on failure.
         """
-        # Try fast local/daemon capture first
-        try:
-            from capture_client import get_capture_client
-            client = get_capture_client()
-            
-            # Map "active" to default symbol/timeframe if local native rendering is resolved
-            target_symbol = symbol if symbol != "active" else "BTCUSDT"
-            target_timeframe = timeframe if timeframe != "active" else "1h"
-            
-            res = await client.capture_screenshot(
-                symbol=target_symbol,
-                timeframe=target_timeframe,
-                region=region,
-                crop=crop,
-                save_path=save_path,
-                drawings=drawings,
-                strategy_table=strategy_table
-            )
-            if res.success and res.file_path:
-                return Path(res.file_path)
-            logger.warning(f"Fast capture client returned success=False ({res.error}), falling back to legacy subprocess...")
-        except Exception as e:
-            logger.warning(f"Fast capture client failed: {e}. Falling back to legacy subprocess...")
+        async with self.lock:
+            # Resolve active symbol/timeframe dynamically via CDP
+            target_symbol = symbol
+            target_timeframe = timeframe
+            if symbol == "active" or timeframe == "active":
+                cdp_sym, cdp_tf = await self._resolve_active_chart_cdp()
+                if not cdp_sym or not cdp_tf:
+                    raise RuntimeError("Failed to resolve active chart via CDP")
+                if symbol == "active":
+                    target_symbol = cdp_sym
+                if timeframe == "active":
+                    target_timeframe = cdp_tf
 
-        try:
-            if not active_only:
-                if symbol != "active":
-                    await self._run("symbol", symbol)
-                if timeframe != "active":
-                    await self._run("timeframe", timeframe)
-
-            # Try screenshot with region first, fall back without
+            # Try fast local/daemon capture first
             try:
-                raw = await self._run("screenshot", "-r", region, timeout=20)
-            except Exception:
-                raw = await self._run("screenshot", timeout=20)
+                from capture_client import get_capture_client
+                client = get_capture_client()
+                
+                res = await client.capture_screenshot(
+                    symbol=target_symbol,
+                    timeframe=target_timeframe,
+                    region=region,
+                    crop=crop,
+                    save_path=save_path,
+                    drawings=drawings,
+                    strategy_table=strategy_table
+                )
+                if res.success and res.file_path:
+                    return Path(res.file_path)
+                logger.warning(f"Fast capture client returned success=False ({res.error}), falling back to legacy subprocess...")
+            except Exception as e:
+                logger.warning(f"Fast capture client failed: {e}. Falling back to legacy subprocess...")
 
-            if save_path is None:
-                import re
-                safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
-                save_path = Path(__file__).parent / "screenshots" / f"{safe_symbol}_{timeframe}.png"
-            save_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if not active_only:
+                    if symbol != "active":
+                        await self._run("symbol", symbol)
+                    if timeframe != "active":
+                        await self._run("timeframe", timeframe)
 
-            raw_path: Optional[Path] = None
+                # Try screenshot with region first, fall back without
+                try:
+                    raw = await self._run("screenshot", "-r", region, timeout=20)
+                except Exception:
+                    raw = await self._run("screenshot", timeout=20)
 
-            # MCP returns base64 or file path
-            if "base64" in raw:
-                img_data = base64.b64decode(raw["base64"])
-                raw_path = save_path.parent / f"_raw_{save_path.name}"
-                raw_path.write_bytes(img_data)
-            elif "file_path" in raw:
-                raw_path = Path(raw["file_path"])
-            elif "path" in raw:
-                raw_path = Path(raw["path"])
+                if save_path is None:
+                    import re
+                    safe_symbol = re.sub(r'[^A-Za-z0-9_\-]', '', symbol)
+                    save_path = Path(__file__).parent / "screenshots" / f"{safe_symbol}_{timeframe}.png"
+                save_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if raw_path and raw_path.exists():
-                if crop and region == "chart":
-                    # Auto-crop to remove TradingView UI chrome
-                    cropped = self._crop_chart_area(raw_path, save_path)
-                    if not cropped:
-                        # Fallback: just copy raw as-is
+                raw_path: Optional[Path] = None
+
+                # MCP returns base64 or file path
+                if "base64" in raw:
+                    img_data = base64.b64decode(raw["base64"])
+                    raw_path = save_path.parent / f"_raw_{save_path.name}"
+                    raw_path.write_bytes(img_data)
+                elif "file_path" in raw:
+                    raw_path = Path(raw["file_path"])
+                elif "path" in raw:
+                    raw_path = Path(raw["path"])
+
+                if raw_path and raw_path.exists():
+                    if crop and region == "chart":
+                        # Auto-crop to remove TradingView UI chrome
+                        cropped = self._crop_chart_area(raw_path, save_path)
+                        if not cropped:
+                            # Fallback: just copy raw as-is
+                            import shutil
+                            shutil.copy2(raw_path, save_path)
+                    else:
                         import shutil
                         shutil.copy2(raw_path, save_path)
-                else:
-                    import shutil
-                    shutil.copy2(raw_path, save_path)
 
-                # Clean up temp raw file
-                if raw_path != save_path and raw_path.name.startswith("_raw_"):
-                    raw_path.unlink(missing_ok=True)
+                    # Clean up temp raw file
+                    if raw_path != save_path and raw_path.name.startswith("_raw_"):
+                        raw_path.unlink(missing_ok=True)
 
-                return save_path
+                    return save_path
 
-        except Exception as e:
-            logger.warning(f"Screenshot failed for {symbol}: {e}")
-        return None
+            except Exception as e:
+                logger.warning(f"Screenshot failed for {symbol}: {e}")
+            return None
 
     # ── Chart Control ─────────────────────────────────────────────────────────
 
     async def set_symbol(self, symbol: str, timeframe: str = "D") -> bool:
         """Switch chart to symbol + timeframe."""
-        try:
-            await self._run("symbol", symbol)
-            await self._run("timeframe", timeframe)
-            return True
-        except Exception as e:
-            logger.warning(f"set_symbol failed: {e}")
-            return False
+        async with self.lock:
+            try:
+                await self._run("symbol", symbol)
+                await self._run("timeframe", timeframe)
+                return True
+            except Exception as e:
+                logger.warning(f"set_symbol failed: {e}")
+                return False
 
     async def batch_run(self, symbols: list[str], timeframe: str = "D") -> list[dict]:
         """
@@ -339,9 +444,18 @@ class MCPClient:
         results = []
         for sym in symbols:
             try:
-                quote = await self.get_quote(sym)
-                studies = await self.get_study_values(sym, timeframe)
-                ohlcv = await self.get_ohlcv_summary(sym, timeframe)
+                async with self.lock:
+                    # Switch symbol & timeframe
+                    await self._run("symbol", sym)
+                    await self._run("timeframe", timeframe)
+                    
+                    # Sleep slightly to let the chart load and indicators update
+                    await asyncio.sleep(0.5)
+
+                    # Fetch the data
+                    quote = await self._get_quote_unlocked(sym)
+                    studies = await self._get_study_values_unlocked()
+                    ohlcv = await self._get_ohlcv_summary_unlocked()
 
                 results.append({
                     "symbol": sym,

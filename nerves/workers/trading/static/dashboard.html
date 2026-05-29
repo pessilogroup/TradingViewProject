@@ -7,7 +7,7 @@
   <meta name="description" content="TradingView Webhook Edge Node — Pine V1/V2 Indicators, Quick Trade, Vision Capture">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20260529b">
 </head>
 <body>
 
@@ -607,7 +607,7 @@
       <div class="cs-controls">
         <div class="cs-control-group">
           <label class="cs-label">Symbol</label>
-          <select id="captureSymbol" class="form-input cs-select" title="Select Capture Symbol">
+          <select id="captureSymbol" class="form-input cs-select" title="Select Capture Symbol" onchange="loadCSLiveChart()">
             <option value="BTCUSDT">BTCUSDT</option>
             <option value="ETHUSDT">ETHUSDT</option>
             <option value="SOLUSDT">SOLUSDT</option>
@@ -618,7 +618,7 @@
         </div>
         <div class="cs-control-group">
           <label class="cs-label">Timeframe</label>
-          <select id="captureTimeframe" class="form-input cs-select-sm" title="Select Capture Timeframe">
+          <select id="captureTimeframe" class="form-input cs-select-sm" title="Select Capture Timeframe" onchange="loadCSLiveChart()">
             <option value="15">15m</option>
             <option value="60" selected>1H</option>
             <option value="240">4H</option>
@@ -628,16 +628,18 @@
         </div>
         <div class="cs-control-group">
           <label class="cs-label">Chart phụ</label>
-          <select id="showParentChart" class="form-input cs-select-sm" title="Show Parent Inset Chart">
+          <select id="showParentChart" class="form-input cs-select-sm" title="Show Parent Inset Chart" onchange="loadCSLiveChart()">
             <option value="yes" selected>Yes</option>
             <option value="no">No</option>
           </select>
         </div>
         <div class="cs-control-group">
           <label class="cs-label">Vị trí</label>
-          <select id="insetPosition" class="form-input cs-select-sm" title="Inset Chart Position">
-            <option value="bottom-right" selected>Bottom-Right</option>
+          <select id="insetPosition" class="form-input cs-select-sm" title="Inset Chart Position" onchange="loadCSLiveChart()">
             <option value="top-left">Top-Left</option>
+            <option value="top-right">Top-Right</option>
+            <option value="bottom-left">Bottom-Left</option>
+            <option value="bottom-right" selected>Bottom-Right</option>
           </select>
         </div>
         <button id="captureBtn" class="btn-capture" onclick="runStealthCapture()">
@@ -645,6 +647,38 @@
           <span id="captureBtnText">Capture + Analyze</span>
         </button>
       </div>
+
+      <!-- ── INDICATOR TOGGLES ROW ── -->
+      <div class="cs-indicator-bar" id="csIndicatorBar">
+        <span class="cs-ind-label">Indicators:</span>
+        <label class="cs-ind-toggle" title="EMA 9">
+          <input type="checkbox" id="indEma9" checked onchange="updateCSIndicators()"> <span class="dot ema9"></span> EMA 9
+        </label>
+        <label class="cs-ind-toggle" title="EMA 21">
+          <input type="checkbox" id="indEma21" checked onchange="updateCSIndicators()"> <span class="dot ema21"></span> EMA 21
+        </label>
+        <label class="cs-ind-toggle" title="EMA 50">
+          <input type="checkbox" id="indEma50" onchange="updateCSIndicators()"> <span class="dot ema50"></span> EMA 50
+        </label>
+        <div class="cs-ind-sep"></div>
+        <label class="cs-ind-toggle" title="Bollinger Bands">
+          <input type="checkbox" id="indBB" onchange="updateCSIndicators()"> <span class="dot bb"></span> BB
+        </label>
+        <label class="cs-ind-toggle" title="RSI Pane">
+          <input type="checkbox" id="indRSI" checked onchange="updateCSIndicators()"> <span class="dot rsi"></span> RSI
+        </label>
+        <label class="cs-ind-toggle" title="MACD Pane">
+          <input type="checkbox" id="indMACD" onchange="updateCSIndicators()"> <span class="dot macd"></span> MACD
+        </label>
+        <div class="cs-ind-sep"></div>
+        <label class="cs-ind-toggle" title="MTT Strategy Markers">
+          <input type="checkbox" id="indMTT" checked onchange="updateCSIndicators()"> <span class="dot mtt"></span> MTT
+        </label>
+        <label class="cs-ind-toggle" title="MIS Strategy Markers">
+          <input type="checkbox" id="indMIS" checked onchange="updateCSIndicators()"> <span class="dot mis"></span> MIS
+        </label>
+      </div>
+
 
       <!-- Stats pills inline -->
       <div class="cs-stats-pills">
@@ -693,14 +727,22 @@
 
       <!-- Left: Chart Canvas + Latest Result -->
       <div class="cs-canvas-col">
-        <!-- Chart image display -->
+        <!-- Live status bar -->
+        <div class="cs-live-bar" id="csLiveBar">
+          <span class="cs-live-dot"></span>
+          <span id="csLiveLabel" class="cs-live-label">BTCUSDT · 1H · Binance</span>
+          <span id="csRegimeBadge" class="cs-regime-badge"></span>
+          <div style="flex:1"></div>
+          <span class="cs-live-price" id="csLivePrice"></span>
+        </div>
+        <!-- LightweightCharts container (replaces canvas) -->
         <div class="cs-chart-frame" id="csChartFrame">
-          <div class="cs-chart-placeholder" id="csChartPlaceholder">
-            <div class="cs-chart-watermark">
-              <span class="fs-3rem op-15" >📈</span>
-              <div class="op-30 fs-0_85rem mt-8" >Chart will appear after capture</div>
-            </div>
+          <!-- Interactive chart div -->
+          <div id="csLiveChart" style="width:100%;height:100%;min-height:380px;position:relative;">
+            <!-- Inset canvas overlay (chart phụ) -->
+            <canvas id="csInsetCanvas" style="position:absolute;top:0;left:0;pointer-events:none;z-index:10;"></canvas>
           </div>
+          <!-- CDP Screenshot (post-capture, overlays chart) -->
           <img id="csChartImg" class="cs-chart-img d-none" src="" alt="Chart" onclick="openImgZoom(this.src)" onerror="this.style.display='none'">
           <div class="cs-chart-overlay d-none" id="csChartOverlay" >
             <div class="cs-overlay-sym" id="csOverlaySym">BTCUSDT</div>
@@ -969,10 +1011,12 @@
 
 </main>
 
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="/static/js/dashboard-core.js"></script>
-<script src="/static/js/dashboard-analysis.js"></script>
-<script src="/static/js/dashboard-features.js"></script>
-<script src="/static/js/dashboard-signals.js"></script>
+
+<script src="/static/js/dashboard-core.js?v=20260529d"></script>
+<script src="/static/js/dashboard-analysis.js?v=20260529d"></script>
+<script src="/static/js/dashboard-features.js?v=20260529d"></script>
+<script src="/static/js/dashboard-signals.js?v=20260529d"></script>
 </body>
 </html>
