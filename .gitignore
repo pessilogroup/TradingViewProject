@@ -8,6 +8,8 @@ nerves/workers/trading/.env
 
 # Database
 nerves/workers/trading/trades.db
+nerves/workers/trading/trading.db
+trading.db
 
 # Python
 nerves/workers/trading/__pycache__/

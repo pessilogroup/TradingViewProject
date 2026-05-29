@@ -189,12 +189,15 @@ async def generate_morning_brief() -> Optional[dict]:
     elif screenshot_path and not _has_vision:
         logger.warning("[Brief] Vision skipped — no AI provider configured (check GEMINI_API_KEY or ANTHROPIC_API_KEY)")
 
-    # 5. RAG + AI analysis (Claude or Gemini fallback)
+    # 5. RAG + AI analysis (Claude CLI auth → SDK → Gemini fallback)
     ai_analysis = ""
     has_gemini = bool(config.GEMINI_API_KEY or config.GCP_PROJECT_ID)
-    has_anthropic = bool(config.ANTHROPIC_API_KEY and not config.ANTHROPIC_API_KEY.startswith("sk-ant-xxx"))
-    
-    if config.RAG_ENABLED and (has_anthropic or has_gemini):
+    has_anthropic_sdk = bool(config.ANTHROPIC_API_KEY and not config.ANTHROPIC_API_KEY.startswith("sk-ant-xxx"))
+    # Claude CLI auth session (OAuth login) — always considered available
+    # actual binary check happens inside rag._call_claude_cli()
+    has_claude_auth = (config.AI_PROVIDER in ("anthropic", "claude_cli"))
+
+    if config.RAG_ENABLED and (has_anthropic_sdk or has_gemini or has_claude_auth):
         try:
             # Build context from top results
             vcp_symbols = [r.symbol for r in scan_results if r.vcp.detected and not r.error]
