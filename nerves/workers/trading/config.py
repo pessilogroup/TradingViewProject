@@ -89,6 +89,11 @@ CHROMA_DB_PATH = os.getenv(
     str(Path(__file__).parent / "chroma_db")
 )
 
+# ── Remote ChromaDB (Phase 4: 3-Server Pipeline) ─────────────────────────
+CHROMA_REMOTE = os.getenv("CHROMA_REMOTE", "false").lower() == "true"
+CHROMA_SERVER_HOST = os.getenv("CHROMA_SERVER_HOST", "localhost")
+CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
+
 # Anthropic (Claude) API Key — dùng cho bước Generation trong RAG
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
@@ -206,6 +211,10 @@ VPS_CONSUMER_ID          = os.getenv("VPS_CONSUMER_ID", "local-01")
 VPS_POLL_INTERVAL_SECONDS= int(os.getenv("VPS_POLL_INTERVAL_SECONDS", "30"))
 VPS_STARTUP_PULL_LIMIT   = int(os.getenv("VPS_STARTUP_PULL_LIMIT", "50"))
 MAX_SIGNAL_AGE_MINUTES   = int(os.getenv("MAX_SIGNAL_AGE_MINUTES", "240"))
+
+# ── Pipeline Forwarding: Server B Execution (Phase 5) ────────────────────
+SERVER_B_EXECUTE_URL = os.getenv("SERVER_B_EXECUTE_URL", "")
+SERVER_B_SECRET = os.getenv("SERVER_B_SECRET", "")
 
 # Server start time (for uptime calculation)
 import time as _time
