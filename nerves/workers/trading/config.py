@@ -97,8 +97,8 @@ CHROMA_SERVER_PORT = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
 # Anthropic (Claude) API Key — dùng cho bước Generation trong RAG
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# AI Provider: "anthropic" | "gemini" | "claude_cli"
-AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
+# AI Provider: "anthropic" | "gemini" | "antigravity" | "claude_cli"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "antigravity").lower()
 
 # ── Claude SDK Integration (P9) ───────────────────────────────────────────
 # Enable/disable entire Claude SDK subsystem (SdkClient + commands + event handler)

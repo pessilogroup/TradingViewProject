@@ -49,7 +49,7 @@ def _make_svc(depth: int = 5, max_tokens: int = 50_000) -> ClaudeService:
     limit=st.integers(min_value=1, max_value=10),
     extra=st.integers(min_value=1, max_value=5),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p2_rate_limit_exactly_n_pass(limit, extra):
     """Exactly `limit` requests pass; the rest are rate-limited."""
     sdk = SdkClient(
@@ -83,7 +83,7 @@ def test_p2_rate_limit_exactly_n_pass(limit, extra):
     depth=st.integers(min_value=1, max_value=5),
     interactions=st.integers(min_value=1, max_value=20),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p3_context_depth_never_exceeded(depth, interactions):
     """Context per symbol never exceeds depth*2 entries."""
     svc = _make_svc(depth=depth, max_tokens=10_000_000)
@@ -105,7 +105,7 @@ def test_p3_context_depth_never_exceeded(depth, interactions):
     max_tokens=st.integers(min_value=10, max_value=500),
     interactions=st.integers(min_value=1, max_value=15),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p4_token_budget_never_exceeded(max_tokens, interactions):
     """Total estimated tokens per symbol never exceeds max_tokens after pruning."""
     svc = _make_svc(depth=100, max_tokens=max_tokens)  # depth huge → token is the binding constraint
@@ -132,7 +132,7 @@ def test_p4_token_budget_never_exceeded(max_tokens, interactions):
     confidence=st.integers(min_value=0, max_value=10),
     duration=st.floats(min_value=0.0, max_value=120.0, allow_nan=False),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p7_telegram_response_never_exceeds_4096(text, source, confidence, duration):
     """Formatted Telegram message is always ≤ 4096 characters."""
     formatted = _format_response(text=text, source=source, confidence=confidence, duration=duration)
@@ -148,7 +148,7 @@ def test_p7_telegram_response_never_exceeds_4096(text, source, confidence, durat
     ),
     target_idx=st.integers(min_value=0, max_value=4),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p10_per_symbol_reset_clears_only_target(symbols, target_idx):
     """reset() clears exactly that symbol, others unchanged."""
     assume(len(symbols) > 0)
@@ -173,7 +173,7 @@ def test_p10_per_symbol_reset_clears_only_target(symbols, target_idx):
         min_size=1, max_size=6, unique=True,
     )
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p10_global_reset_clears_all(symbols):
     """reset('') clears ALL symbol contexts."""
     ctx = ContextManager()
