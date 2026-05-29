@@ -50,7 +50,14 @@ Mở một Terminal khác để chạy Cloudflare Quick Tunnel:
 ```bash
 cloudflared tunnel --url http://localhost:5000
 ```
-Bạn sẽ nhận được một public URL dạng `https://<random-words>.trycloudflare.com`.
+Khi lệnh khởi chạy, Cloudflare sẽ in ra một public URL như:
+```text
+https://<random-words>.trycloudflare.com
+```
+Sao chép URL này và dùng làm Webhook URL trong TradingView, ví dụ:
+```text
+https://<random-words>.trycloudflare.com/webhook
+```
 
 Sanity check:
 ```bash
@@ -73,7 +80,23 @@ Ví dụ Payload chuẩn:
   "time": "{{timenow}}"
 }
 ```
-*Lưu ý: Nếu không gửi `quoteQty`, bot sẽ mặc định đánh khối lượng 10 USDT.*
+
+Ví dụ Payload cho Indicator Signal (được phân tích bởi AI & SEPA Rules):
+```json
+{
+  "secret": "your_super_secret_key",
+  "action": "buy",
+  "symbol": "BTCUSDT",
+  "indicator": "RSI",
+  "strategy": "Oversold",
+  "message": "RSI fell below 30",
+  "price": "{{close}}",
+  "interval": "{{interval}}"
+}
+```
+*Lưu ý:*
+*   Nếu không gửi `quoteQty`, bot sẽ mặc định đánh khối lượng 10 USDT.
+*   Trường hợp có `indicator` và `strategy`, bot sẽ áp dụng luật Risk Management động theo file `server/data/sepa_rules.json` (tự động quyết định cần AI Confirmation hay khớp lệnh ngay).
 
 Workflow trên TradingView:
 1. Thêm Indicator/Strategy vào biểu đồ.
