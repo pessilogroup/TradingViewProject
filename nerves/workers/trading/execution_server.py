@@ -9,7 +9,6 @@ Runs on Tailscale VPN only (not exposed to WAN).
 """
 import hmac
 import logging
-import os
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -68,12 +67,29 @@ async def execute_trade(request: Request):
     if not symbol or not action:
         raise HTTPException(status_code=400, detail="Missing required fields: symbol, action")
 
-    # Extract trade parameters
-    quote_qty = body.get("quote_qty", 10.0)
+    # Extract trade parameters safely
+    def safe_float(val, default=None):
+        if val is None or val == "":
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    qty = safe_float(body.get("qty"))
+    price = safe_float(body.get("price"))
+    quote_qty = safe_float(body.get("quote_qty"))
+
+    if quote_qty is None and qty is not None and price is not None:
+        quote_qty = qty * price
+
+    if quote_qty is None:
+        quote_qty = 10.0
+
     sl = body.get("sl", "")
     tp = body.get("tp", "")
     exchange = body.get("exchange", config.DEFAULT_EXCHANGE)
-    analysis_text = body.get("analysis_text", "")
+    analysis_text = body.get("analysis_text") or body.get("analysis", "")
 
     try:
         # Import and use TradeEngine's event-based execution
@@ -103,8 +119,8 @@ async def execute_trade(request: Request):
         signal_id = await database.insert_signal(
             symbol=symbol,
             action=action,
-            price=float(price) if price else None,
-            quote_qty=float(quote_qty),
+            price=price,
+            quote_qty=quote_qty,
             source_ip=request.client.host if request.client else "0.0.0.0",
             payload=body,
         )
@@ -120,8 +136,8 @@ async def execute_trade(request: Request):
                 signal_id=signal_id,
                 symbol=symbol,
                 action=action,
-                price=float(price) if price else None,
-                quote_qty=float(quote_qty),
+                price=price,
+                quote_qty=quote_qty,
                 sl=str(sl),
                 tp=str(tp),
                 exchange=exchange,
