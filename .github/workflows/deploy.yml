@@ -1,0 +1,226 @@
+name: CI/CD Production Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ── 1. CONTINUOUS INTEGRATION (CI) ───────────────────────────────────
+  continuous-integration:
+    name: Run Linting, Security Scan & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+          pip install -r server/requirements-test.txt
+
+      - name: Code Linting (Ruff)
+        run: |
+          pip install ruff
+          ruff check server/
+
+      - name: Security AST Scan
+        run: |
+          cd server
+          python -m security.cli scan || echo "Warning: Review security scan report"
+
+      - name: Run Test Suite (520+ Tests)
+        env:
+          VPS_BUFFER_ENABLED: "false"
+          CHROMA_REMOTE: "false"
+        run: |
+          cd server
+          python -m pytest tests/ -v --tb=short
+
+  # ── 2. CONTINUOUS DEPLOYMENT (CD) ────────────────────────────────────
+  continuous-deployment:
+    name: Deploy to 3-Server Pipeline (Sequential)
+    needs: continuous-integration
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Thiết lập Tailscale VPN để runner truy cập IP nội bộ 100.x.x.x
+      - name: Connect to Tailscale VPN
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      # Cấu hình SSH Agent để đăng nhập bằng Key
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # Thêm các host key của 3 server vào known_hosts để tránh interactive prompt
+      # Sử dụng hostname Tailscale (hoặc IP nếu cấu hình)
+      - name: Scan SSH Host Keys
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H server-a-gateway >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H server-c-ai-core >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H server-b-execution >> ~/.ssh/known_hosts || true
+
+      # ── DEPLOY SERVER A (Linux Gateway) ──────────────────────────────────
+      - name: Deploy Server A (Gateway)
+        id: deploy_a
+        run: |
+          echo "🚀 Deploying Server A..."
+          ssh root@server-a-gateway 'bash -s' << 'EOF'
+            set -e
+            cd /opt/trading-bot
+            # Lưu commit SHA cũ phòng trường hợp rollback
+            git rev-parse HEAD > .rollback_sha
+            git fetch origin
+            git checkout main
+            git pull origin main
+            
+            # Khởi chạy docker compose của Server A
+            docker compose -f deploy/docker-compose.server-a.yml up -d --build
+            
+            # Health check liveness (timeout 20s)
+            echo "🔍 Testing Gateway Health..."
+            for i in {1..10}; do
+              if curl -sf http://localhost:5000/health > /dev/null; then
+                echo "✅ Server A Healthy!"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "❌ Server A Health Check Failed!"
+            exit 1
+          EOF
+
+      - name: Rollback Server A (On Failure)
+        if: failure() && steps.deploy_a.outcome == 'failure'
+        run: |
+          echo "⚠️ Server A deployment failed! Initiating rollback..."
+          ssh root@server-a-gateway 'bash -s' << 'EOF'
+            cd /opt/trading-bot
+            if [ -f .rollback_sha ]; then
+              ROLLBACK_SHA=$(cat .rollback_sha)
+              echo "🔄 Reverting Server A to $ROLLBACK_SHA..."
+              git checkout $ROLLBACK_SHA
+              docker compose -f deploy/docker-compose.server-a.yml up -d --build
+              echo "✅ Rollback Server A completed"
+            else
+              echo "❌ Rollback SHA file not found!"
+            fi
+          EOF
+          exit 1
+
+      # ── DEPLOY SERVER C (Linux AI Core) ──────────────────────────────────
+      - name: Deploy Server C (AI Core)
+        id: deploy_c
+        run: |
+          echo "🚀 Deploying Server C..."
+          ssh root@server-c-ai-core 'bash -s' << 'EOF'
+            set -e
+            cd /opt/trading-bot
+            git rev-parse HEAD > .rollback_sha
+            git fetch origin
+            git checkout main
+            git pull origin main
+            
+            # Khởi chạy docker compose của Server C (ChromaDB + Analyzer)
+            docker compose -f deploy/docker-compose.server-c.yml up -d --build
+            
+            # Health check ChromaDB
+            echo "🔍 Testing ChromaDB Health..."
+            for i in {1..10}; do
+              if curl -sf http://localhost:8000/api/v1/heartbeat > /dev/null; then
+                echo "✅ ChromaDB Healthy!"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "❌ ChromaDB Health Check Failed!"
+            exit 1
+          EOF
+
+      - name: Rollback Server C (On Failure)
+        if: failure() && steps.deploy_c.outcome == 'failure'
+        run: |
+          echo "⚠️ Server C deployment failed! Initiating rollback..."
+          ssh root@server-c-ai-core 'bash -s' << 'EOF'
+            cd /opt/trading-bot
+            if [ -f .rollback_sha ]; then
+              ROLLBACK_SHA=$(cat .rollback_sha)
+              echo "🔄 Reverting Server C to $ROLLBACK_SHA..."
+              git checkout $ROLLBACK_SHA
+              docker compose -f deploy/docker-compose.server-c.yml up -d --build
+              echo "✅ Rollback Server C completed"
+            fi
+          EOF
+          exit 1
+
+      # ── DEPLOY SERVER B (Windows Execution Vault) ──────────────────────────
+      - name: Deploy Server B (Execution Vault)
+        id: deploy_b
+        run: |
+          echo "🚀 Deploying Server B (Windows)..."
+          # Sử dụng SSH vào Windows với PowerShell làm default shell
+          ssh Administrator@server-b-execution << 'EOF'
+            $ErrorActionPreference = "Stop"
+            cd C:\opt\trading-bot
+            
+            # Lưu commit SHA cũ phòng trường hợp rollback
+            git rev-parse HEAD | Out-File -FilePath .rollback_sha -Encoding utf8
+            
+            git fetch origin
+            git checkout main
+            git pull origin main
+            
+            # Khởi chạy docker compose của Server B
+            docker compose -f deploy/docker-compose.server-b.yml up -d --build
+            
+            # Health check liveness (FastAPI cổng 5002)
+            echo "🔍 Testing Execution Server Health..."
+            for ($i=1; $i -le 10; $i++) {
+              try {
+                $response = Invoke-RestMethod -Uri "http://localhost:5002/health" -Method Get
+                if ($response.status -eq "healthy" -or $response.status -eq "ok") {
+                  Write-Output "✅ Server B Healthy!"
+                  exit 0
+                }
+              } catch {
+                # Chờ dịch vụ boot
+              }
+              Start-Sleep -Seconds 2
+            }
+            Write-Error "❌ Server B Health Check Failed!"
+            exit 1
+          EOF
+
+      - name: Rollback Server B (On Failure)
+        if: failure() && steps.deploy_b.outcome == 'failure'
+        run: |
+          echo "⚠️ Server B deployment failed! Initiating rollback..."
+          ssh Administrator@server-b-execution << 'EOF'
+            cd C:\opt\trading-bot
+            if (Test-Path .rollback_sha) {
+              $ROLLBACK_SHA = Get-Content .rollback_sha -Raw
+              Write-Output "🔄 Reverting Server B to $ROLLBACK_SHA..."
+              git checkout $ROLLBACK_SHA
+              docker compose -f deploy/docker-compose.server-b.yml up -d --build
+              Write-Output "✅ Rollback Server B completed"
+            }
+          EOF
+          exit 1

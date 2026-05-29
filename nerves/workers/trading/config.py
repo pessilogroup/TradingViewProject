@@ -213,7 +213,7 @@ VPS_STARTUP_PULL_LIMIT   = int(os.getenv("VPS_STARTUP_PULL_LIMIT", "50"))
 MAX_SIGNAL_AGE_MINUTES   = int(os.getenv("MAX_SIGNAL_AGE_MINUTES", "240"))
 
 # ── Pipeline Forwarding: Server B Execution (Phase 5) ────────────────────
-SERVER_B_EXECUTE_URL = os.getenv("SERVER_B_EXECUTE_URL", "")
+SERVER_B_EXECUTE_URL = os.getenv("SERVER_B_EXECUTE_URL", "").rstrip("/")
 SERVER_B_SECRET = os.getenv("SERVER_B_SECRET", "")
 
 # Server start time (for uptime calculation)
