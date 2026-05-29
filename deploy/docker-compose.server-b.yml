@@ -15,6 +15,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: tradingbot-execution
+    command: ["python", "-m", "uvicorn", "execution_server:app", "--host", "0.0.0.0", "--port", "5002"]
     restart: unless-stopped
     ports:
       - "5002:5002"

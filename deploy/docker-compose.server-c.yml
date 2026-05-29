@@ -34,6 +34,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: tradingbot-analyzer
+    command: ["python", "workers/vps_analyzer.py"]
     restart: unless-stopped
     depends_on:
       chromadb:
