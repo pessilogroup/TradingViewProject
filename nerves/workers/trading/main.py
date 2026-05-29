@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Query, status, Body
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -28,6 +28,34 @@ import scheduler as scheduler_module
 import telegram_bot as tg_bot_module
 import vision as vision_module
 import binance_client as binance_module
+
+# ── SSE: Server-Sent Events hub ──────────────────────────────────────────────
+import asyncio
+import json as _json
+
+_sse_clients: set[asyncio.Queue] = set()   # one Queue per connected browser tab
+
+
+def push_sse_event(event_type: str, data: dict) -> None:
+    """Broadcast an SSE event to ALL currently connected browser clients.
+
+    Non-blocking: if a client queue is full we skip it to avoid back-pressure.
+    Called from webhook handler or any background task.
+
+    Args:
+        event_type: e.g. 'new_signal', 'scan_complete', 'heartbeat'
+        data:       JSON-serialisable dict
+    """
+    msg = f"event: {event_type}\ndata: {_json.dumps(data)}\n\n"
+    dead = set()
+    for q in _sse_clients:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.add(q)
+        except Exception:
+            dead.add(q)
+    _sse_clients.difference_update(dead)
 
 # ── P9: Claude SDK package ────────────────────────────────────────────────────
 from claude_cli import SdkClient, ClaudeService
@@ -456,27 +484,32 @@ async def scan_watchlist_endpoint(
     mcp = _mcp_module.get_mcp_client()
     results = await analysis_module.scan_symbols(symbol_list, mcp)
 
+    # ── Save to shared cache ──────────────────────────────────────────────────
+    import scan_cache
+    serialised = [
+        {
+            "symbol": r.symbol,
+            "price": r.price,
+            "change_pct": r.change_pct,
+            "trend_template_score": r.trend_template.score if r.trend_template else 0,
+            "trend_template_stage": r.trend_template.stage if r.trend_template else "-",
+            "trend_template_criteria": r.trend_template.criteria if r.trend_template else [],
+            "vcp_detected": r.vcp.detected if r.vcp else False,
+            "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+            "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp else 0,
+            "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp else 0,
+            "pivot_level": r.vcp.pivot_level if r.vcp else None,
+            "vcp_note": r.vcp.note if r.vcp else None,
+            "error": r.error,
+        }
+        for r in results
+    ]
+    scan_cache.save_scan_results(serialised, source="web", symbol_list=symbol_list)
+
     return {
         "scanned": len(results),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": [
-            {
-                "symbol": r.symbol,
-                "price": r.price,
-                "change_pct": r.change_pct,
-                "trend_template_score": r.trend_template.score,
-                "trend_template_stage": r.trend_template.stage,
-                "trend_template_criteria": r.trend_template.criteria,
-                "vcp_detected": r.vcp.detected,
-                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
-                "volume_ratio": round(r.vcp.volume_ratio, 2),
-                "range_ratio": round(r.vcp.range_ratio, 2),
-                "pivot_level": r.vcp.pivot_level,
-                "vcp_note": r.vcp.note,
-                "error": r.error,
-            }
-            for r in results
-        ],
+        "results": serialised,
     }
 
 
@@ -1431,28 +1464,96 @@ async def trigger_scan_endpoint(
     mcp = _mcp_module.get_mcp_client()
     results = await analysis_module.scan_symbols(symbol_list, mcp)
 
-    return {
-        "scanned": len(results),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": [
-            {
-                "symbol": r.symbol,
-                "price": r.price,
-                "change_pct": r.change_pct,
-                "trend_template_score": r.trend_template.score,
-                "trend_template_stage": r.trend_template.stage,
-                "trend_template_criteria": r.trend_template.criteria,
-                "vcp_detected": r.vcp.detected,
-                "vol_breakout": getattr(r.vcp, "vol_breakout", False),
-                "volume_ratio": round(r.vcp.volume_ratio, 2),
-                "range_ratio": round(r.vcp.range_ratio, 2),
-                "pivot_level": r.vcp.pivot_level,
-                "vcp_note": r.vcp.note,
-                "error": r.error,
-            }
-            for r in results
-        ],
-    }
+    # ── Serialise ──────────────────────────────────────────────────────────────
+    serialised = [
+        {
+            "symbol": r.symbol,
+            "price": r.price,
+            "change_pct": r.change_pct,
+            "trend_template_score": r.trend_template.score if r.trend_template else 0,
+            "trend_template_stage": r.trend_template.stage if r.trend_template else "-",
+            "trend_template_criteria": r.trend_template.criteria if r.trend_template else [],
+            "vcp_detected": r.vcp.detected if r.vcp else False,
+            "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+            "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp else 0,
+            "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp else 0,
+            "pivot_level": r.vcp.pivot_level if r.vcp else None,
+            "vcp_note": r.vcp.note if r.vcp else None,
+            "error": r.error,
+        }
+        for r in results
+    ]
+
+    # ── Save to shared cache ──────────────────────────────────────────────────
+    import scan_cache
+    scan_cache.save_scan_results(serialised, source="web", symbol_list=symbol_list)
+
+    # ── Notify Telegram ───────────────────────────────────────────────────────
+    try:
+        from notifier import send_scan_summary_to_telegram
+        import asyncio
+        asyncio.create_task(send_scan_summary_to_telegram(serialised))
+    except Exception as _te:
+        log.warning(f"Telegram scan notify failed (non-fatal): {_te}")
+
+    ts = datetime.now(timezone.utc).isoformat()
+
+    # ── Push scan_complete SSE to all browser tabs ────────────────────────────
+    push_sse_event("scan_complete", {"scanned": len(results), "timestamp": ts, "source": "web"})
+
+    return {"scanned": len(results), "timestamp": ts, "results": serialised}
+
+
+@app.get("/api/scan/last")
+async def get_last_scan_endpoint():
+    """Return the most recent scan results from the shared in-memory cache.
+
+    Used by the dashboard to restore last scan without re-running.
+    Returns 204 if no scan has been run yet.
+    """
+    import scan_cache
+    if not scan_cache.has_results():
+        return JSONResponse(status_code=204, content=None)
+    return scan_cache.get_last_scan()
+
+
+# \u2550\u2550\u2550 SSE EVENTS STREAM \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+
+@app.get("/api/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream.
+
+    Browser connects once; server pushes events (new_signal, scan_complete,
+    heartbeat) without polling.  Each tab opens its own connection.
+    """
+    client_q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _sse_clients.add(client_q)
+
+    async def _stream():
+        try:
+            # Initial handshake
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(client_q.get(), timeout=15)
+                    yield msg
+                except asyncio.TimeoutError:
+                    # Heartbeat — keeps proxy/browser from closing idle connection
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            _sse_clients.discard(client_q)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering
+            "Connection": "keep-alive",
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -215,6 +215,23 @@ async def webhook(request: Request):
             source_ip=source_ip,
             exchange=exchange,
         ))
+
+        # ── Push real-time SSE to all browser tabs ──────────────────────────
+        try:
+            import main as _main_mod
+            _main_mod.push_sse_event("new_signal", {
+                "signal_id":       signal_id,
+                "symbol":          symbol,
+                "indicator_name":  indicator_name,
+                "signal_type":     signal_type,
+                "price":           price_float,
+                "confidence_score": conf_score,
+                "exchange":        exchange,
+                "interval":        interval,
+            })
+        except Exception as _sse_err:
+            log.debug(f"SSE push skipped: {_sse_err}")
+
     else:
         await _event_bus.emit_background(SignalReceived(
             signal_id=signal_id,

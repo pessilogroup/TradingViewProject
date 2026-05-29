@@ -607,7 +607,7 @@
       <div class="cs-controls">
         <div class="cs-control-group">
           <label class="cs-label">Symbol</label>
-          <select id="captureSymbol" class="form-input cs-select" title="Select Capture Symbol">
+          <select id="captureSymbol" class="form-input cs-select" title="Select Capture Symbol" onchange="loadCSLiveChart()">
             <option value="BTCUSDT">BTCUSDT</option>
             <option value="ETHUSDT">ETHUSDT</option>
             <option value="SOLUSDT">SOLUSDT</option>
@@ -618,7 +618,7 @@
         </div>
         <div class="cs-control-group">
           <label class="cs-label">Timeframe</label>
-          <select id="captureTimeframe" class="form-input cs-select-sm" title="Select Capture Timeframe">
+          <select id="captureTimeframe" class="form-input cs-select-sm" title="Select Capture Timeframe" onchange="loadCSLiveChart()">
             <option value="15">15m</option>
             <option value="60" selected>1H</option>
             <option value="240">4H</option>
@@ -695,12 +695,15 @@
       <div class="cs-canvas-col">
         <!-- Chart image display -->
         <div class="cs-chart-frame" id="csChartFrame">
-          <div class="cs-chart-placeholder" id="csChartPlaceholder">
-            <div class="cs-chart-watermark">
-              <span class="fs-3rem op-15" >📈</span>
-              <div class="op-30 fs-0_85rem mt-8" >Chart will appear after capture</div>
+          <!-- Live Candlestick Chart (pre-capture preview) -->
+          <div id="csChartPlaceholder" style="position:relative;width:100%;height:100%;min-height:240px;">
+            <canvas id="csLiveCanvas" style="width:100%;height:100%;display:block;"></canvas>
+            <div class="cs-live-badge" style="position:absolute;top:8px;left:10px;display:flex;align-items:center;gap:6px;z-index:2;">
+              <span style="width:7px;height:7px;border-radius:50%;background:#22c55e;animation:pulse-dot 1.5s infinite;display:inline-block;"></span>
+              <span id="csLiveLabel" style="font-size:0.7rem;color:var(--text-muted);font-family:var(--mono);">BTCUSDT · 1H · Binance</span>
             </div>
           </div>
+          <!-- CDP Screenshot (post-capture, overlays canvas) -->
           <img id="csChartImg" class="cs-chart-img d-none" src="" alt="Chart" onclick="openImgZoom(this.src)" onerror="this.style.display='none'">
           <div class="cs-chart-overlay d-none" id="csChartOverlay" >
             <div class="cs-overlay-sym" id="csOverlaySym">BTCUSDT</div>

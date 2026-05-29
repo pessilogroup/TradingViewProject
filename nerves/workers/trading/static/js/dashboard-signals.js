@@ -14,9 +14,53 @@ const SIG = {
   activeSymbol: 'BTCUSDT',
 };
 
+/* ── SSE connection ───────────────────────────────────────────────── */
+let _signalSSE = null;
+
+function startSignalsSSE() {
+  if (_signalSSE) return;   // already connected
+  _signalSSE = new EventSource('/api/events');
+
+  _signalSSE.addEventListener('connected', () => {
+    console.log('[SSE] connected to /api/events');
+  });
+
+  _signalSSE.addEventListener('new_signal', (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      const emoji = d.signal_type === 'entry' ? '🟢' : d.signal_type === 'exit' ? '🔴' : '🔵';
+      toast(`${emoji} New ${d.signal_type?.toUpperCase()} — ${d.symbol} @$${d.price ?? '?'}`, 'info');
+    } catch {}
+    // Reload the feed (debounced slightly to batch rapid webhooks)
+    clearTimeout(SIG.debounceTimer);
+    SIG.debounceTimer = setTimeout(() => {
+      SIG.page = 0;
+      loadSignals();
+    }, 600);
+  });
+
+  _signalSSE.addEventListener('scan_complete', () => {
+    // Update Scanner tab if it's active, otherwise cache is updated silently
+    if (typeof loadLastScan === 'function') loadLastScan();
+  });
+
+  _signalSSE.onerror = () => {
+    // Browser auto-reconnects — just log
+    console.warn('[SSE] connection lost, browser will retry...');
+  };
+}
+
+function stopSignalsSSE() {
+  if (_signalSSE) {
+    _signalSSE.close();
+    _signalSSE = null;
+  }
+}
+
 /* ── Bootstrap: called by switchTab('signals') ───────────────────── */
 async function initSignalsTab() {
   await Promise.all([loadSignals(), loadWatchlist()]);
+  startSignalsSSE();
 }
 
 /* ── Debounce helper ─────────────────────────────────────────────── */
