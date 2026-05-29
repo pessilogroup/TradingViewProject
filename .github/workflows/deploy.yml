@@ -73,20 +73,19 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       # Thêm các host key của 3 server vào known_hosts để tránh interactive prompt
-      # Sử dụng hostname Tailscale (hoặc IP nếu cấu hình)
       - name: Scan SSH Host Keys
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H server-a-gateway >> ~/.ssh/known_hosts || true
-          ssh-keyscan -H server-c-ai-core >> ~/.ssh/known_hosts || true
-          ssh-keyscan -H server-b-execution >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H ${{ secrets.SERVER_A_IP }} >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H ${{ secrets.SERVER_C_IP }} >> ~/.ssh/known_hosts || true
+          ssh-keyscan -H ${{ secrets.SERVER_B_IP }} >> ~/.ssh/known_hosts || true
 
       # ── DEPLOY SERVER A (Linux Gateway) ──────────────────────────────────
       - name: Deploy Server A (Gateway)
         id: deploy_a
         run: |
           echo "🚀 Deploying Server A..."
-          ssh root@server-a-gateway 'bash -s' << 'EOF'
+          ssh root@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             # Lưu commit SHA cũ phòng trường hợp rollback
@@ -115,7 +114,7 @@ jobs:
         if: failure() && steps.deploy_a.outcome == 'failure'
         run: |
           echo "⚠️ Server A deployment failed! Initiating rollback..."
-          ssh root@server-a-gateway 'bash -s' << 'EOF'
+          ssh root@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)
@@ -134,7 +133,7 @@ jobs:
         id: deploy_c
         run: |
           echo "🚀 Deploying Server C..."
-          ssh root@server-c-ai-core 'bash -s' << 'EOF'
+          ssh root@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             git rev-parse HEAD > .rollback_sha
@@ -162,7 +161,7 @@ jobs:
         if: failure() && steps.deploy_c.outcome == 'failure'
         run: |
           echo "⚠️ Server C deployment failed! Initiating rollback..."
-          ssh root@server-c-ai-core 'bash -s' << 'EOF'
+          ssh root@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)
@@ -180,7 +179,7 @@ jobs:
         run: |
           echo "🚀 Deploying Server B (Windows)..."
           # Sử dụng SSH vào Windows với PowerShell làm default shell
-          ssh Administrator@server-b-execution << 'EOF'
+          ssh Administrator@${{ secrets.SERVER_B_IP }} << 'EOF'
             $ErrorActionPreference = "Stop"
             cd C:\opt\trading-bot
             
@@ -216,7 +215,7 @@ jobs:
         if: failure() && steps.deploy_b.outcome == 'failure'
         run: |
           echo "⚠️ Server B deployment failed! Initiating rollback..."
-          ssh Administrator@server-b-execution << 'EOF'
+          ssh Administrator@${{ secrets.SERVER_B_IP }} << 'EOF'
             cd C:\opt\trading-bot
             if (Test-Path .rollback_sha) {
               $ROLLBACK_SHA = Get-Content .rollback_sha -Raw

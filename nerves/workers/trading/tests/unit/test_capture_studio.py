@@ -186,9 +186,12 @@ async def test_lifecycle_restart_budget():
     # The stop/start won't actually run (no process), but budget should block
     with patch.object(mgr, 'stop', new_callable=AsyncMock):
         with patch.object(mgr, 'start', new_callable=AsyncMock) as mock_start:
-            await mgr.restart()
-            # start should NOT be called — budget exhausted
-            mock_start.assert_not_called()
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await mgr.restart()
+                # start should NOT be called — budget exhausted
+                mock_start.assert_not_called()
+                # verify sleep was called with 300 seconds
+                mock_sleep.assert_called_once_with(300)
 
 
 @pytest.mark.asyncio

@@ -191,10 +191,20 @@ def run_mcp_ingestion():
         success = False
     finally:
         # Terminate subprocess
-        proc.stdin.close()
-        proc.terminate()
-        proc.wait()
-        log("Subprocess terminated.", log_lines)
+        if 'proc' in locals() and proc is not None:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            try:
+                proc.wait()
+            except Exception:
+                pass
+            log("Subprocess terminated.", log_lines)
 
     # Save log file
     with open(LOG_FILE, "w", encoding="utf-8") as f:

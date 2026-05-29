@@ -3,6 +3,7 @@ Unit tests: test_rag.py
 Tests for RAG (Retrieval-Augmented Generation) knowledge base functionality.
 """
 import unittest
+import sys
 
 class TestRAGSystem(unittest.TestCase):
     def test_rag_context_retrieval_empty(self):
@@ -13,6 +14,7 @@ class TestRAGSystem(unittest.TestCase):
         """Should retrieve relevant documents based on semantic similarity."""
         pass
 
+    @unittest.skipIf(sys.platform != "win32", "Requires Windows to run angati.exe")
     def test_weex_l1_ingestion_trigger(self):
         """Trigger Weex L1 SQLite-Vec Memory ingestion via genuine MCP tool and verify presence."""
         try:
