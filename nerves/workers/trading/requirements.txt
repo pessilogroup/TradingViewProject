@@ -16,3 +16,9 @@ requests>=2.31.0
 
 # ── Telegram Bot Interactive (P7) ─────────────────────────────
 python-telegram-bot>=21.0
+
+# ── Charting and Data dependencies ─────────────────────────────
+pandas>=2.0.0
+matplotlib>=3.7.0
+mplfinance>=0.12.9
+ccxt>=4.0.0
