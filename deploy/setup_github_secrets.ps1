@@ -58,6 +58,7 @@ function Read-Input {
 function Read-Hidden {
     param([string]$Prompt)
     $s = Read-Host "  $Prompt" -AsSecureString
+    if ($null -eq $s) { return "" }
     $b = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
     try { return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($b) }
     finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
