@@ -212,9 +212,16 @@ VPS_POLL_INTERVAL_SECONDS= int(os.getenv("VPS_POLL_INTERVAL_SECONDS", "30"))
 VPS_STARTUP_PULL_LIMIT   = int(os.getenv("VPS_STARTUP_PULL_LIMIT", "50"))
 MAX_SIGNAL_AGE_MINUTES   = int(os.getenv("MAX_SIGNAL_AGE_MINUTES", "240"))
 
-# ── Pipeline Forwarding: Server B Execution (Phase 5) ────────────────────
+# ── Pipeline Forwarding: Server B Execution & Local Failover (Phase 5+) ──
+LOCAL_EXECUTE_URL = os.getenv("LOCAL_EXECUTE_URL", "").rstrip("/")
+LOCAL_EXECUTE_SECRET = os.getenv("LOCAL_EXECUTE_SECRET", "")
+
 SERVER_B_EXECUTE_URL = os.getenv("SERVER_B_EXECUTE_URL", "").rstrip("/")
 SERVER_B_SECRET = os.getenv("SERVER_B_SECRET", "")
+
+# Tên định danh của server thực thi lệnh (Dùng cho thông báo Telegram)
+EXECUTION_TARGET_NAME = os.getenv("EXECUTION_TARGET_NAME", "Server B (Cloud)")
+
 
 # Server start time (for uptime calculation)
 import time as _time

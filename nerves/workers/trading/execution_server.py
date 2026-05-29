@@ -138,7 +138,7 @@ async def execute_trade(request: Request):
             try:
                 from notifier import notify_all
                 msg = (
-                    f"✅ **Pipeline Trade Executed**\n"
+                    f"✅ **Pipeline Trade Executed on {config.EXECUTION_TARGET_NAME}**\n"
                     f"- Symbol: `{symbol}`\n"
                     f"- Action: `{action.upper()}`\n"
                     f"- Order ID: `{result_holder.get('order_id', 'N/A')}`\n"

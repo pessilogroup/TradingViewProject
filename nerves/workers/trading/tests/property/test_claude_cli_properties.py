@@ -24,7 +24,7 @@ from claude_cli.telegram_commands import _format_response
 # ── helpers ─────────────────────────────────────────────────────────────────────
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _make_sdk(text: str = "ok [Confidence: 7/10]") -> MagicMock:
@@ -94,7 +94,7 @@ def test_p3_context_depth_never_exceeded(depth, interactions):
                 query=f"q{i}", symbol="SYM", include_rag_context=False
             ))
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run(run())
     ctx = svc._ctx.get_history("SYM")
     assert len(ctx) <= depth * 2, f"depth={depth}, interactions={interactions}, got {len(ctx)}"
 
@@ -118,7 +118,7 @@ def test_p4_token_budget_never_exceeded(max_tokens, interactions):
                 include_rag_context=False,
             ))
 
-    asyncio.get_event_loop().run_until_complete(run())
+    _run(run())
     ctx = svc._ctx.get_history("TOK")
     total = sum(e.estimated_tokens for e in ctx)
     assert total <= max_tokens, f"max_tokens={max_tokens}, got {total}"

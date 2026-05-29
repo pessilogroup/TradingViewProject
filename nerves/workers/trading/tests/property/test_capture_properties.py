@@ -68,7 +68,7 @@ def test_p3_batch_result_count_matches_input(n):
     client = _make_mock_client()
     symbols = [{"symbol": f"SYM{i}", "timeframe": "D"} for i in range(n)]
 
-    results = asyncio.get_event_loop().run_until_complete(
+    results = asyncio.run(
         client.batch_run(symbols)
     )
     assert len(results) == n, f"Expected {n} results, got {len(results)}"
@@ -91,7 +91,7 @@ def test_p5_symbol_fidelity_on_signal(symbol):
             event = SignalValidated(symbol=symbol, signal_id=1, action="buy")
             await dispatcher.on_signal(event)
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
     client.capture_screenshot.assert_called_once_with(
         symbol=symbol, timeframe="D"
     )
@@ -109,7 +109,7 @@ def test_p5_symbol_fidelity_on_command(symbol):
             mock_bus.emit_background = AsyncMock()
             await dispatcher.on_command(symbol)
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
     client.capture_screenshot.assert_called_once_with(
         symbol=symbol, timeframe="D"
     )

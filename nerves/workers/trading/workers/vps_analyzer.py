@@ -240,19 +240,62 @@ class VpsAnalyzerWorker:
         return trade_payload
 
     async def forward_to_server_b(self, trade_payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Forward approved trade to SERVER B's execution endpoint.
+        """Forward approved trade to the execution endpoint, prioritizing Local Windows.
+        Falls back to SERVER B (Cloud Backup) if Local is offline or fails to execute.
 
         Args:
             trade_payload: Dict with symbol, action, price, qty, sl, tp, analysis, etc.
 
         Returns:
-            Response dict from Server B, or error dict on failure.
+            Response dict from the executing server, or error dict on failure.
         """
+        # Try Local Windows execution first if configured
+        if config.LOCAL_EXECUTE_URL:
+            local_url = f"{config.LOCAL_EXECUTE_URL}/api/execute-trade"
+            local_headers = {
+                "X-Server-B-Secret": config.LOCAL_EXECUTE_SECRET,
+                "Content-Type": "application/json",
+            }
+            log.info(f"[VpsAnalyzer] Attempting execution on Local Windows: {local_url}")
+            try:
+                session = await self.get_session()
+                # Use a lower connection & total timeout for Local to trigger failover quickly
+                timeout = aiohttp.ClientTimeout(connect=5, total=10)
+                async with session.post(
+                    local_url, json=trade_payload, headers=local_headers, timeout=timeout
+                ) as resp:
+                    body = await resp.json()
+                    if resp.status == 200:
+                        log.info(
+                            f"[VpsAnalyzer] Local Windows executed trade: "
+                            f"{trade_payload['symbol']} {trade_payload['action']}"
+                        )
+                        return {"success": True, "status": resp.status, "data": body, "executed_on": "local"}
+                    else:
+                        log.warning(
+                            f"[VpsAnalyzer] Local Windows rejected trade (HTTP {resp.status}): {body}. "
+                            f"Falling back to Server B."
+                        )
+            except Exception as e:
+                log.warning(f"[VpsAnalyzer] Local Windows offline or execution failed: {e}. Falling back to Server B.")
+                # Send a Telegram alert indicating local is offline and falling back
+                try:
+                    from notifier import send_telegram_alert
+                    await send_telegram_alert(
+                        f"⚠️ **Local Windows Offline / Gặp sự cố**\n"
+                        f"- Lỗi: `{str(e)[:150]}`\n"
+                        f"- Trạng thái: Tự động chuyển luồng giao dịch sang **Server B (Cloud Backup)**..."
+                    )
+                except Exception as t_err:
+                    log.warning(f"Failed to send Telegram alert for failover: {t_err}")
+
+        # Fallback to Server B
         url = f"{config.SERVER_B_EXECUTE_URL}/api/execute-trade"
         headers = {
             "X-Server-B-Secret": config.SERVER_B_SECRET,
             "Content-Type": "application/json",
         }
+        log.info(f"[VpsAnalyzer] Forwarding trade to Server B (Cloud Backup): {url}")
 
         try:
             session = await self.get_session()
@@ -265,7 +308,7 @@ class VpsAnalyzerWorker:
                         f"[VpsAnalyzer] Server B accepted trade: "
                         f"{trade_payload['symbol']} {trade_payload['action']}"
                     )
-                    return {"success": True, "status": resp.status, "data": body}
+                    return {"success": True, "status": resp.status, "data": body, "executed_on": "server_b"}
                 else:
                     log.error(
                         f"[VpsAnalyzer] Server B rejected trade (HTTP {resp.status}): "
@@ -277,7 +320,6 @@ class VpsAnalyzerWorker:
                         "error": body.get("detail", str(body)),
                     }
         except aiohttp.ContentTypeError:
-            # Server B returned non-JSON response
             log.error("[VpsAnalyzer] Server B returned non-JSON response")
             return {"success": False, "status": 500, "error": "Non-JSON response from Server B"}
         except Exception as e:

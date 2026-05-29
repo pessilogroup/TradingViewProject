@@ -52,6 +52,9 @@
   2. Declared all missing charting and browser dependencies in `requirements.txt`.
   3. Added `python -m playwright install chromium` step to the CI workflow `.github/workflows/deploy.yml` right after installing python dependencies.
   4. Added `--exit-zero` to `ruff check` in the workflow to prevent build failure on legacy code lint warnings.
+  5. Fixed two test runner bugs causing exit code 1 on Linux/GitHub runners:
+     - Replaced `asyncio.get_event_loop().run_until_complete()` with `asyncio.run()` in Hypothesis `@given` property tests (`test_capture_properties.py` and `test_claude_cli_properties.py`) to prevent `RuntimeError: There is no current event loop in thread 'MainThread'`.
+     - Reconfigured `test_log_test_run_creates_file` to close the active `FileHandler` on the logger before trying to `os.remove` the log file, avoiding unlinking errors on Linux where the file remains open and invisible.
 * **Status:** FIXED.
 
 ## Active Issues / Known Limitations

@@ -893,9 +893,67 @@ async def test_pipeline_forward_sends_correct_headers():
     assert "Content-Type" in posted_headers
     assert posted_headers["Content-Type"] == "application/json"
 
-    # Verify the trade payload was sent as JSON body
     posted_json = call_args.kwargs.get("json") or call_args[1].get("json", {})
     assert posted_json["symbol"] == "BTCUSDT"
     assert posted_json["action"] == "buy"
 
     await worker.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 16: Pipeline failover from Local to Server B
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_pipeline_failover_local_to_server_b():
+    """Verify that when Local is configured but offline, the pipeline fails over to Server B."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+    import config
+    from unittest.mock import patch
+
+    original_local_url = config.LOCAL_EXECUTE_URL
+    original_local_secret = config.LOCAL_EXECUTE_SECRET
+    original_b_url = config.SERVER_B_EXECUTE_URL
+
+    try:
+        config.LOCAL_EXECUTE_URL = "http://local-windows:5000"
+        config.LOCAL_EXECUTE_SECRET = "local-sec"
+        config.SERVER_B_EXECUTE_URL = "http://server-b:5000"
+
+        worker = VpsAnalyzerWorker()
+        trade_payload = {"symbol": "BTCUSDT", "action": "buy", "price": 68000.0}
+
+        # Mock the session to throw error on the first call (local) and succeed on the second (server b)
+        server_b_resp = FakeResponse(
+            status=200,
+            json_data={"success": True, "order_id": "ORD-B-FAILOVER"},
+        )
+        mock_session = MagicMock()
+        
+        call_count = 0
+        def post_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("Local Windows is offline")
+            return server_b_resp
+
+        mock_session.post = MagicMock(side_effect=post_side_effect)
+        worker.get_session = AsyncMock(return_value=mock_session)
+
+        with patch("notifier.send_telegram_alert", new_callable=AsyncMock) as mock_alert:
+            result = await worker.forward_to_server_b(trade_payload)
+
+            assert result["success"] is True
+            assert result["executed_on"] == "server_b"
+            assert result["data"]["order_id"] == "ORD-B-FAILOVER"
+            assert mock_session.post.call_count == 2
+            mock_alert.assert_called_once()
+            assert "Local Windows Offline" in mock_alert.call_args[0][0]
+
+        await worker.close()
+    finally:
+        config.LOCAL_EXECUTE_URL = original_local_url
+        config.LOCAL_EXECUTE_SECRET = original_local_secret
+        config.SERVER_B_EXECUTE_URL = original_b_url
+

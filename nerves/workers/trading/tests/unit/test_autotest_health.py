@@ -7,11 +7,25 @@ from scripts.autotest_watcher import parse_pytest_failures, extract_failure_deta
 @pytest.mark.asyncio
 async def test_log_test_run_creates_file():
     log_path = alert_manager.log_file_path
+    
+    # Close and remove existing handlers to release the file handle/descriptor
+    handlers = list(alert_manager.test_runs_logger.handlers)
+    for h in handlers:
+        h.close()
+        alert_manager.test_runs_logger.removeHandler(h)
+        
     if os.path.exists(log_path):
         try:
             os.remove(log_path)
         except OSError:
             pass
+            
+    # Re-add a new handler so that file gets recreated on disk
+    import logging
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    formatter = logging.Formatter("[%(asctime)s] | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    file_handler.setFormatter(formatter)
+    alert_manager.test_runs_logger.addHandler(file_handler)
             
     alert_manager.log_test_run(True, "15 passed, 0 failed")
     assert os.path.exists(log_path)

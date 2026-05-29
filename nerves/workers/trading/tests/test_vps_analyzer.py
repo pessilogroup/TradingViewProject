@@ -671,3 +671,105 @@ async def test_poll_and_analyze_multiple_signals():
     assert results[1]["approved"] is False
     assert results[1]["queue_id"] == 51
     await worker.close()
+
+
+# ── Local & Server B Failover Tests ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_forward_to_local_success():
+    """If LOCAL_EXECUTE_URL is configured and succeeds, we use Local and don't call Server B."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+    import config
+
+    original_local_url = config.LOCAL_EXECUTE_URL
+    original_local_secret = config.LOCAL_EXECUTE_SECRET
+    original_b_url = config.SERVER_B_EXECUTE_URL
+
+    try:
+        config.LOCAL_EXECUTE_URL = "http://local-windows:5000"
+        config.LOCAL_EXECUTE_SECRET = "local-sec"
+        config.SERVER_B_EXECUTE_URL = "http://server-b:5000"
+
+        worker = VpsAnalyzerWorker()
+        trade_payload = {"symbol": "BTCUSDT", "action": "buy", "price": 68000.0}
+
+        local_response = FakeResponse(status=200, json_data={"success": True, "order_id": "LOCAL-123"})
+        
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=local_response)
+        worker.get_session = AsyncMock(return_value=mock_session)
+
+        result = await worker.forward_to_server_b(trade_payload)
+
+        assert result["success"] is True
+        assert result["executed_on"] == "local"
+        assert result["data"]["order_id"] == "LOCAL-123"
+
+        # Verify only one post call (to Local) was made
+        assert mock_session.post.call_count == 1
+        call_url = mock_session.post.call_args[0][0]
+        assert "local-windows" in call_url
+
+        await worker.close()
+    finally:
+        config.LOCAL_EXECUTE_URL = original_local_url
+        config.LOCAL_EXECUTE_SECRET = original_local_secret
+        config.SERVER_B_EXECUTE_URL = original_b_url
+
+
+@pytest.mark.asyncio
+async def test_forward_to_local_fails_fallback_to_server_b_success():
+    """If Local fails (connection error or timeout), we log warning, send Telegram, and try Server B."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+    import config
+    from unittest.mock import patch
+
+    original_local_url = config.LOCAL_EXECUTE_URL
+    original_local_secret = config.LOCAL_EXECUTE_SECRET
+    original_b_url = config.SERVER_B_EXECUTE_URL
+    original_b_secret = config.SERVER_B_SECRET
+
+    try:
+        config.LOCAL_EXECUTE_URL = "http://local-windows:5000"
+        config.LOCAL_EXECUTE_SECRET = "local-sec"
+        config.SERVER_B_EXECUTE_URL = "http://server-b:5000"
+        config.SERVER_B_SECRET = "b-sec"
+
+        worker = VpsAnalyzerWorker()
+        trade_payload = {"symbol": "BTCUSDT", "action": "buy", "price": 68000.0}
+
+        # Mock post side_effects: 1st call (Local) raises connection error, 2nd call (Server B) succeeds
+        b_response = FakeResponse(status=200, json_data={"success": True, "order_id": "B-456"})
+        
+        mock_session = MagicMock()
+        
+        # Side effect to raise error on first call and return b_response on second
+        call_count = 0
+        def post_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Connection refused to Local Windows")
+            return b_response
+
+        mock_session.post = MagicMock(side_effect=post_side_effect)
+        worker.get_session = AsyncMock(return_value=mock_session)
+
+        # Mock Telegram alert to avoid real requests
+        with patch("notifier.send_telegram_alert", new_callable=AsyncMock) as mock_alert:
+            result = await worker.forward_to_server_b(trade_payload)
+
+            assert result["success"] is True
+            assert result["executed_on"] == "server_b"
+            assert result["data"]["order_id"] == "B-456"
+            assert mock_session.post.call_count == 2
+            mock_alert.assert_called_once()
+            assert "Local Windows Offline" in mock_alert.call_args[0][0]
+
+        await worker.close()
+    finally:
+        config.LOCAL_EXECUTE_URL = original_local_url
+        config.LOCAL_EXECUTE_SECRET = original_local_secret
+        config.SERVER_B_EXECUTE_URL = original_b_url
+        config.SERVER_B_SECRET = original_b_secret
+
