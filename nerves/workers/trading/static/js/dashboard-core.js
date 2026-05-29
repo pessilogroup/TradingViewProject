@@ -111,7 +111,7 @@ function switchTab(name) {
   });
   if (name === 'indicators') loadIndicators();
   if (name === 'notifications') loadNotifications();
-  if (name === 'analysis') loadBriefs();
+  if (name === 'analysis') { loadBriefs(); startCSLivePolling(); } else { stopCSLivePolling(); }
   if (name === 'trade-analysis') loadTradeAnalysis();
   if (name === 'status') loadSystemStatus();
   if (name === 'scanner') {} // load on button click

@@ -59,7 +59,12 @@ function stopSignalsSSE() {
 
 /* ── Bootstrap: called by switchTab('signals') ───────────────────── */
 async function initSignalsTab() {
-  await Promise.all([loadSignals(), loadWatchlist()]);
+  // Run feed + stats in parallel — don't wait for one before starting other
+  await Promise.all([
+    loadSignalFeedOnly(),
+    loadSignalStats(null),
+    loadWatchlist(),
+  ]);
   startSignalsSSE();
 }
 
@@ -148,20 +153,16 @@ async function loadSignalStats(symbol) {
   }
 }
 
-/* ── Load signal feed ────────────────────────────────────────────── */
-async function loadSignals() {
+/* ── Load signal feed (data rows only) ──────────────────────────── */
+async function loadSignalFeedOnly() {
   const symbol    = (document.getElementById('sigSymbolFilter')?.value || '').trim();
   const indName   = (document.getElementById('sigNameFilter')?.value   || '').trim();
   const offset    = SIG.page * SIG.pageSize;
 
   const symSelect = document.getElementById('sigChartSymbolSelect');
-  if (symSelect) {
-    symSelect.value = symbol.toUpperCase();
-  }
+  if (symSelect) symSelect.value = symbol.toUpperCase();
   const indSelect = document.getElementById('sigChartIndicatorSelect');
-  if (indSelect) {
-    indSelect.value = indName;
-  }
+  if (indSelect) indSelect.value = indName;
 
   const params = new URLSearchParams({ limit: SIG.pageSize, offset });
   if (symbol)         params.set('symbol',         symbol.toUpperCase());
@@ -180,24 +181,28 @@ async function loadSignals() {
     renderSignalFeed(res.signals || []);
     renderSigPagination();
 
-    // Show ATR risk panel if first entry signal has metadata
     const firstEntry = (res.signals || []).find(s => s.signal_type === 'entry');
     if (firstEntry) renderRiskPanel(firstEntry);
 
-    // Resolve active symbol: input value -> first signal's symbol -> default 'BTCUSDT'
     let activeSymbol = symbol.trim();
     if (!activeSymbol && res.signals && res.signals.length > 0) {
       activeSymbol = res.signals[0].symbol;
     }
     SIG.activeSymbol = (activeSymbol || 'BTCUSDT').toUpperCase();
-
-    // Load stats and chart for active symbol
-    loadSignalStats(SIG.activeSymbol);
-
   } catch (e) {
     console.error('[Signals] Feed error:', e);
     if (feedList) feedList.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading signals</h3></div>`;
   }
+}
+
+/* ── Load signal feed + stats together (for filter/pagination updates) ── */
+async function loadSignals() {
+  // Fire feed rows and stats in parallel
+  const symbol = (document.getElementById('sigSymbolFilter')?.value || '').trim();
+  await Promise.all([
+    loadSignalFeedOnly(),
+    loadSignalStats(symbol.toUpperCase() || null),
+  ]);
 }
 
 /* ── Render single signal card HTML ──────────────────────────────── */
@@ -1103,91 +1108,165 @@ async function loadCandleChart(symbol) {
   }
 }
 
-function drawCandlestickChart(canvas, candles) {
+function drawCandlestickChart(canvas, candles, opts) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
   const width = canvas.width;
   const height = canvas.height;
-
   ctx.clearRect(0, 0, width, height);
 
-  const paddingLeft = 12;
-  const paddingRight = 60;
-  const paddingTop = 20;
-  const paddingBottom = 20;
+  // ── Layout ──
+  const extraR = (opts && opts.extraPaddingRight) || 0;
+  const extraL = (opts && opts.extraPaddingLeft)  || 0;
+  const priceColW = 72;
+  const paddingLeft = 8 + extraL;
+  const paddingRight = priceColW + extraR;
+  const paddingTop = 12;
+  const paddingBottom = 12;
+  const chartW = width - paddingLeft - paddingRight;
+  const chartH = height - paddingTop - paddingBottom;
+  const volumeH = Math.round(chartH * 0.18);
 
-  const chartWidth = width - paddingLeft - paddingRight;
-  const chartHeight = height - paddingTop - paddingBottom;
+  // ── TradingView colors ──
+  const TV_GREEN = '#26a69a';
+  const TV_RED   = '#ef5350';
+  const TV_GRID  = 'rgba(42, 46, 57, 0.6)';
+  const TV_TEXT  = '#787b86';
 
-  let minPrice = Infinity;
-  let maxPrice = -Infinity;
-  candles.forEach(c => {
-    const low = parseFloat(c[3]);
-    const high = parseFloat(c[2]);
-    if (low < minPrice) minPrice = low;
-    if (high > maxPrice) maxPrice = high;
+  // ── Parse candles ──
+  let minP = Infinity, maxP = -Infinity, maxVol = 0;
+  const parsed = candles.map(c => {
+    const o = parseFloat(c[1]), h = parseFloat(c[2]);
+    const l = parseFloat(c[3]), cl = parseFloat(c[4]);
+    const v = parseFloat(c[5]) || 0;
+    if (l < minP) minP = l;
+    if (h > maxP) maxP = h;
+    if (v > maxVol) maxVol = v;
+    return { o, h, l, c: cl, v, t: c[0] };
   });
 
-  const priceRange = maxPrice - minPrice;
-  minPrice -= priceRange * 0.08;
-  maxPrice += priceRange * 0.08;
-  const finalRange = maxPrice - minPrice || 1;
+  const rawRange = maxP - minP;
+  minP -= rawRange * 0.06;
+  maxP += rawRange * 0.06;
+  const range = maxP - minP || 1;
+  const getY = val => paddingTop + chartH * (1 - (val - minP) / range);
 
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
-  ctx.fillStyle = '#64748b';
-  ctx.font = '9px "JetBrains Mono", monospace';
+  // ── Price scale column (right) ──
+  const priceColX = width - priceColW;
+  ctx.fillStyle = 'rgba(19, 23, 34, 0.95)';
+  ctx.fillRect(priceColX, 0, priceColW, height);
+  ctx.strokeStyle = 'rgba(42, 46, 57, 0.8)';
   ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(priceColX, 0);
+  ctx.lineTo(priceColX, height);
+  ctx.stroke();
 
-  const gridCount = 3;
-  for (let i = 0; i <= gridCount; i++) {
-    const y = paddingTop + (chartHeight * i) / gridCount;
-    const price = maxPrice - (finalRange * i) / gridCount;
-
-    ctx.beginPath();
-    ctx.moveTo(paddingLeft, y);
-    ctx.lineTo(width - paddingRight, y);
-    ctx.stroke();
-
-    ctx.fillText(`$${Math.round(price).toLocaleString()}`, width - paddingRight + 6, y + 3);
+  // ── Smart grid ──
+  const steps = [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
+  const targetLines = Math.max(4, Math.min(10, Math.floor(chartH / 40)));
+  let gridStep = steps[steps.length - 1];
+  for (const s of steps) {
+    if (rawRange / s <= targetLines + 2) { gridStep = s; break; }
   }
 
-  const candleCount = candles.length;
-  const spacing = chartWidth / candleCount;
-  const candleWidth = spacing * 0.65;
-
-  candles.forEach((c, index) => {
-    const open = parseFloat(c[1]);
-    const high = parseFloat(c[2]);
-    const low = parseFloat(c[3]);
-    const close = parseFloat(c[4]);
-
-    const isBullish = close >= open;
-    const color = isBullish ? '#22c55e' : '#ef4444';
-
-    const x = paddingLeft + index * spacing + spacing / 2;
-
-    const getY = (val) => {
-      return paddingTop + chartHeight * (1 - (val - minPrice) / finalRange);
-    };
-
-    const yOpen = getY(open);
-    const yClose = getY(close);
-    const yHigh = getY(high);
-    const yLow = getY(low);
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.2;
+  const firstGrid = Math.ceil(minP / gridStep) * gridStep;
+  ctx.setLineDash([2, 3]);
+  ctx.lineWidth = 0.5;
+  for (let p = firstGrid; p <= maxP; p += gridStep) {
+    const y = getY(p);
+    if (y < paddingTop - 5 || y > height - paddingBottom + 5) continue;
+    ctx.strokeStyle = TV_GRID;
     ctx.beginPath();
-    ctx.moveTo(x, yHigh);
-    ctx.lineTo(x, yLow);
+    ctx.moveTo(paddingLeft, y);
+    ctx.lineTo(priceColX, y);
+    ctx.stroke();
+    ctx.fillStyle = TV_TEXT;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(_tvFmtPrice(p), width - 6, y + 3.5);
+  }
+  ctx.setLineDash([]);
+
+  // ── Volume bars ──
+  if (maxVol > 0) {
+    const spacing = chartW / parsed.length;
+    const volBarW = spacing * 0.7;
+    const volBase = height - paddingBottom;
+    parsed.forEach((cd, i) => {
+      ctx.fillStyle = cd.c >= cd.o ? 'rgba(38, 166, 154, 0.25)' : 'rgba(239, 83, 80, 0.25)';
+      const barH = (cd.v / maxVol) * volumeH;
+      const x = paddingLeft + i * spacing + spacing / 2;
+      ctx.fillRect(x - volBarW / 2, volBase - barH, volBarW, barH);
+    });
+  }
+
+  // ── Candlesticks ──
+  const spacing = chartW / parsed.length;
+  const candleW = Math.max(spacing * 0.7, 2);
+  parsed.forEach((cd, i) => {
+    const bull = cd.c >= cd.o;
+    const color = bull ? TV_GREEN : TV_RED;
+    const x = paddingLeft + i * spacing + spacing / 2;
+
+    // Wick
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x, getY(cd.h));
+    ctx.lineTo(x, getY(cd.l));
     ctx.stroke();
 
+    // Body
+    const yO = getY(cd.o), yC = getY(cd.c);
+    const bodyH = Math.abs(yC - yO) || 1.2;
     ctx.fillStyle = color;
-    const bodyHeight = Math.abs(yClose - yOpen) || 1.5;
-    const bodyY = Math.min(yOpen, yClose);
-    ctx.fillRect(x - candleWidth / 2, bodyY, candleWidth, bodyHeight);
+    ctx.fillRect(x - candleW / 2, Math.min(yO, yC), candleW, bodyH);
   });
+
+  // ── Current price line + badge ──
+  if (parsed.length > 0) {
+    const last = parsed[parsed.length - 1];
+    const curY = getY(last.c);
+    const curColor = last.c >= last.o ? TV_GREEN : TV_RED;
+
+    // Dashed line
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = curColor;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, curY);
+    ctx.lineTo(priceColX, curY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Price badge (arrow-left shape)
+    const bW = priceColW - 4, bH = 18;
+    const bX = priceColX + 2, bY = curY - bH / 2;
+    ctx.fillStyle = curColor;
+    ctx.beginPath();
+    ctx.moveTo(bX + 5, bY);
+    ctx.lineTo(bX + bW, bY);
+    ctx.lineTo(bX + bW, bY + bH);
+    ctx.lineTo(bX + 5, bY + bH);
+    ctx.lineTo(bX, curY);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(_tvFmtPrice(last.c), bX + bW - 4, curY + 3.5);
+  }
+
+  ctx.textAlign = 'left';
+}
+
+function _tvFmtPrice(p) {
+  if (p >= 1000) return p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (p >= 1) return p.toFixed(2);
+  return p.toFixed(4);
 }
 
 function renderSignalTypeChart(byType) {

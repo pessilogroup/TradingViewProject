@@ -126,6 +126,9 @@ CREATE INDEX IF NOT EXISTS idx_indicator_signals_symbol ON indicator_signals(sym
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_name   ON indicator_signals(indicator_name);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_type   ON indicator_signals(signal_type);
 CREATE INDEX IF NOT EXISTS idx_indicator_signals_date   ON indicator_signals(created_at);
+-- Composite indexes for frequent query patterns
+CREATE INDEX IF NOT EXISTS idx_ind_sig_date_sym  ON indicator_signals(created_at, symbol);
+CREATE INDEX IF NOT EXISTS idx_ind_sig_sym_type  ON indicator_signals(symbol, signal_type);
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
