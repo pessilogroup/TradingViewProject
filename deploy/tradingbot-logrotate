@@ -1,0 +1,43 @@
+# /etc/logrotate.d/tradingbot
+#
+# Logrotate config cho TradingBot — V2 Hardened
+# Áp dụng cho: SERVER A (Gateway) và SERVER C (AI Core)
+#
+# Deploy:
+#   sudo cp tradingbot-logrotate /etc/logrotate.d/tradingbot
+#   sudo logrotate -d /etc/logrotate.d/tradingbot   # dry-run test
+#   sudo logrotate -f /etc/logrotate.d/tradingbot   # force run
+#
+# Verify: logrotate -v /etc/logrotate.d/tradingbot
+# ════════════════════════════════════════════════════════
+
+# ── Application logs (Python RotatingFileHandler writes here) ──────────────
+/var/lib/docker/volumes/*/data/logs/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    copytruncate
+    create 0644 root root
+    dateext
+    dateformat -%Y%m%d
+}
+
+# ── Docker container JSON logs (fallback nếu không dùng json-file driver) ──
+/var/lib/docker/containers/*/*-json.log {
+    daily
+    missingok
+    rotate 3
+    compress
+    delaycompress
+    notifempty
+    size 50M
+    copytruncate
+    create 0600 root root
+    postrotate
+        # Reload docker daemon log rotation (không restart container)
+        /bin/kill -USR1 $(cat /var/run/docker.pid 2>/dev/null) 2>/dev/null || true
+    endscript
+}
