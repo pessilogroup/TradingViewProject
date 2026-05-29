@@ -358,6 +358,31 @@ async def cmd_scan(update, context):
                 await context.bot.send_message(chat_id=chat_id, text="⚠️ Không scan được symbol nào. Kiểm tra MCP connection.")
                 return
 
+            # ── Save to shared cache so the website can see these results ────────
+            try:
+                import scan_cache
+                serialised = [
+                    {
+                        "symbol": r.symbol,
+                        "price": r.price,
+                        "change_pct": r.change_pct,
+                        "trend_template_score": r.trend_template.score if r.trend_template else 0,
+                        "trend_template_stage": r.trend_template.stage if r.trend_template else "-",
+                        "trend_template_criteria": r.trend_template.criteria if r.trend_template else [],
+                        "vcp_detected": r.vcp.detected if r.vcp else False,
+                        "vol_breakout": getattr(r.vcp, "vol_breakout", False) if r.vcp else False,
+                        "volume_ratio": round(r.vcp.volume_ratio, 2) if r.vcp else 0,
+                        "range_ratio": round(r.vcp.range_ratio, 2) if r.vcp else 0,
+                        "pivot_level": r.vcp.pivot_level if r.vcp else None,
+                        "vcp_note": r.vcp.note if r.vcp else None,
+                        "error": r.error,
+                    }
+                    for r in results
+                ]
+                scan_cache.save_scan_results(serialised, source="telegram", symbol_list=symbols)
+            except Exception as _ce:
+                log.warning(f"cmd_scan cache save failed (non-fatal): {_ce}")
+
             # Format results table
             lines = [f"📊 **Scan Results** ({len(results)} symbols)\n"]
             lines.append("```")
@@ -750,8 +775,258 @@ async def cmd_trades(update, context):
     )
 
 
+
+# ── /backtest menu helpers ────────────────────────────────────────────────────
+
+def _backtest_menu_keyboard():
+    """Build the InlineKeyboardMarkup for /backtest menu."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [
+            InlineKeyboardButton("📈 Equity Curve (All)",    callback_data="bt_all"),
+            InlineKeyboardButton("📊 MTT vs MIS",            callback_data="bt_mode"),
+        ],
+        [
+            InlineKeyboardButton("📋 Trade History",         callback_data="bt_history"),
+            InlineKeyboardButton("🔢 All 3 Charts",          callback_data="bt_full"),
+        ],
+        [
+            InlineKeyboardButton("₿  BTCUSDT",              callback_data="bt_sym_BTCUSDT"),
+            InlineKeyboardButton("Ξ  ETHUSDT",              callback_data="bt_sym_ETHUSDT"),
+            InlineKeyboardButton("◎ SOLUSDT",               callback_data="bt_sym_SOLUSDT"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def _run_backtest_charts(
+    send_fn,            # coroutine func(photo=buf, caption=...) — bot.send_photo wrapper
+    send_msg_fn,        # coroutine func(text=...) — bot.send_message wrapper
+    mode: str = "full", # "full" | "equity" | "mode" | "history"
+    symbol: str | None = None,
+):
+    """Shared chart executor called from both inline callback and direct command.
+
+    Args:
+        send_fn:     Async callable(photo: BytesIO, caption: str) → sends a Telegram photo
+        send_msg_fn: Async callable(text: str) → sends a plain text message
+        mode:        Which charts to render:
+                       'full'    = equity + mode comparison + history
+                       'equity'  = equity curve only
+                       'mode'    = MTT vs MIS comparison only
+                       'history' = trade history table only
+        symbol:      Optional symbol filter (e.g. 'BTCUSDT')
+    """
+    import asyncio
+    from notifier import sanitize_for_telegram_html
+    import database
+    from charting import generate_backtest_chart, generate_mode_chart, generate_history_chart
+
+    # ── Fetch all data in parallel ────────────────────────────────────────────
+    equity_data, stats_data, recent_trades = await asyncio.gather(
+        database.get_equity_curve(symbol),
+        database.get_stats_by_mode(),
+        database.get_recent_trades(limit=10, symbol=symbol),
+    )
+
+    has_equity  = len(equity_data.get("labels", [])) > 0
+    has_stats   = stats_data.get("overall", {}).get("total_trades", 0) > 0
+    has_history = len(recent_trades) > 0
+
+    if not has_equity and not has_stats and not has_history:
+        await send_msg_fn("📭 Chưa có dữ liệu giao dịch. Hệ thống đang ở DRY-RUN — chờ lệnh đầu tiên được fill.")
+        return
+
+    sym_lbl = f" [{symbol}]" if symbol else ""
+    sent = 0
+
+    # ── Chart 1: Equity Curve ─────────────────────────────────────────────────
+    if mode in ("full", "equity") and has_equity:
+        title  = f"Minervini Strategy{sym_lbl}"
+        buf    = await asyncio.to_thread(generate_backtest_chart, equity_data, title, symbol)
+        n      = len(equity_data["labels"])
+        final  = equity_data["cumulative_pnl"][-1]
+        dd_max = max(equity_data.get("drawdown_pct", [0]) or [0])
+        caption = (
+            f"📈 <b>Equity Curve{sym_lbl}</b>\n"
+            f"Trades: <b>{n}</b> | Net P&L: <b>${final:+,.2f}</b> | Max DD: <b>{dd_max:.1f}%</b>\n"
+            f"<i>3 panels: equity / drawdown / per-trade PnL</i>"
+        )
+        await send_fn(buf, sanitize_for_telegram_html(caption))
+        sent += 1
+
+    # ── Chart 2: MTT vs MIS Mode Comparison ───────────────────────────────────
+    if mode in ("full", "mode") and has_stats:
+        buf2   = await asyncio.to_thread(generate_mode_chart, stats_data)
+        mtt    = stats_data["by_mode"].get("MTT", {})
+        mis    = stats_data["by_mode"].get("MIS", {})
+        caption2 = (
+            "📊 <b>MTT vs MIS — Mode Comparison</b>\n"
+            f"[MTT] Daily: {mtt.get('total_trades',0)}T  WR={mtt.get('win_rate',0):.1f}%  P&L=${mtt.get('total_pnl',0):+,.2f}\n"
+            f"[MIS] 1H: {mis.get('total_trades',0)}T  WR={mis.get('win_rate',0):.1f}%  P&L=${mis.get('total_pnl',0):+,.2f}"
+        )
+        await send_fn(buf2, sanitize_for_telegram_html(caption2))
+        sent += 1
+    elif mode == "mode" and not has_stats:
+        await send_msg_fn("📭 Chưa có dữ liệu theo mode (chưa có lệnh FILLED).")
+
+    # ── Chart 3: Trade History Table ──────────────────────────────────────────
+    if mode in ("full", "history") and has_history:
+        hist_title = f"Trade History (Last {len(recent_trades)}){sym_lbl}"
+        buf3 = await asyncio.to_thread(generate_history_chart, recent_trades, hist_title)
+        hist_lines = []
+        for t in recent_trades[:5]:
+            pnl   = t.get("pnl") or 0
+            emoji = "✅" if pnl > 0 else "❌"
+            date  = str(t.get("created_at", ""))[:10]
+            hist_lines.append(
+                f"{emoji} <b>{t.get('symbol')}</b> [{t.get('mode','?')}] "
+                f"{str(t.get('side','')).upper()}  <b>${pnl:+,.2f}</b>  <i>{date}</i>"
+            )
+        caption3 = (
+            f"📋 <b>Lịch sử {len(recent_trades)} lệnh gần nhất{sym_lbl}</b>\n"
+            + "\n".join(hist_lines)
+            + ("\n<i>...xem bảng đầy đủ trong ảnh</i>" if len(recent_trades) > 5 else "")
+        )
+        await send_fn(buf3, sanitize_for_telegram_html(caption3))
+        sent += 1
+    elif mode == "history" and not has_history:
+        await send_msg_fn("📭 Chưa có lịch sử giao dịch.")
+
+    if sent == 0:
+        await send_msg_fn("📭 Không có dữ liệu cho lựa chọn này.")
+
+
+async def cmd_backtest(update, context):
+    """BACKTEST: /backtest — hiển thị menu chọn loại chart.
+
+    Khi gọi không có argument → hiện inline keyboard menu.
+    Khi gọi với argument (BTCUSDT, mode, ...) → chạy trực tiếp (legacy).
+    """
+    from telegram import InlineKeyboardMarkup
+    from notifier import sanitize_for_telegram_html
+
+    chat_id = update.effective_chat.id
+    args    = context.args
+
+    # ── Legacy direct call: /backtest BTCUSDT or /backtest mode ──────────────
+    if args:
+        mode_only  = args[0].lower() == "mode"
+        history_only = args[0].lower() == "history"
+        symbol_arg = args[0].upper() if not mode_only and not history_only else None
+        chart_mode = "mode" if mode_only else ("history" if history_only else "full")
+
+        await context.bot.send_message(chat_id=chat_id, text="📊 Đang tạo chart... vui lòng chờ 5-10s.")
+
+        async def _send_photo(buf, caption):
+            await context.bot.send_photo(chat_id=chat_id, photo=buf, caption=caption, parse_mode="HTML")
+
+        async def _send_msg(text):
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
+        try:
+            await _run_backtest_charts(_send_photo, _send_msg, mode=chart_mode, symbol=symbol_arg)
+        except Exception as e:
+            log.error(f"cmd_backtest direct error: {e}", exc_info=True)
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi: {e}")
+        return
+
+    # ── Interactive menu: /backtest (no args) ─────────────────────────────────
+    menu_text = (
+        "📊 <b>Backtest Dashboard</b>\n\n"
+        "Chọn loại chart bạn muốn xem:\n\n"
+        "📈 <b>Equity Curve (All)</b> — Đường vốn tổng hợp\n"
+        "📊 <b>MTT vs MIS</b> — So sánh hiệu suất theo mode\n"
+        "📋 <b>Trade History</b> — Bảng 10 lệnh gần nhất\n"
+        "🔢 <b>All 3 Charts</b> — Tất cả (3 ảnh)\n\n"
+        "₿ / Ξ / ◎ — Lọc theo symbol cụ thể"
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=sanitize_for_telegram_html(menu_text),
+        parse_mode="HTML",
+        reply_markup=_backtest_menu_keyboard(),
+    )
+
+
+
+async def cmd_stats(update, context):
+    """REQ-STATS: /stats — overall and per-mode (MTT vs MIS) performance breakdown.
+
+    Usage: /stats
+    Output: Win Rate, PnL, Profit Factor for all trades and split by strategy mode.
+    """
+
+    from notifier import sanitize_for_telegram_html
+    await update.message.reply_text("📊 Đang tải thống kê hiệu suất...")
+
+    try:
+        import database
+        result = await database.get_stats_by_mode()
+    except Exception as e:
+        log.error(f"cmd_stats error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Lỗi tải stats: {e}")
+        return
+
+    overall = result.get("overall", {})
+    by_mode = result.get("by_mode", {})
+
+    if overall.get("total_trades", 0) == 0:
+        await update.message.reply_text(
+            sanitize_for_telegram_html("📭 Chưa có dữ liệu giao dịch."),
+            parse_mode="HTML",
+        )
+        return
+
+    def _pf_str(pf):
+        return "∞" if pf == float("inf") else f"{pf:.2f}"
+
+    def _mode_block(label: str, emoji: str, stats: dict) -> str:
+        if stats.get("total_trades", 0) == 0:
+            return f"\n{emoji} <b>{label}</b>: <i>Chưa có dữ liệu</i>"
+        wr_emoji = "🟢" if stats["win_rate"] >= 50 else "🔴"
+        pnl_emoji = "🟢" if stats["total_pnl"] >= 0 else "🔴"
+        return (
+            f"\n{emoji} <b>{label}</b>\n"
+            f"   Lệnh: {stats['total_trades']} "
+            f"({stats['winning_trades']}W/{stats['losing_trades']}L)\n"
+            f"   {wr_emoji} Win Rate: <b>{stats['win_rate']:.1f}%</b>\n"
+            f"   {pnl_emoji} PnL: <b>${stats['total_pnl']:+,.2f}</b> | "
+            f"PF: <b>{_pf_str(stats['profit_factor'])}</b>"
+        )
+
+    wr_emoji_ov = "🟢" if overall["win_rate"] >= 50 else "🔴"
+    pnl_emoji_ov = "🟢" if overall["total_pnl"] >= 0 else "🔴"
+
+    lines = [
+        "📊 <b>Thống Kê Hiệu Suất</b>\n",
+        "═══ <b>TỔNG QUAN</b> ═══",
+        f"📈 Tổng lệnh: <b>{overall['total_trades']}</b> "
+        f"({overall['winning_trades']}W/{overall['losing_trades']}L)",
+        f"{wr_emoji_ov} Win Rate: <b>{overall['win_rate']:.1f}%</b>",
+        f"{pnl_emoji_ov} Tổng P&L: <b>${overall['total_pnl']:+,.2f}</b>",
+        f"⚖️ Profit Factor: <b>{_pf_str(overall['profit_factor'])}</b>",
+        f"🏆 Tốt nhất: `${overall['best_trade']:+,.2f}` | "
+        f"💔 Tệ nhất: `${overall['worst_trade']:+,.2f}`",
+        "\n═══ <b>THEO CHẾ ĐỘ</b> ═══",
+    ]
+
+    lines.append(_mode_block("MTT — Daily Trend Follower", "📅", by_mode.get("MTT", {})))
+    lines.append(_mode_block("MIS — 1H Momentum", "⚡", by_mode.get("MIS", {})))
+
+    other = by_mode.get("OTHER", {})
+    if other.get("total_trades", 0) > 0:
+        lines.append(_mode_block("OTHER — Không rõ mode", "❓", other))
+
+    await update.message.reply_text(
+        sanitize_for_telegram_html("\n".join(lines)),
+        parse_mode="HTML",
+    )
+
+
 async def cmd_report(update, context):
     """REQ8: /report [YYYY-MM-DD] — daily performance summary."""
+
     from notifier import sanitize_for_telegram_html
     date_arg = context.args[0] if context.args else None
     stats = await _data_facade.get_daily_stats(date_arg)
@@ -1478,6 +1753,53 @@ async def button_callback(update, context):
     elif data == "brief":
         await query.message.reply_text("🌅 Đang chạy Morning Brief... Vui lòng chờ 30-60s.")
         await cmd_brief_inline(query.message)
+
+    elif data.startswith("bt_"):
+        # ── /backtest inline menu callbacks ───────────────────────────────────
+        chat_id = query.message.chat_id
+
+        # Map button data → (chart_mode, symbol)
+        bt_map = {
+            "bt_all":     ("equity", None),
+            "bt_mode":    ("mode",   None),
+            "bt_history": ("history", None),
+            "bt_full":    ("full",   None),
+        }
+
+        if data in bt_map:
+            chart_mode, symbol = bt_map[data]
+        elif data.startswith("bt_sym_"):
+            symbol     = data[len("bt_sym_"):]
+            chart_mode = "full"
+        else:
+            chart_mode, symbol = "full", None
+
+        sym_lbl  = f" [{symbol}]" if symbol else ""
+        mode_lbl = {
+            "equity":  "📈 Equity Curve",
+            "mode":    "📊 MTT vs MIS",
+            "history": "📋 Trade History",
+            "full":    "🔢 All 3 Charts",
+        }.get(chart_mode, "📊 Chart")
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"{mode_lbl}{sym_lbl} — đang tạo chart... vui lòng chờ 5-10s.",
+        )
+
+        async def _send_photo_cb(buf, caption):
+            await context.bot.send_photo(
+                chat_id=chat_id, photo=buf, caption=caption, parse_mode="HTML"
+            )
+
+        async def _send_msg_cb(text):
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
+        try:
+            await _run_backtest_charts(_send_photo_cb, _send_msg_cb, mode=chart_mode, symbol=symbol)
+        except Exception as e:
+            log.error(f"bt_ callback error: {e}", exc_info=True)
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi: {e}")
 
     elif data.startswith("scanmtf_"):
         await cmd_scan_mtf(update, context)
@@ -2588,7 +2910,10 @@ def start_bot():
             app.add_handler(CommandHandler("positions", cmd_positions))
             app.add_handler(CommandHandler("rag",       cmd_rag))
             app.add_handler(CommandHandler("trades",    cmd_trades))
+            app.add_handler(CommandHandler("stats",     cmd_stats))      # Phase 3: mode breakdown
+            app.add_handler(CommandHandler("backtest",  cmd_backtest))   # Phase 3: visual chart
             app.add_handler(CommandHandler("report",    cmd_report))
+
             # ── P10: Dashboard auth commands ─────────────────────────────
             app.add_handler(CommandHandler("login",     cmd_login))
             app.add_handler(CommandHandler("logout",    cmd_logout))

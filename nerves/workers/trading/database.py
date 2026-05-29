@@ -203,11 +203,15 @@ from data.persistence_store import (  # noqa: E402, F401
 from data.query_service import (  # noqa: E402, F401
     get_trades,
     get_stats,
+    get_stats_by_mode,
+    get_recent_trades,
     get_equity_curve,
     get_briefs,
     get_brief_by_id,
     get_db_counts,
 )
+
+
 
 
 # ═══════════════════════════════════════════════════════════════

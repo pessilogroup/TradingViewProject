@@ -1,7 +1,8 @@
 import aiosqlite
 import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
 
 import config
 
@@ -130,6 +131,145 @@ async def get_stats(symbol: Optional[str] = None) -> Dict[str, Any]:
             "best_trade": round(max(pnl_list), 2),
             "worst_trade": round(min(pnl_list), 2),
         }
+
+
+def _build_mode_stats(pnl_list: list) -> Dict[str, Any]:
+    """Compute performance metrics for a given list of PnL values."""
+    if not pnl_list:
+        return {
+            "total_trades": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "win_rate": 0.0,
+            "total_pnl": 0.0,
+            "profit_factor": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "best_trade": 0.0,
+            "worst_trade": 0.0,
+        }
+
+    wins   = [p for p in pnl_list if p > 0]
+    losses = [p for p in pnl_list if p <= 0]
+    total_win  = sum(wins)   if wins   else 0.0
+    total_loss = abs(sum(losses)) if losses else 0.0
+
+    return {
+        "total_trades":   len(pnl_list),
+        "winning_trades": len(wins),
+        "losing_trades":  len(losses),
+        "win_rate":       round(len(wins) / len(pnl_list) * 100, 1),
+        "total_pnl":      round(sum(pnl_list), 2),
+        "profit_factor":  round(total_win / total_loss, 2) if total_loss > 0 else float("inf"),
+        "avg_win":        round(total_win / len(wins), 2) if wins else 0.0,
+        "avg_loss":       round(-total_loss / len(losses), 2) if losses else 0.0,
+        "best_trade":     round(max(pnl_list), 2),
+        "worst_trade":    round(min(pnl_list), 2),
+    }
+
+
+async def get_stats_by_mode() -> Dict[str, Any]:
+    """Performance metrics grouped by strategy mode (MTT vs MIS).
+
+    JOINs trades → signals to access the signals.mode column (added Phase 2).
+    Returns:
+        {
+            "overall":  { ...metrics... },     # All FILLED trades regardless of mode
+            "by_mode": {
+                "MTT":   { ...metrics... },    # Daily Trend Follower signals
+                "MIS":   { ...metrics... },    # 1H Momentum/Mean Reversion signals
+                "OTHER": { ...metrics... },    # Empty or unknown mode
+            }
+        }
+    """
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await db.execute_fetchall(
+            """
+            SELECT t.pnl,
+                   CASE
+                     WHEN s.mode IS NULL OR TRIM(s.mode) = '' THEN 'OTHER'
+                     ELSE UPPER(TRIM(s.mode))
+                   END AS mode
+            FROM trades t
+            LEFT JOIN signals s ON s.id = t.signal_id
+            WHERE t.status = 'FILLED'
+              AND t.pnl IS NOT NULL
+            """,
+        )
+
+    all_rows = [(float(r["pnl"]), r["mode"]) for r in rows]
+
+    # Overall bucket
+    all_pnl = [pnl for pnl, _ in all_rows]
+    overall = _build_mode_stats(all_pnl)
+
+    # Per-mode buckets
+    mode_map: Dict[str, list] = {}
+    for pnl, mode in all_rows:
+        mode_map.setdefault(mode, []).append(pnl)
+
+    by_mode: Dict[str, Any] = {}
+    for mode_key in sorted(mode_map.keys()):
+        by_mode[mode_key] = _build_mode_stats(mode_map[mode_key])
+
+    # Ensure MTT, MIS, OTHER keys always exist (even with zero data)
+    for sentinel in ("MTT", "MIS", "OTHER"):
+        if sentinel not in by_mode:
+            by_mode[sentinel] = _build_mode_stats([])
+
+    return {"overall": overall, "by_mode": by_mode}
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# QUERY — RECENT TRADE HISTORY (for /backtest history panel)
+# ═══════════════════════════════════════════════════════════════
+
+async def get_recent_trades(
+    limit: int = 10,
+    symbol: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return the last N FILLED trades with signal mode for the /backtest history panel.
+
+    Columns returned per trade:
+        id, created_at, symbol, side, mode, executed_price,
+        stop_loss_price, take_profit_price, pnl, status, exchange
+    """
+    conditions = ["t.status = 'FILLED'", "t.pnl IS NOT NULL"]
+    params: list = []
+    if symbol:
+        conditions.append("t.symbol = ?")
+        params.append(symbol.upper())
+
+    where = f"WHERE {' AND '.join(conditions)}"
+    params.append(limit)
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await db.execute_fetchall(
+            f"""
+            SELECT t.id,
+                   t.created_at,
+                   t.symbol,
+                   t.side,
+                   COALESCE(NULLIF(TRIM(s.mode), ''), 'OTHER') AS mode,
+                   t.executed_price,
+                   t.stop_loss_price,
+                   t.take_profit_price,
+                   t.pnl,
+                   t.status,
+                   t.exchange
+            FROM trades t
+            LEFT JOIN signals s ON s.id = t.signal_id
+            {where}
+            ORDER BY t.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+    return [dict(r) for r in rows]
+
 
 # ═══════════════════════════════════════════════════════════════
 # QUERY — EQUITY CURVE
