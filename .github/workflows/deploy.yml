@@ -88,7 +88,7 @@ jobs:
         id: deploy_a
         run: |
           echo "🚀 Deploying Server A..."
-          ssh root@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
+          ssh botuser@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             # Lưu commit SHA cũ phòng trường hợp rollback
@@ -117,7 +117,7 @@ jobs:
         if: failure() && steps.deploy_a.outcome == 'failure'
         run: |
           echo "⚠️ Server A deployment failed! Initiating rollback..."
-          ssh root@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
+          ssh botuser@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)
@@ -136,7 +136,7 @@ jobs:
         id: deploy_c
         run: |
           echo "🚀 Deploying Server C..."
-          ssh root@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
+          ssh botuser@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
             git rev-parse HEAD > .rollback_sha
@@ -164,7 +164,7 @@ jobs:
         if: failure() && steps.deploy_c.outcome == 'failure'
         run: |
           echo "⚠️ Server C deployment failed! Initiating rollback..."
-          ssh root@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
+          ssh botuser@${{ secrets.SERVER_C_IP }} 'bash -s' << 'EOF'
             cd /opt/trading-bot
             if [ -f .rollback_sha ]; then
               ROLLBACK_SHA=$(cat .rollback_sha)

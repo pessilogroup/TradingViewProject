@@ -374,3 +374,25 @@ Integrity mode: development
 ### Documentation Correctness
 - [ ] `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` contains complete, non-placeholder tables for BTC, ETH, and SOL.
 - [ ] `docs/reports/STRATEGY_GENEALOGY.md` has updated performance comparison tables for all three assets.
+
+## Follow-up — 2026-05-29T20:15:55Z
+
+Fix the deployment failure on Server A (Linux Gateway) in the CI/CD production pipeline action run.
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Diagnose and Fix Deploy Server A Error
+Diagnose the root cause of the failure during the "Deploy Server A (Gateway)" step in the GitHub Actions workflow and implement the necessary fixes to ensure the server starts and passes its health checks.
+
+### R2. Verify Local Setup and CI/CD Script Parity
+Ensure deployment files (e.g., docker-compose.server-a.yml, deploy.sh, and related scripts) are updated and consistent so that subsequent deployments pass successfully.
+
+## Acceptance Criteria
+
+### CI/CD Deployment Health
+- [ ] The deployment script / compose config is corrected such that the Gateway (Server A) starts successfully.
+- [ ] Gateway health check `curl -sf http://localhost:5000/health` or equivalent is healthy.
+- [ ] No regression introduced to other deployments (Server B/C).
