@@ -32,6 +32,9 @@ jobs:
           pip install -r server/requirements.txt
           pip install -r server/requirements-test.txt
 
+      - name: Install Playwright Chromium Browser
+        run: python -m playwright install chromium
+
       - name: Code Linting (Ruff)
         run: |
           pip install ruff
