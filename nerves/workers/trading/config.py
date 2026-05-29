@@ -198,6 +198,15 @@ DASHBOARD_URL = os.getenv("DASHBOARD_URL", f"http://localhost:{PORT}")
 # Enable Telegram Login Widget (alternative to /login bot command)
 TELEGRAM_LOGIN_WIDGET = os.getenv("TELEGRAM_LOGIN_WIDGET", "false").lower() == "true"
 
+# ── VPS Buffer Consumer (Phase VBS) ───────────────────
+VPS_BUFFER_ENABLED       = os.getenv("VPS_BUFFER_ENABLED", "false").lower() == "true"
+VPS_BUFFER_URL           = os.getenv("VPS_BUFFER_URL", "").rstrip("/")
+VPS_BUFFER_SECRET        = os.getenv("VPS_BUFFER_SECRET", "")
+VPS_CONSUMER_ID          = os.getenv("VPS_CONSUMER_ID", "local-01")
+VPS_POLL_INTERVAL_SECONDS= int(os.getenv("VPS_POLL_INTERVAL_SECONDS", "30"))
+VPS_STARTUP_PULL_LIMIT   = int(os.getenv("VPS_STARTUP_PULL_LIMIT", "50"))
+MAX_SIGNAL_AGE_MINUTES   = int(os.getenv("MAX_SIGNAL_AGE_MINUTES", "240"))
+
 # Server start time (for uptime calculation)
 import time as _time
 SERVER_START_TIME = _time.time()

@@ -19,17 +19,18 @@ async def insert_signal(
     source_ip: Optional[str] = None,
     payload: Optional[Dict] = None,
     mode: Optional[str] = None,
+    vbs_queue_id: Optional[int] = None,
 ) -> int:
     """Luu tin hieu moi tu TradingView, tra ve signal_id."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cursor = await db.execute(
-            """INSERT INTO signals (symbol, action, price, quote_qty, source_ip, payload, mode)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, action, price, quote_qty, source_ip, json.dumps(payload) if payload else None, mode),
+            """INSERT INTO signals (symbol, action, price, quote_qty, source_ip, payload, mode, vbs_queue_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, action, price, quote_qty, source_ip, json.dumps(payload) if payload else None, mode, vbs_queue_id),
         )
         await db.commit()
         signal_id = cursor.lastrowid
-        log.info(f"Signal #{signal_id} saved: {action} {symbol}" + (f" [{mode}]" if mode else ""))
+        log.info(f"Signal #{signal_id} saved: {action} {symbol}" + (f" [{mode}]" if mode else "") + (f" (vbs_queue_id={vbs_queue_id})" if vbs_queue_id else ""))
         return signal_id
 
 async def update_signal_status(signal_id: int, processed: int):
@@ -91,22 +92,33 @@ async def insert_trade(
     pnl: Optional[float] = None,
     combined_score: Optional[str] = None,
     exchange: str = "binance",
+    vbs_queue_id: Optional[int] = None,
 ) -> int:
     """Luu ket qua giao dich Binance/Bybit."""
     async with aiosqlite.connect(config.DB_PATH) as db:
+        # Auto-resolve vbs_queue_id from signals if not provided
+        if vbs_queue_id is None:
+            try:
+                async with db.execute("SELECT vbs_queue_id FROM signals WHERE id = ?", (signal_id,)) as cur:
+                    row = await cur.fetchone()
+                    if row:
+                        vbs_queue_id = row[0]
+            except Exception as e:
+                log.warning(f"Failed to auto-resolve vbs_queue_id for signal #{signal_id}: {e}")
+
         cursor = await db.execute(
             """INSERT INTO trades
                (signal_id, symbol, side, order_id, status,
                 requested_qty, executed_qty, executed_price,
-                commission, error_message, pnl, combined_score, exchange)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                commission, error_message, pnl, combined_score, exchange, vbs_queue_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (signal_id, symbol, side, order_id, status,
              requested_qty, executed_qty, executed_price,
-             commission, error_message, pnl, combined_score, exchange),
+             commission, error_message, pnl, combined_score, exchange, vbs_queue_id),
         )
         await db.commit()
         trade_id = cursor.lastrowid
-        log.info(f"Trade #{trade_id} saved: {side} {symbol} on {exchange} (signal #{signal_id})")
+        log.info(f"Trade #{trade_id} saved: {side} {symbol} on {exchange} (signal #{signal_id}, vbs_queue_id={vbs_queue_id})")
         return trade_id
 
 async def update_trade_oco(
