@@ -17,10 +17,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Check for code changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - 'nerves/workers/trading/**'
+              - 'Dockerfile'
+              - 'pine/**'
+              - '.github/workflows/**'
+
       - name: Create server symlink
+        if: steps.filter.outputs.code == 'true'
         run: ln -s nerves/workers/trading server
 
       - name: Set up Python 3.11
+        if: steps.filter.outputs.code == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -30,12 +43,14 @@ jobs:
             nerves/workers/trading/requirements-test.txt
 
       - name: Install Dependencies
+        if: steps.filter.outputs.code == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r server/requirements.txt
           pip install -r server/requirements-test.txt
 
       - name: Cache Playwright browsers
+        if: steps.filter.outputs.code == 'true'
         id: playwright-cache
         uses: actions/cache@v4
         with:
@@ -45,18 +60,21 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium Browser
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        if: steps.filter.outputs.code == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: Code Linting (Ruff)
+        if: steps.filter.outputs.code == 'true'
         run: ruff check server/ --exit-zero
 
       - name: Security AST Scan
+        if: steps.filter.outputs.code == 'true'
         run: |
           cd server
           python -m security.cli scan || echo "Warning: Review security scan report"
 
       - name: Run Test Suite (520+ Tests)
+        if: steps.filter.outputs.code == 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
