@@ -48,7 +48,9 @@ def _validate_secret(request: Request) -> None:
         raise HTTPException(status_code=500, detail="SERVER_B_SECRET not configured")
 
     provided = request.headers.get("X-Server-B-Secret", "")
-    if not hmac.compare_digest(provided.encode(), expected.encode()):
+    # Decoded by ASGI servers like uvicorn using latin-1. We encode it back to
+    # latin-1 to retrieve original bytes, then compare against UTF-8 expected secret.
+    if not hmac.compare_digest(provided.encode("latin-1"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
