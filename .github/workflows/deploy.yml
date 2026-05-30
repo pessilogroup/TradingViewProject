@@ -163,7 +163,7 @@ jobs:
     if: |
       always() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
-      needs.changes.outputs.deploy == 'true' &&
+      (needs.changes.outputs.deploy == 'true' || contains(github.event.head_commit.message, '[force deploy]')) &&
       (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
       (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
@@ -274,7 +274,7 @@ jobs:
     if: |
       always() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
-      needs.changes.outputs.deploy == 'true' &&
+      (needs.changes.outputs.deploy == 'true' || contains(github.event.head_commit.message, '[force deploy]')) &&
       (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
       (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
@@ -394,7 +394,7 @@ jobs:
     if: |
       always() &&
       github.ref == 'refs/heads/main' && github.event_name == 'push' &&
-      needs.changes.outputs.deploy == 'true' &&
+      (needs.changes.outputs.deploy == 'true' || contains(github.event.head_commit.message, '[force deploy]')) &&
       (needs.ci-lint-security.result == 'success' || needs.ci-lint-security.result == 'skipped') &&
       (needs.ci-tests.result == 'success' || needs.ci-tests.result == 'skipped')
     runs-on: ubuntu-latest
