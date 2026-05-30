@@ -17,6 +17,9 @@ import subprocess
 # ── Force UTF-8 output BEFORE any imports that might log with emoji ──────────
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1"
+# Force Hugging Face offline mode to load local models instantly (0.1s instead of 3.5m)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "buffer"):

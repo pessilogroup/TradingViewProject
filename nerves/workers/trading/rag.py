@@ -156,7 +156,7 @@ async def init_vector_db() -> bool:
         log.error("RAG unavailable: chromadb not installed.")
         return False
 
-    # ── Remote ChromaDB (Phase 4: 3-Server Pipeline) ─────────────────────
+    # ── Remote / Local DB client setup ───────────────────────────────────
     if getattr(config, "CHROMA_REMOTE", False):
         import chromadb
         _chroma_client = chromadb.HttpClient(
@@ -173,9 +173,20 @@ async def init_vector_db() -> bool:
             f"RAG: Connected to remote ChromaDB at "
             f"{config.CHROMA_SERVER_HOST}:{config.CHROMA_SERVER_PORT}"
         )
-        return True
+    else:
+        # Khởi tạo ChromaDB local (lưu persistent vào disk)
+        chroma_db_path = Path(config.CHROMA_DB_PATH)
+        chroma_db_path.mkdir(parents=True, exist_ok=True)
 
-    # ── Local PersistentClient (default) ─────────────────────────────────
+        import chromadb
+        _chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
+        ef = _get_embedding_function()
+        _collection = _chroma_client.get_or_create_collection(
+            name="minervini_knowledge",
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+
     knowledge_dir = Path(config.KNOWLEDGE_DIR)
     if not knowledge_dir.exists():
         log.error(f"RAG: Knowledge dir not found: {knowledge_dir}")
@@ -185,20 +196,6 @@ async def init_vector_db() -> bool:
     if not chunk_files:
         log.warning(f"RAG: No chunk files found in {knowledge_dir}")
         return False
-
-    # Khởi tạo ChromaDB (lưu persistent vào disk)
-    chroma_db_path = Path(config.CHROMA_DB_PATH)
-    chroma_db_path.mkdir(parents=True, exist_ok=True)
-
-    import chromadb
-    _chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
-    ef = _get_embedding_function()
-
-    _collection = _chroma_client.get_or_create_collection(
-        name="minervini_knowledge",
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
 
     # Kiểm tra xem đã embed chưa (tránh re-embed mỗi lần restart)
     existing_count = _collection.count()

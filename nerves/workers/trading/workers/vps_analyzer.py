@@ -33,6 +33,8 @@ import rag
 # V2: Import Circuit Breaker singleton
 # The module lives in server/workers/ alongside this file.
 from workers.ai_circuit_breaker import llm_breaker  # noqa: E402
+from logging_config import setup_logging
+
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +154,12 @@ class VpsAnalyzerWorker:
             f"long_poll_timeout={self.LONG_POLL_TIMEOUT}s, "
             f"circuit_threshold={llm_breaker.failure_threshold})"
         )
+
+        # Initialize vector database
+        try:
+            await rag.init_vector_db()
+        except Exception as exc:
+            log.error(f"[VpsAnalyzer] Failed to initialize RAG vector database: {exc}")
 
         # Wire up circuit-breaker Telegram alerts once notifier is importable
         try:
@@ -662,5 +670,7 @@ class VpsAnalyzerWorker:
 
 
 if __name__ == "__main__":
+    setup_logging()
     worker = VpsAnalyzerWorker()
     asyncio.run(worker.run())
+

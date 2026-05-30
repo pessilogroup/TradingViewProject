@@ -27,8 +27,10 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
+    """Initialize database and exchange registry on startup."""
     await database.init_db()
+    from exchanges.registry import init_registry
+    init_registry()
     log.info("Execution Server started. Listening for trade commands.")
     yield
     log.info("Execution Server shutting down.")

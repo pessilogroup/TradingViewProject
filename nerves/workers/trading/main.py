@@ -1,3 +1,8 @@
+import os
+# Force Hugging Face offline mode to load local models instantly (0.1s instead of 3.5m)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 import logging
 import sys
 import io
@@ -108,6 +113,7 @@ if not _is_pytest and sys.stderr and hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Setup logging — StreamHandler explicitly UTF-8 to avoid cp1252 crash on Windows
+Path(config.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
 _stream_handler = logging.StreamHandler(sys.stdout)
 _stream_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s"))
 
