@@ -503,6 +503,27 @@ async def mcp_status():
     return {"enabled": True, **health}
 
 
+# ═══ TELEGRAM TEMPLATE CONFIG ═════════════════════════════════
+@app.get("/api/telegram/templates")
+async def get_telegram_templates():
+    """Retrieve the current custom Telegram message templates."""
+    from utils.telegram_templates import load_templates
+    return load_templates()
+
+@app.post("/api/telegram/templates")
+async def update_telegram_templates(body: dict = Body(...)):
+    """Save custom Telegram message templates after validating syntax."""
+    from utils.telegram_templates import save_templates
+    try:
+        save_templates(body)
+        return {"status": "success", "message": "Telegram templates updated successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Failed to update telegram templates: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error saving templates.")
+
+
 # ── VPS Buffer Queue Status ───────────────────────────────────
 @app.get("/api/queue-status")
 async def get_queue_status():

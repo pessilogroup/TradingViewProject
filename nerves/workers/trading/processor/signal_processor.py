@@ -69,12 +69,13 @@ def _is_indicator_duplicate(symbol: str, indicator_name: str, signal_type: str) 
 # TIMEFRAME VALIDATION (Circuit Breaker)
 # ═══════════════════════════════════════════════════════════════
 
-VALID_TRADE_INTERVALS = {"60", "1h", "60m"}
+VALID_TRADE_INTERVALS = {"5", "5m", "15", "15m", "30", "30m", "60", "1h", "60m"}
 
 
 def _is_valid_trade_interval(interval: str) -> bool:
-    """MIS v1 strategy only allows 1H timeframe for live trading."""
+    """A.007 v2.1: accepts 5m/15m/30m/1H timeframes for adaptive EMA strategy."""
     return interval.strip().lower() in VALID_TRADE_INTERVALS
+
 
 
 # ═══════════════════════════════════════════════════════════════

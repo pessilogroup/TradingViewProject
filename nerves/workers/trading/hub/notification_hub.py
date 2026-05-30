@@ -232,16 +232,73 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
         )
         PENDING_TRADES[event.signal_id] = event
 
-        msg = (
-            f"⚠️ **CẦN DUYỆT LỆNH (Interactive Gate)**\n"
-            f"- Sàn: `{exchange.upper()}`\n"
-            f"- Mã: `{event.symbol}`\n"
-            f"- Hành động: `{event.action.upper()}`\n"
-            f"- Giá: `{event.price or 'Market'}`\n"
-            f"- Điểm AI: `{confidence}/10`\n"
-            f"- SL: `{event.sl or 'N/A'}` | TP: `{event.tp or 'N/A'}`\n"
-            f"- Score: `{event.combined_score or 'N/A'}`\n\n"
-            f"🧠 **Khuyến nghị AI:**\n{event.analysis_text[:800]}"
+        from utils.telegram_templates import render_template
+        
+        symbol_val = event.symbol
+        action_val = event.action.upper()
+        price_val = f"{event.price:,.2f}" if event.price and isinstance(event.price, (int, float)) else (event.price or "Market")
+        
+        # Get VCP & Trend Template details from vision_result if available
+        vcp_status = "N/A"
+        tt_score = "N/A"
+        stage_val = "N/A"
+        volume_ratio = "N/A"
+        timeframe = "1D"
+        
+        if event.vision_result:
+            vr = event.vision_result.get("vision_data") or event.vision_result
+            if isinstance(vr, str):
+                try:
+                    import json
+                    vr = json.loads(vr)
+                except Exception:
+                    vr = {}
+            if isinstance(vr, dict):
+                vcp_status = "Đã xác nhận" if vr.get("vcp_detected") else "Không xác định"
+                tt_score = str(vr.get("trend_template_score", "N/A"))
+                stage_val = vr.get("trend_template_stage") or ("Stage 2" if tt_score == "8" else "Stage 1")
+                volume_ratio = f"{vr.get('volume_ratio', 'N/A')}"
+                timeframe = vr.get("timeframe") or vr.get("interval") or "1D"
+                
+        # Default/Fallback parsing from combined_score if N/A
+        if tt_score == "N/A" and event.combined_score:
+            if "/" in event.combined_score:
+                parts = event.combined_score.split("/")
+                tt_score = parts[0].strip().split()[-1]
+                stage_val = "Stage 2" if tt_score == "8" else "Stage 1"
+        
+        # Risk Management (SL/TP)
+        sl_val = event.sl or "N/A"
+        tp_val = event.tp or "N/A"
+        sl_pct = "N/A"
+        tp_pct = "N/A"
+        try:
+            if event.price and isinstance(event.price, (int, float)):
+                if event.sl and float(event.sl) > 0:
+                    sl_pct = f"{((float(event.sl) - event.price) / event.price) * 100:+.1f}"
+                if event.tp and float(event.tp) > 0:
+                    tp_pct = f"{((float(event.tp) - event.price) / event.price) * 100:+.1f}"
+        except Exception:
+            pass
+
+        ai_advice = event.analysis_text[:800]
+        
+        msg = render_template(
+            "A",
+            symbol=symbol_val,
+            action=action_val,
+            price=price_val,
+            timeframe=timeframe,
+            tt_score=tt_score,
+            stage=stage_val,
+            vcp_status=vcp_status,
+            volume_ratio=volume_ratio,
+            ai_provider="Claude RAG",
+            ai_advice=ai_advice,
+            stop_loss=sl_val,
+            sl_pct=sl_pct,
+            take_profit=tp_val,
+            tp_pct=tp_pct
         )
 
         try:
