@@ -1,23 +1,26 @@
 # Research: MIS & MTT Pine Script Indicators
 
-> Generated: 2026-05-29  
+> Generated: 2026-05-30 (Updated v3)
 > Source files: `pine/v2/a007_mis_webhook.pine`, `pine/v1/indicator_MTT_v1.001.pine`
 
 ---
 
-## 1. MIS — "A.007 + MIS Combined" (1H Momentum)
+## 1. MIS — "MIS(A7-01B.V3) Webhook" (Multi-Timeframe Momentum)
 
 ### Pine Source: `pine/v2/a007_mis_webhook.pine`
 
-**Strategy Type:** Overlay indicator + webhook alert dispatcher  
-**Timeframe:** 1H (enforced by signal_processor.py)
+**Type:** Pure indicator (not strategy) — Pine v6
+**Timeframe:** Adaptive — works on 1m/3m/5m/15m/30m/1H/4H
 
 ### Indicators Computed
-| Indicator | Period | Pine Code |
-|-----------|--------|-----------|
-| Fast EMA  | 20     | `ta.ema(close, 20)` |
-| Slow EMA  | 50     | `ta.ema(close, 50)` |
-| ATR       | 14     | `ta.atr(14)` |
+| Indicator | Period | Notes |
+|-----------|--------|-------|
+| Fast EMA  | Adaptive | 5m=5, 15m=8, 30m=12, 1H=20 |
+| Slow EMA  | Adaptive | 5m=13, 15m=21, 30m=34, 1H=50 |
+| ATR       | 14     | Used for SL/TP calculation |
+| RSI       | 14     | Displayed in status table |
+| Daily EMA 20/50 | MTF | via `request.security("D")` |
+| 1H EMA 20/50    | MTF | via `request.security("60")` |
 
 ### Signal Conditions
 ```pine
@@ -28,12 +31,34 @@ longExitCondition  = ta.crossunder(close, fastEMA) and barstate.isconfirmed
 shortExitCondition = ta.crossover(close, fastEMA)  and barstate.isconfirmed
 ```
 
-### Webhook Payload Fields
+### SL/TP Auto-Draw
+```pine
+SL = entry_price +/- ATR * atrSlMul  (default 2.0, configurable)
+TP = entry_price +/- ATR * atrTpMul  (default 4.0, configurable)
+```
+Lines drawn as dashed red (SL) and green (TP), cleared on exit.
+
+### Visual Toggles (all in Settings)
+| Toggle | Default | Description |
+|--------|---------|-------------|
+| EMA Ribbon | ON | Fast/Slow EMA + fill |
+| MTF Daily | ON | Daily EMA 20/50 (purple stepline) |
+| MTF 1H | ON | 1H EMA 20/50 (cyan stepline) |
+| SL/TP Lines | ON | Auto SL/TP on entry |
+| Entry/Exit Markers | ON | L/S labels + x-cross |
+| Status Table | ON | Top-right info panel |
+| Background Flash | OFF | Bg color on entry |
+
+### Alert System (Dual)
+1. **Auto webhook**: `alert()` sends JSON payload on every signal
+2. **Manual alertcondition**: 4 conditions available in TradingView Alert UI
+
+### Webhook Payload Fields (v3)
 ```json
 {
   "secret": "<WEBHOOK_SECRET>",
   "source": "indicator",
-  "indicator_name": "A.007 + MIS Combined",
+  "indicator_name": "MIS(A7-01B.V3)",
   "symbol": "<ticker>",
   "signal_type": "entry" | "exit",
   "action": "buy" | "sell",
@@ -43,15 +68,17 @@ shortExitCondition = ta.crossover(close, fastEMA)  and barstate.isconfirmed
   "confidence_score": 85,
   "metadata": {
     "direction": "long" | "short",
-    "atr_value": "<atr>"
+    "atr_value": "<atr>",
+    "sl": "<stop_loss_price>",
+    "tp": "<take_profit_price>"
   }
 }
 ```
 
-### JS Replication Status: ✅ IMPLEMENTED
-- `_calcMISSignals(times, closes)` in `dashboard-features.js`
-- Uses EMA(20) crossover EMA(50) — matches Pine logic exactly
-- Markers shown as orange arrows `[MIS]` on LightweightCharts
+### JS Replication Status: PARTIAL
+- `_calcMISSignals(times, closes)` in `dashboard-features.js` uses EMA(20)/EMA(50)
+- Needs update to match adaptive periods per timeframe
+- MTF lines cannot be replicated client-side (no Daily data on Binance WS)
 
 ---
 
@@ -59,8 +86,8 @@ shortExitCondition = ta.crossover(close, fastEMA)  and barstate.isconfirmed
 
 ### Pine Source: `pine/v1/indicator_MTT_v1.001.pine`
 
-**Strategy Type:** Trend quality filter — NOT a signal generator  
-**Timeframe:** Daily (designed for D timeframe)  
+**Strategy Type:** Trend quality filter — NOT a signal generator
+**Timeframe:** Daily (designed for D timeframe)
 **Purpose:** Identifies stocks/assets in a strong uptrend using Mark Minervini's 8-condition Trend Template
 
 ### Indicators Computed
@@ -87,52 +114,42 @@ cond8 = stock_perf > bench_perf                     -- Outperforming benchmark
 trend_template_met = cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7 and cond8
 ```
 
-### VCP / Volume Dry-Up Detection
-```pine
-vol_sma    = ta.sma(volume, 50)
-vol_dry_up = volume < (vol_sma * 0.5)          -- Volume < 50% of avg
-tight_range = (high - low) < (atr * 0.5)       -- Tight candle range
-vcp_signal = vol_dry_up and tight_range         -- VCP setup signal
-```
-
 ### Regime Badge (Simplified for JS)
 MTT uses SMA50/150/200 stack for regime detection:
 ```
 TREND = price > SMA50 > SMA150 > SMA200  (bull stack)
 CHOP  = anything else (bear/neutral stack)
 ```
-**Implemented in:** `_csSetRegimeBadge(closes)` — shows `📈 TREND` or `⚡ CHOP` badge
-
-### Why MTT Cannot Be Fully Replicated Client-Side
-MTT **condition 8** requires:
-```pine
-bench_close = request.security(benchmark_ticker, timeframe.period, close)
-stock_perf  = (close - close[125]) / close[125]
-bench_perf  = (bench_close - bench_close[125]) / bench_close[125]
-```
-This calls `request.security()` to pull VNINDEX/SPY/BTCUSD data — **only available inside TradingView Pine Script**. 
-A browser JS client would need a separate VNINDEX API call (not available on Binance), making full replication infeasible.
 
 ---
 
-## 3. Data Flow
+## 3. Data Flow (v3)
 
 ```
-TradingView Alert
-    ↓
+TradingView indicator MIS(A7-01B.V3)
+    |
+    |-- alert() [auto webhook]
+    |-- alertcondition() [manual alerts]
+    |
+    v
 POST /webhook  (gateway/webhook.py)
-    ↓ validate secret, symbol, indicator_name
+    | validate secret, symbol, indicator_name
+    v
 IndicatorSignalReceived event
-    ↓
+    |
+    v
 signal_processor.py
-    - MIS: accepted only on 1H interval
-    - MTT: blocked when regime = CHOP
-    ↓
+    - Accepts: 5m/15m/30m/1H intervals
+    - Rejects: CHOP regime for Daily MTT
+    |
+    v
 indicator_signals table (DB)
-    ↓
-GET /api/chart-markers  (NEW endpoint in main.py)
-    ↓
-LightweightCharts setMarkers()  [teal=MTT, orange=MIS]
+    |
+    v
+GET /api/chart-markers + GET /api/indicator-signals
+    |
+    v
+Dashboard: LightweightCharts markers + Signals tab
 ```
 
 ---
@@ -152,5 +169,15 @@ LightweightCharts setMarkers()  [teal=MTT, orange=MIS]
 |--------|------|-------|
 | signal_type | TEXT | `"entry"` or `"exit"` |
 | confidence_score | INT | 0-100 |
-| metadata | TEXT | JSON with `direction`, `atr_value` |
-| interval | TEXT | `"60"` for 1H |
+| metadata | TEXT | JSON with `direction`, `atr_value`, `sl`, `tp` |
+| interval | TEXT | `"5"`, `"15"`, `"30"`, `"60"` |
+
+---
+
+## 5. Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| v1.0 | 2026-05 | Original EMA 20/50 strategy, 1H only |
+| v2.1 | 2026-05-30 | Adaptive EMA, compact visual, strategy |
+| **v3.0** | **2026-05-30** | **Pine v6, indicator(), MTF Daily+1H EMA, SL/TP lines, dual alerts, all toggleable** |
