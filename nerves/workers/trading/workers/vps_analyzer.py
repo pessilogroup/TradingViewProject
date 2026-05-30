@@ -737,6 +737,7 @@ class VpsAnalyzerWorker:
 
 if __name__ == "__main__":
     setup_logging()
+    # Trigger deployment and check Server C clean state
     worker = VpsAnalyzerWorker()
     asyncio.run(worker.run())
 
