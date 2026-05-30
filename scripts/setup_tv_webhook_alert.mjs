@@ -9,7 +9,7 @@
  *   node scripts/setup_tv_webhook_alert.mjs --symbol BTCUSDT --list-only
  */
 
-import CDP from './tradingview-mcp/node_modules/chrome-remote-interface/index.js';
+import CDP from '../tradingview-mcp/node_modules/chrome-remote-interface/index.js';
 
 const CDP_PORT = 9222;
 const CDP_HOST = '127.0.0.1';
