@@ -99,7 +99,8 @@ def run_ssh_command(ip, user, key_path, cmd):
     ssh_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
     if key_path:
         ssh_cmd += ["-i", key_path]
-    ssh_cmd += [f"{user}@{ip}", f"bash --noprofile --norc -c '{cmd}'"]
+    escaped_cmd = cmd.replace("'", "'\\''")
+    ssh_cmd += [f"{user}@{ip}", f"bash --noprofile --norc -c '{escaped_cmd}'"]
     
     try:
         res = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
@@ -479,10 +480,10 @@ def main():
         
         # 14. BUFFER_SECRET
         print("Running Check 11.1.14 (BUFFER_SECRET)...")
-        code, out, err = conn_a.run('grep -E "^BUFFER_SECRET=" /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null')
+        code, out, err = conn_a.run('grep -E "^BUFFER_SECRET=|^VPS_BUFFER_SECRET=" /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null')
         p = False
         msg = "BUFFER_SECRET not found in env configuration files."
-        if code == 0 and "BUFFER_SECRET" in out:
+        if code in (0, 2) and ("BUFFER_SECRET" in out or "VPS_BUFFER_SECRET" in out):
             sec = out.split("=", 1)[1].strip().strip('"').strip("'")
             if len(sec) >= 32:
                 p = True
@@ -494,7 +495,7 @@ def main():
         # 15. Telegram
         print("Running Check 11.1.15 (Telegram credentials)...")
         code, out, err = conn_a.run('grep -E "^TELEGRAM_BOT_TOKEN=" /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null')
-        p = code == 0 and "TELEGRAM_BOT_TOKEN" in out
+        p = code in (0, 2) and "TELEGRAM_BOT_TOKEN" in out
         results["11.1.15"] = {"passed": p, "msg": "Telegram token configured." if p else "Telegram credentials missing."}
 
     # Section 11.2: Server C Verification
