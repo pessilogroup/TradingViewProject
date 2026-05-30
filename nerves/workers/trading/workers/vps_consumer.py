@@ -2,6 +2,7 @@ import asyncio
 import logging
 import aiohttp
 import socket
+import sqlite3
 from typing import Dict, Any, List
 
 import config
@@ -24,7 +25,7 @@ class VpsSignalConsumer:
     """
     def __init__(self):
         self.pending_acks: Dict[int, int] = {}  # local_signal_id -> vbs_queue_id
-        self._session: getattr(self, "_session", None)
+        self._session = None
         
         # Register EventBus listeners for execution outcomes
         _event_bus.on(TradeExecuted)(self.on_trade_executed)
@@ -43,29 +44,38 @@ class VpsSignalConsumer:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def pull_signals(self, limit: int) -> List[Dict[str, Any]]:
-        """Fetch pending signals from VBS consume endpoint."""
-        url = f"{config.VPS_BUFFER_URL}/consume"
+    async def pull_signals(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Fetch pending signals from VBS consume-long endpoint."""
+        url = f"{config.VPS_BUFFER_URL}/consume-long"
         params = {
             "consumer_id": config.VPS_CONSUMER_ID,
-            "limit": limit
+            "limit": limit,
+            "timeout": 30
         }
         headers = {
             "X-Buffer-Secret": config.VPS_BUFFER_SECRET
         }
         
+        client_timeout = aiohttp.ClientTimeout(connect=10, total=35)
+        
         try:
             session = await self.get_session()
-            async with session.get(url, params=params, headers=headers, timeout=15) as resp:
+            async with session.get(url, params=params, headers=headers, timeout=client_timeout) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get("signals", [])
                 else:
                     log.error(f"[VpsConsumer] Failed to pull signals from VBS (HTTP {resp.status}): {await resp.text()}")
+                    raise aiohttp.ClientResponseError(
+                        request_info=resp.request_info,
+                        history=resp.history,
+                        status=resp.status,
+                        message=f"HTTP {resp.status}",
+                        headers=resp.headers
+                    )
         except Exception as e:
             log.warning(f"[VpsConsumer] Connection error pulling signals from VBS: {e}")
-            
-        return []
+            raise
 
     async def send_acks(self, acks: List[Dict[str, Any]]) -> bool:
         """Send confirmations back to VBS."""
@@ -95,28 +105,38 @@ class VpsSignalConsumer:
     async def on_startup(self):
         """Hook into application lifespan to drain queue at boot."""
         log.info("[VpsConsumer] Running startup signal recovery from VPS Buffer...")
-        signals = await self.pull_signals(limit=config.VPS_STARTUP_PULL_LIMIT)
-        if signals:
-            log.info(f"[VpsConsumer] Found {len(signals)} pending signal(s) on startup.")
-            for signal in signals:
-                await self._process_signal(signal)
-        else:
-            log.info("[VpsConsumer] Startup recovery complete: No pending signals found.")
+        try:
+            signals = await self.pull_signals(limit=config.VPS_STARTUP_PULL_LIMIT)
+            if signals:
+                log.info(f"[VpsConsumer] Found {len(signals)} pending signal(s) on startup.")
+                for signal in signals:
+                    await self._process_signal(signal)
+            else:
+                log.info("[VpsConsumer] Startup recovery complete: No pending signals found.")
+        except Exception as e:
+            log.warning(f"[VpsConsumer] Startup recovery skipped or failed: {e}")
 
     async def poll_loop(self):
-        """Continuous polling background task."""
-        log.info(f"[VpsConsumer] Starting background poll loop (every {config.VPS_POLL_INTERVAL_SECONDS}s)...")
+        """Continuous polling background task using long-polling."""
+        log.info("[VpsConsumer] Starting background long-poll loop...")
         while True:
             try:
-                await asyncio.sleep(config.VPS_POLL_INTERVAL_SECONDS)
                 signals = await self.pull_signals(limit=5)
+                if not signals:
+                    # Sleep 1 second when the poll returns empty
+                    await asyncio.sleep(1)
+                    continue
+                
+                # Process any returned signals immediately
                 for signal in signals:
                     await self._process_signal(signal)
             except asyncio.CancelledError:
                 log.info("[VpsConsumer] Background poll loop cancelled.")
                 break
             except Exception as e:
-                log.exception(f"[VpsConsumer] Error in poll loop: {e}")
+                log.exception(f"[VpsConsumer] Error or connection issue in poll loop. Sleeping 5s: {e}")
+                # Sleep 5 seconds if a connection or other error occurs
+                await asyncio.sleep(5)
 
     async def _process_signal(self, signal: Dict[str, Any]):
         """Processes a single signal pulled from VPS."""
@@ -159,16 +179,26 @@ class VpsSignalConsumer:
         quote_qty = signal.get("quote_qty")
         mode = payload.get("mode", "").strip().upper()
         
-        local_signal_id = await database.insert_signal(
-            symbol=symbol,
-            action=action,
-            price=price,
-            quote_qty=quote_qty,
-            source_ip=payload.get("source_ip", "127.0.0.1"),
-            payload=payload,
-            mode=mode,
-            vbs_queue_id=queue_id
-        )
+        try:
+            local_signal_id = await database.insert_signal(
+                symbol=symbol,
+                action=action,
+                price=price,
+                quote_qty=quote_qty,
+                source_ip=payload.get("source_ip", "127.0.0.1"),
+                payload=payload,
+                mode=mode,
+                vbs_queue_id=queue_id
+            )
+        except (aiosqlite.IntegrityError, sqlite3.IntegrityError) as e:
+            log.warning(f"[VpsConsumer] Duplicate signal detection via database constraint violation (race condition) for queue_id {queue_id}: {e}")
+            await self.send_acks([{
+                "queue_id": queue_id,
+                "status": "executed",
+                "message": "Duplicate signal already stored locally (race condition)",
+                "error_msg": "Duplicate signal already stored locally (race condition)"
+            }])
+            return
 
         # 4. Dispatch to EventBus
         source = payload.get("source", "")

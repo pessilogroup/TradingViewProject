@@ -18,7 +18,6 @@ V2 Changes vs V1:
 import asyncio
 import logging
 import os
-import time
 import aiohttp
 import socket
 from typing import Dict, Any, List, Optional, Tuple
@@ -67,14 +66,17 @@ class VpsAnalyzerWorker:
         self.consumer_id = "server-c-analyzer"
         # poll_interval is kept for compatibility but only used as error back-off
         self.poll_interval = config.VPS_POLL_INTERVAL_SECONDS
+        self._lock = asyncio.Lock()
 
     # ── Session management ────────────────────────────────────────────────────
 
     async def get_session(self) -> aiohttp.ClientSession:
         """Get or initialise the persistent aiohttp ClientSession."""
         if not self._session or self._session.closed:
-            conn = aiohttp.TCPConnector(family=socket.AF_INET)
-            self._session = aiohttp.ClientSession(connector=conn)
+            async with self._lock:
+                if not self._session or self._session.closed:
+                    conn = aiohttp.TCPConnector(family=socket.AF_INET)
+                    self._session = aiohttp.ClientSession(connector=conn)
         return self._session
 
     async def close(self):
@@ -173,7 +175,7 @@ class VpsAnalyzerWorker:
                 # poll_and_analyze() wraps _long_poll + _analyze_signal_v2
                 # Tests can mock poll_and_analyze directly.
                 analyzed_list = await self.poll_and_analyze()
-                for analyzed in analyzed_list:
+                async def process_analyzed(analyzed: Dict[str, Any]):
                     queue_id = analyzed.get("queue_id")
                     try:
                         if analyzed.get("approved"):
@@ -192,6 +194,9 @@ class VpsAnalyzerWorker:
                     except Exception as exc:
                         log.exception(f"[VpsAnalyzer] Error processing #{queue_id}: {exc}")
                         await self._ack_signal(queue_id, "failed", str(exc)[:200])
+
+                if analyzed_list:
+                    await asyncio.gather(*(process_analyzed(a) for a in analyzed_list))
 
             except asyncio.CancelledError:
                 log.info("[VpsAnalyzer] Daemon loop cancelled. Shutting down.")
@@ -332,8 +337,8 @@ class VpsAnalyzerWorker:
                 }
 
         # ── Position sizing ────────────────────────────────────────────────────
-        qty              = self._calculate_position_size(price_val, action)
-        sl_price, tp_price = self._calculate_sl_tp(price_val, action)
+        qty              = self._calculate_position_size(price_val, action, signal=signal)
+        sl_price, tp_price = self._calculate_sl_tp(price_val, action, signal=signal)
 
         trade_payload = {
             "symbol":          symbol,
@@ -348,6 +353,7 @@ class VpsAnalyzerWorker:
             "risk_per_trade":  config.RISK_PER_TRADE,
             "stop_loss_pct":   config.STOP_LOSS_PCT,
             "exchange":        payload.get("exchange", config.DEFAULT_EXCHANGE),
+            "hold_for_approval": (50 <= ai_conf <= 79),
         }
 
         log.info(
@@ -371,7 +377,6 @@ class VpsAnalyzerWorker:
             (advice_text, confidence_0_to_100)
         """
         payload = signal.get("payload", {})
-        symbol  = signal.get("symbol", "")
         action  = signal.get("action", "")
         price   = float(signal.get("price") or 0)
 
@@ -444,23 +449,82 @@ class VpsAnalyzerWorker:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _calculate_position_size(self, price: float, action: str) -> float:
+    def _calculate_position_size(self, price: float, action: str, signal: Optional[Dict[str, Any]] = None) -> float:
         """Minervini SEPA risk-based position sizing."""
         if price <= 0:
             return 0.0
         portfolio  = float(getattr(config, "MAX_QUOTE_QTY",  1000))
         risk_pct   = float(getattr(config, "RISK_PER_TRADE",  0.02))
-        sl_pct     = float(getattr(config, "STOP_LOSS_PCT",   0.08))
+        
+        atr = None
+        if isinstance(signal, dict):
+            payload = signal.get("payload", {})
+            if isinstance(payload, dict):
+                atr = payload.get("atr_value") or payload.get("atr")
+            if atr is None:
+                atr = signal.get("atr_value") or signal.get("atr")
+                
+        try:
+            atr_val = float(atr) if atr is not None else 0.0
+        except (ValueError, TypeError):
+            atr_val = 0.0
+
+        use_atr = False
+        if atr_val > 0:
+            if action.lower() in ("buy", "long"):
+                sl = price - (2 * atr_val)
+                tp = price + (5 * atr_val)
+            else:
+                sl = price + (2 * atr_val)
+                tp = price - (5 * atr_val)
+            if sl > 0 and tp > 0:
+                use_atr = True
+
+        if use_atr:
+            sl_pct = (2 * atr_val) / price
+        else:
+            sl_pct = float(getattr(config, "STOP_LOSS_PCT",   0.08))
+
         risk_amount = portfolio * risk_pct
         qty = risk_amount / (price * sl_pct) if sl_pct > 0 else 0.0
+        
         # Cap total quote value
         quote_value = qty * price
         if quote_value > portfolio:
             qty = portfolio / price
         return round(qty, 8)
 
-    def _calculate_sl_tp(self, price: float, action: str) -> Tuple[float, float]:
-        """Compute SL and TP based on configured percentages."""
+    def _calculate_sl_tp(self, price: float, action: str, signal: Optional[Dict[str, Any]] = None) -> Tuple[float, float]:
+        """Compute SL and TP based on ATR if present, otherwise configured percentages."""
+        atr = None
+        if isinstance(signal, dict):
+            payload = signal.get("payload", {})
+            if isinstance(payload, dict):
+                atr = payload.get("atr_value") or payload.get("atr")
+            if atr is None:
+                atr = signal.get("atr_value") or signal.get("atr")
+                
+        try:
+            atr_val = float(atr) if atr is not None else 0.0
+        except (ValueError, TypeError):
+            atr_val = 0.0
+
+        if atr_val > 0:
+            if action.lower() in ("buy", "long"):
+                sl = round(price - (2 * atr_val), 8)
+                tp = round(price + (5 * atr_val), 8)
+            else:
+                sl = round(price + (2 * atr_val), 8)
+                tp = round(price - (5 * atr_val), 8)
+            
+            if sl > 0 and tp > 0:
+                return sl, tp
+            
+            log.warning(
+                f"[VpsAnalyzer] ATR-based SL ({sl}) or TP ({tp}) is non-positive. "
+                f"Falling back to percentage-based calculation."
+            )
+
         sl_pct = float(getattr(config, "STOP_LOSS_PCT",    0.08))
         tp_pct = float(getattr(config, "TAKE_PROFIT_PCT",  0.20))
         if action.lower() in ("buy", "long"):
@@ -613,15 +677,16 @@ class VpsAnalyzerWorker:
         Handles both:
           - V1 mock: _analyze_signal returns dict (trade_payload) → approved=True
           - V1 mock: _analyze_signal returns None               → approved=False
-          - V2 real: _analyze_signal returns {"approved": ...,  ...}
+          - V2 real: _analyze_signal returns {"approved": bool, ...}
 
         Return format:
           [{"queue_id": int, "approved": bool, "trade_payload": dict | "reason": str}, ...]
         """
         raw_signals = await self._long_poll()
-        results: List[Dict[str, Any]] = []
+        if not raw_signals:
+            return []
 
-        for signal in raw_signals:
+        async def analyze_single(signal: Dict[str, Any]) -> Dict[str, Any]:
             queue_id = signal.get("queue_id")
             try:
                 # Call _analyze_signal (V1 wrapper) — tests mock this directly.
@@ -631,42 +696,43 @@ class VpsAnalyzerWorker:
 
                 if analyzed is None:
                     # V1: rejected
-                    results.append({
+                    return {
                         "queue_id": queue_id,
                         "approved": False,
                         "reason": "RAG analysis rejected signal — does not meet Minervini criteria",
-                    })
+                    }
                 elif isinstance(analyzed, dict) and "approved" in analyzed:
                     # V2 dict returned by a test mock or V2-aware caller
                     if analyzed["approved"]:
-                        results.append({
+                        return {
                             "queue_id": queue_id,
                             "approved": True,
                             "trade_payload": analyzed["trade_payload"],
-                        })
+                        }
                     else:
-                        results.append({
+                        return {
                             "queue_id": queue_id,
                             "approved": False,
                             "reason": analyzed.get("reason", "Analysis rejected signal"),
-                        })
+                        }
                 else:
                     # V1: plain trade_payload dict → approved
-                    results.append({
+                    return {
                         "queue_id": queue_id,
                         "approved": True,
                         "trade_payload": analyzed,
-                    })
+                    }
 
             except Exception as exc:
                 log.exception(f"[VpsAnalyzer] Error in poll_and_analyze #{queue_id}: {exc}")
-                results.append({
+                return {
                     "queue_id": queue_id,
                     "approved": False,
                     "reason": f"Analysis error: {str(exc)[:200]}",
-                })
+                }
 
-        return results
+        results = await asyncio.gather(*(analyze_single(sig) for sig in raw_signals))
+        return list(results)
 
 
 if __name__ == "__main__":

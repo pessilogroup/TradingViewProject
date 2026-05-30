@@ -189,6 +189,9 @@ async def init_vector_db() -> bool:
 
     knowledge_dir = Path(config.KNOWLEDGE_DIR)
     if not knowledge_dir.exists():
+        if getattr(config, "CHROMA_REMOTE", False):
+            log.info(f"RAG: Knowledge dir not found ({knowledge_dir}), but remote ChromaDB is active. Skipping ingestion.")
+            return True
         log.error(f"RAG: Knowledge dir not found: {knowledge_dir}")
         return False
 

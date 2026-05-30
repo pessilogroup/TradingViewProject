@@ -31,8 +31,14 @@ async def lifespan(app: FastAPI):
     await database.init_db()
     from exchanges.registry import init_registry
     init_registry()
+    if config.TELEGRAM_BOT_ENABLED:
+        import telegram_bot
+        telegram_bot.start_bot()
     log.info("Execution Server started. Listening for trade commands.")
     yield
+    if config.TELEGRAM_BOT_ENABLED:
+        import telegram_bot
+        telegram_bot.stop_bot()
     log.info("Execution Server shutting down.")
 
 
@@ -96,15 +102,20 @@ async def execute_trade(request: Request):
     analysis_text = body.get("analysis_text") or body.get("analysis", "")
 
     try:
+        import asyncio
         # Import and use TradeEngine's event-based execution
         from core.event_bus import EventBus
-        from core.events import TradeApproved, TradeExecuted, TradeFailed
+        from core.events import TradeApproved, TradeExecuted, TradeFailed, AnalysisComplete, TradeApprovalTimeout
+        import hub.notification_hub as notification_hub
+        import telegram_bot
+        from utils.telegram_templates import render_template
 
         # Create isolated event bus for this execution
         exec_bus = EventBus()
 
         # Store result via event handler
         result_holder = {}
+        execution_done = asyncio.Event()
 
         @exec_bus.on(TradeExecuted)
         async def on_executed(event: TradeExecuted):
@@ -113,11 +124,19 @@ async def execute_trade(request: Request):
             result_holder["fill_price"] = event.executed_price
             result_holder["status"] = event.status
             result_holder["executed_qty"] = event.executed_qty
+            execution_done.set()
 
         @exec_bus.on(TradeFailed)
         async def on_failed(event: TradeFailed):
             result_holder["success"] = False
             result_holder["error"] = event.error
+            execution_done.set()
+
+        @exec_bus.on(TradeApprovalTimeout)
+        async def on_timeout(event: TradeApprovalTimeout):
+            result_holder["success"] = False
+            result_holder["error"] = f"Approval timeout: {event.reason}"
+            execution_done.set()
 
         # Save signal to DB first
         signal_id = await database.insert_signal(
@@ -129,14 +148,34 @@ async def execute_trade(request: Request):
             payload=body,
         )
 
-        # Import trade engine and override its bus
-        from engine import trade_engine
-        original_bus = trade_engine.get_bus()
-        trade_engine.set_bus(exec_bus)
+        has_confidence = ("ai_confidence" in body or "confidence" in body)
+        confidence_val = body.get("ai_confidence")
+        if confidence_val is None:
+            confidence_val = body.get("confidence")
 
-        try:
-            # Create and process TradeApproved event
-            approved = TradeApproved(
+        confidence = 0
+        if has_confidence and confidence_val is not None:
+            try:
+                confidence = int(confidence_val)
+            except (ValueError, TypeError):
+                confidence = 0
+
+            if confidence < 50:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "success": False,
+                        "status": "auto_rejected",
+                        "error": f"Auto-rejected: confidence score {confidence} is below minimum threshold 50"
+                    }
+                )
+
+        hold_for_approval = body.get("hold_for_approval")
+        is_holding = (hold_for_approval is True) or (50 <= confidence <= 79)
+
+        if is_holding:
+            # 1. Create AnalysisComplete event
+            event = AnalysisComplete(
                 signal_id=signal_id,
                 symbol=symbol,
                 action=action,
@@ -145,13 +184,126 @@ async def execute_trade(request: Request):
                 sl=str(sl),
                 tp=str(tp),
                 exchange=exchange,
-                approved_by="ServerC-Analyzer",
+                confidence=confidence,
                 analysis_text=analysis_text,
+                should_trade=True,
+                interactive_required=True,
             )
 
-            await trade_engine.execute_trade(approved)
-        finally:
-            trade_engine.set_bus(original_bus)
+            # 2. Save event to PENDING_TRADES
+            notification_hub.PENDING_TRADES[signal_id] = event
+
+            # 3. Render message template
+            symbol_val = symbol
+            action_val = action.upper()
+            price_val = f"{price:,.2f}" if price and isinstance(price, (int, float)) else (price or "Market")
+            
+            vcp_status = "N/A"
+            tt_score = "N/A"
+            stage_val = "N/A"
+            volume_ratio = "N/A"
+            timeframe = "1D"
+            
+            if "trend_template_score" in body:
+                tt_score = str(body["trend_template_score"])
+            elif "tt_score" in body:
+                tt_score = str(body["tt_score"])
+                
+            if "vcp_status" in body:
+                vcp_status = body["vcp_status"]
+                
+            if "volume_ratio" in body:
+                volume_ratio = str(body["volume_ratio"])
+                
+            if "timeframe" in body:
+                timeframe = body["timeframe"]
+            elif "interval" in body:
+                timeframe = body["interval"]
+
+            sl_val = sl or "N/A"
+            tp_val = tp or "N/A"
+            sl_pct = "N/A"
+            tp_pct = "N/A"
+            try:
+                if price and isinstance(price, (int, float)):
+                    if sl and float(sl) > 0:
+                        sl_pct = f"{((float(sl) - price) / price) * 100:+.1f}"
+                    if tp and float(tp) > 0:
+                        tp_pct = f"{((float(tp) - price) / price) * 100:+.1f}"
+            except Exception:
+                pass
+
+            msg_text = render_template(
+                "A",
+                symbol=symbol_val,
+                action=action_val,
+                price=price_val,
+                timeframe=timeframe,
+                tt_score=tt_score,
+                stage=stage_val,
+                vcp_status=vcp_status,
+                volume_ratio=volume_ratio,
+                ai_provider="Claude RAG",
+                ai_advice=analysis_text[:800],
+                stop_loss=sl_val,
+                sl_pct=sl_pct,
+                take_profit=tp_val,
+                tp_pct=tp_pct
+            )
+
+            # Send interactive trade approval message
+            sent_pairs = await telegram_bot.send_interactive_trade_approval(
+                signal_id=signal_id,
+                message=msg_text,
+            )
+            if sent_pairs:
+                timeout_mgr = telegram_bot.get_approval_timeout_mgr()
+                if timeout_mgr and isinstance(sent_pairs, list):
+                    for chat_id, message_id in sent_pairs:
+                        timeout_mgr.track_message(signal_id, chat_id, message_id)
+
+            return JSONResponse({
+                "success": True,
+                "status": "pending_approval",
+                "signal_id": signal_id,
+            })
+
+        else:
+            if config.TELEGRAM_BOT_ENABLED:
+                @exec_bus.on(TradeExecuted)
+                async def forward_executed(event: TradeExecuted):
+                    from core.event_bus import bus as _default_bus
+                    await _default_bus.emit(event)
+
+                @exec_bus.on(TradeFailed)
+                async def forward_failed(event: TradeFailed):
+                    from core.event_bus import bus as _default_bus
+                    await _default_bus.emit(event)
+
+            # Import trade engine and override its bus
+            from engine import trade_engine
+            original_bus = trade_engine.get_bus()
+            trade_engine.set_bus(exec_bus)
+
+            try:
+                # Create and process TradeApproved event
+                approved = TradeApproved(
+                    signal_id=signal_id,
+                    symbol=symbol,
+                    action=action,
+                    price=price,
+                    quote_qty=quote_qty,
+                    sl=str(sl),
+                    tp=str(tp),
+                    exchange=exchange,
+                    approved_by="ServerC-Analyzer",
+                    analysis_text=analysis_text,
+                )
+
+                await trade_engine.execute_trade(approved)
+                await execution_done.wait()
+            finally:
+                trade_engine.set_bus(original_bus)
 
         if result_holder.get("success"):
             # Send Telegram notification

@@ -1728,8 +1728,19 @@ async def button_callback(update, context):
         signal_id = int(data.split("_")[1])
         from hub.notification_hub import PENDING_TRADES
         if signal_id in PENDING_TRADES:
-            PENDING_TRADES.pop(signal_id)
+            event = PENDING_TRADES.pop(signal_id)
             user = query.from_user.username or query.from_user.first_name
+            from core.event_bus import bus as _default_bus
+            from core.events import TradeFailed
+            import asyncio
+            asyncio.create_task(_default_bus.emit_background(TradeFailed(
+                signal_id=event.signal_id,
+                symbol=event.symbol,
+                side=event.action,
+                error=f"Rejected by user (@{user})",
+                quote_qty=event.quote_qty,
+                exchange=getattr(event, "exchange", "binance"),
+            )))
             from notifier import sanitize_for_telegram_html
             safe_text = sanitize_for_telegram_html(query.message.text)
             new_text = safe_text + f"\n\n❌ <b>ĐÃ TỪ CHỐI BỞI @{user}</b>"
