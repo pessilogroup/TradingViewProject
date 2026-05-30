@@ -24,6 +24,87 @@ except Exception as e:
     scar_memory = None
     reflex = None
 
+# ── Scar Consult B+C Hybrid ──────────────────────────────────
+# B: In-process fastembed (already warm) + direct Qdrant search
+# C: TTL cache by command prefix (5 min)
+import time as _time
+
+_scar_cache = {}          # {cmd_prefix: (timestamp, advisory_str | None)}
+_SCAR_CACHE_TTL = 300     # 5 minutes
+_SCAR_SCORE_THRESHOLD = 0.82
+_qdrant_client_cached = None
+
+
+def _cmd_prefix(cmd_line: str) -> str:
+    """Extract first 2 tokens of command for cache key grouping."""
+    tokens = cmd_line.strip().split()[:2]
+    return " ".join(tokens).lower()
+
+
+def _scar_consult_fast(cmd_line: str) -> str:
+    """
+    In-process scar consult with TTL cache.
+
+    Path:
+        1. Check cache (0ms) → hit? return cached advisory
+        2. Miss → embed in-process (~50ms) → Qdrant search (~50ms)
+        3. Store result in cache (hit or miss) with TTL
+
+    Returns advisory string or "" if no relevant scars.
+    """
+    global _qdrant_client_cached
+
+    if not scar_memory:
+        return ""
+
+    # ── C: Cache check ──
+    prefix = _cmd_prefix(cmd_line)
+    now = _time.time()
+    if prefix in _scar_cache:
+        ts, cached_advisory = _scar_cache[prefix]
+        if now - ts < _SCAR_CACHE_TTL:
+            return cached_advisory or ""
+
+    # ── B: In-process embed + search ──
+    try:
+        # Use the already-warm fastembed model (loaded at boot)
+        vector = scar_memory._embed(cmd_line)
+
+        # Get or create Qdrant client (reuse connection)
+        if _qdrant_client_cached is None:
+            _qdrant_client_cached = scar_memory._get_client()
+
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        results = _qdrant_client_cached.search(
+            collection_name=scar_memory.COLLECTION_NAME,
+            query_vector=vector,
+            limit=3,
+            score_threshold=_SCAR_SCORE_THRESHOLD,
+        )
+
+        if results:
+            rules = []
+            for r in results:
+                payload = r.payload or {}
+                rule = payload.get("prevention_rule", "")
+                if rule:
+                    rules.append(rule)
+
+            if rules:
+                advisory = " | ".join(rules[:2])
+                _scar_cache[prefix] = (now, advisory)
+                return advisory
+
+        # No match — cache the miss too (avoid re-querying)
+        _scar_cache[prefix] = (now, None)
+        return ""
+
+    except Exception as exc:
+        print(f"[SRA Server] Scar consult fast error: {exc}", file=sys.stderr)
+        _scar_cache[prefix] = (now, None)  # Cache errors as miss
+        return ""
+
 class ThreadingHTTPServer(ThreadingTCPServer, HTTPServer):
     daemon_threads = True
 
@@ -159,6 +240,23 @@ class SRAHookHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     print(f"[SRA Server] Circuit breaker error: {exc}", file=sys.stderr)
             
+            # 2.5 Scar Memory Consult — in-process B+C hybrid
+            #     B: fastembed (already warm) + direct Qdrant → ~100ms
+            #     C: TTL cache by command prefix → 0ms on cache hit
+            if scar_memory and tool_name == "run_command":
+                try:
+                    cmd_line = tool_input.get("CommandLine", "")
+                    if cmd_line:
+                        advisory = _scar_consult_fast(cmd_line)
+                        if advisory:
+                            print(f"[SRA Server] Scar advisory for run_command: {advisory}", file=sys.stderr)
+                            return {
+                                "decision": "allow",
+                                "message": f"[SCAR ADVISORY] Similar command failed before: {advisory}"
+                            }
+                except Exception as exc:
+                    print(f"[SRA Server] Scar consult error: {exc}", file=sys.stderr)
+
             # 3. Reflex
             if reflex:
                 try:
@@ -222,9 +320,32 @@ class SRAHookHandler(BaseHTTPRequestHandler):
 
     def handle_on_error(self, input_data):
         tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {})
+        tool_output = input_data.get("tool_output", "")
+        error_msg = input_data.get("error", "") or str(tool_output)[:500]
         
         print(f"[SRA Server] OnError processing: {tool_name}", file=sys.stderr)
         
+        # ── Record to Scar Memory ─────────────────────────────────
+        # Close the feedback loop: /on-error → scar → /pre-tool consult
+        if scar_memory and tool_name == "run_command":
+            cmd_line = tool_input.get("CommandLine", "unknown command")
+            try:
+                scar_memory.record_scar(
+                    failed_action=cmd_line[:300],
+                    error_signature=error_msg[:300],
+                    recovery_action="",
+                    prevention_rule=f"Command failed: {cmd_line[:100]}. Error: {error_msg[:150]}",
+                    context="hook_on_error/run_command",
+                )
+                print(f"[SRA Server] Scar recorded for: {cmd_line[:80]}", file=sys.stderr)
+                # Invalidate cache for this command prefix so next consult picks it up
+                prefix = _cmd_prefix(cmd_line)
+                _scar_cache.pop(prefix, None)
+            except Exception as exc:
+                print(f"[SRA Server] Scar record error: {exc}", file=sys.stderr)
+        
+        # ── Incident Responder ────────────────────────────────────
         incident_responder = AGENTS_ROOT / "nerves" / "workers" / "incident_responder.py"
         if incident_responder.exists():
             try:
