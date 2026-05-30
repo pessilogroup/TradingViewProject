@@ -57,6 +57,24 @@
      - Reconfigured `test_log_test_run_creates_file` to close the active `FileHandler` on the logger before trying to `os.remove` the log file, avoiding unlinking errors on Linux where the file remains open and invisible.
 * **Status:** FIXED.
 
+### 9. Nested Quote Hang in SSH Verification Commands
+* **Symptom:** Run check 11.1.4 (and other SSH-executed grep commands) hung indefinitely during verification.
+* **Root Cause:** Double-nesting single quotes inside the connection SSH executor (`conn_a.run(...)` with outer single quotes and inner single-quoted regexes) prematurely terminated the command string, exposing the pipe (`|`) to the local terminal, causing it to block waiting for stdin.
+* **Resolution:** Replaced inner nested single quotes with double quotes (e.g. `grep -E "^..." ...` instead of `grep -E '^...' ...`).
+* **Status:** FIXED.
+
+### 10. Multi-Line systemctl Status Output Rejection
+* **Symptom:** Chrony/NTP liveness checks (11.1.7 and 11.2.3) failed to pass even though chronyd was active on the target server.
+* **Root Cause:** The check command ran `systemctl is-active chrony || systemctl is-active chronyd`, which on systems with only one of the services installed printed `inactive\nactive`. The parser used `out.strip() == "active"` which evaluated to False due to the multi-line output.
+* **Resolution:** Reconfigured the status check logic to search for `"active"` in split lines: `"active" in out.splitlines()`.
+* **Status:** FIXED.
+
+### 11. Target IP Allocation Drift in Hardening Scripts
+* **Symptom:** Running the automated hardening script executed commands on stale IP addresses (e.g., Ubuntu IP `76.13.189.161` instead of Server A Debian IP `103.82.21.77`).
+* **Root Cause:** Hardcoded static target IP variables inside `deploy_hardening.py`.
+* **Resolution:** Corrected Server A target IP to `103.82.21.77`, user to `botuser`, and SSH key to `sshkey-serverc.pem` to match the current Minervini VPS topology.
+* **Status:** FIXED.
+
 ## Active Issues / Known Limitations
 
 ### 1. Latency under Load (Pending Test)
