@@ -480,3 +480,70 @@ After verification runs, auto-update the checklist in `docs/SETUPS/01_VPS_SERVER
 ### Checklist Updates
 - [ ] Running `verify_provisioning.py --all --auto-tick` updates BOTH copies of the checklist (docs/SETUPS/ and docs/reports/) consistently
 - [ ] Only PASS items get ticked; FAIL/SKIP items remain `☐`
+
+## Follow-up — 2026-05-31T00:39:19+07:00
+
+Implement and deploy a decentralized signal logging, RAG SEPA AI analysis, and trade forwarding pipeline on Server C that polls raw signals from Server A, analyzes them, and forwards the execution commands to Server B.
+
+Working directory: ~/teamwork_projects/vps_signal_pipeline
+Integrity mode: development
+
+## Requirements
+
+### R1. Signal Consumer Long-polling (Server C)
+- Implement a background service/daemon (`vps_consumer.py`) on Server C that pulls pending signals from Server A Ingress Gateway (VBS service) using long-polling to keep latency < 1s.
+- Store consumed signals locally in `server/trades.db` under the `indicator_signals` and `signals` tables, maintaining idempotency based on `vbs_queue_id`.
+
+### R2. RAG and SEPA AI Analysis (Server C)
+- Set up local ChromaDB vector DB access on Server C to query SEPA chunks from `docs/knowledge/trading_wizard/chunks`.
+- Run SEPA analysis on entry/exit signals using Gemini as the primary AI provider (leveraging the valid GEMINI_API_KEY from env) via the Antigravity SDK, determining Mark Minervini alignment and calculating stop-loss and take-profit levels using ATR.
+
+### R3. Safe Trade Command Forwarding (Server C -> Server B)
+- When a valid entry/exit signal is analyzed and approved, forward the finalized trade execution payload to Server B's execution endpoint at `http://${SERVER_B_IP}:5002/api/execute-trade`.
+- Secure transmission by signing the request with `X-Server-B-Secret` header authentication.
+
+## Acceptance Criteria
+
+### Ingestion & Analysis Verification
+- [ ] Implement a mock simulation harness (`scripts/simulate_pipeline.py`) that mocks Server A's queue endpoints (`/consume` and `/ack`) and Server B's execution endpoint.
+- [ ] Confirm the long-polling consumer retrieves queued signals within < 1 second.
+- [ ] Verify that SEPA analysis is generated and stored in the database.
+- [ ] Verify that HTTP requests to Server B are properly formatted and include the required security headers.
+
+
+## Follow-up — 2026-05-31T03:58:48+07:00
+
+Implement local Telegram Bot signal synchronization (Option 2) in the 3-server decentralized pipeline. This ensures signals requiring human approval are held on Server B (Local/Windows) and handled interactively via the Telegram bot running inside the execution server.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Lifespan and Bot Initialization in Execution Server
+- Start and stop the interactive Telegram bot daemon inside the `execution_server.py` application's lifespan if `TELEGRAM_BOT_ENABLED=true` in `.env`.
+- Ensure all event handlers for `trade_engine` and `notification_hub` are registered on the EventBus when `execution_server.py` starts, so that events such as `TradeApproved`, `TradeExecuted`, and `TradeFailed` are correctly handled.
+
+### R2. Human-in-the-Loop Gating in Execution Server
+- In `execution_server.py`, modify the `POST /api/execute-trade` endpoint:
+  - Check if the incoming payload has `"hold_for_approval": true` or if its `"ai_confidence"` is between 50 and 79.
+  - If held for approval, persist the signal in the database and register it in `PENDING_TRADES` (shared memory).
+  - Trigger the interactive Telegram approval card using `telegram_bot.send_interactive_trade_approval(...)` instead of executing the trade immediately.
+  - If approved by the user via Telegram callback, pop it from `PENDING_TRADES` and trigger trade execution through the normal event pipeline.
+
+### R3. Confidence-Based Flagging in AI Analyzer
+- In `vps_analyzer.py` (Server C), update signal evaluation to check the calculated confidence score (`ai_confidence` between 0-100).
+- If the confidence score is between 50 and 79, set `"hold_for_approval": true` in the forwarded trade payload so that Server B holds it for manual approval.
+- Ensure the signal is still forwarded to Server B for manual gating.
+
+## Acceptance Criteria
+
+### Interactive Gating & Flow Correctness
+- [ ] Implement a unit/integration test suite at `server/tests/test_decentralized_approval.py` that verifies:
+  - Forwarded trade command with `hold_for_approval=True` is intercepted and added to `PENDING_TRADES`.
+  - The Telegram bot interactive approval function is called with correct signal details.
+  - High confidence signals (confidence >= 80) bypass approval and execute immediately.
+  - Low confidence signals (confidence < 50) are auto-rejected by the analyzer.
+  - Simulated button callback triggers `TradeApproved` and executes successfully via the engine.
+- [ ] Run the complete test suite (`pytest server/tests/`) and confirm all tests pass.
+
