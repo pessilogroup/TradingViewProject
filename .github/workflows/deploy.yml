@@ -230,6 +230,7 @@ jobs:
             
             # Đánh dấu đã deploy (cho rollback logic)
             echo "DEPLOYED" > /tmp/.deploy_state
+            docker system prune -f
             docker compose -f deploy/docker-compose.server-a.yml up -d --build
             
             echo "🔍 Testing Gateway Health..."
@@ -331,18 +332,18 @@ jobs:
             echo "$PULL_OUTPUT"
             NEW_SHA=$(git rev-parse HEAD)
             
-            # Nếu code không đổi → skip rebuild
+            # Nếu code không đổi → skip rebuild, health check only
             if [ "$OLD_SHA" = "$NEW_SHA" ]; then
               echo "📎 No new commits — skipping rebuild"
               if curl -sf http://localhost:5000/health > /dev/null 2>&1 || curl -sf http://localhost:8000/api/v1/heartbeat > /dev/null 2>&1; then
                 echo "✅ Server C already healthy (no changes)"
                 exit 0
               fi
-              echo "⚠️ No changes and no running service — soft-pass"
-              exit 0
+              echo "⚠️ No changes but service unhealthy — rebuilding..."
             fi
             
             if [ -f deploy/docker-compose.server-c.yml ]; then
+              docker system prune -f
               docker compose -f deploy/docker-compose.server-c.yml up -d --build
             fi
             
