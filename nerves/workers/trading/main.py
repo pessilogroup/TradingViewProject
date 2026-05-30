@@ -472,6 +472,12 @@ async def daemon_dashboard():
     return FileResponse(str(STATIC_DIR / "capture_dashboard.html"))
 
 
+@app.get("/studio")
+async def studio():
+    """Serve Custom Trading View Studio & Telegram Template Editor."""
+    return FileResponse(str(STATIC_DIR / "studio.html"))
+
+
 @app.get("/")
 async def root():
     """Redirect to dashboard."""
