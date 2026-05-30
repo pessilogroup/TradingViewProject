@@ -18,7 +18,8 @@ RUN apt-get update && \
 
 # Copy requirements first (Docker layer cache)
 COPY nerves/workers/trading/requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --prefix=/install torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
