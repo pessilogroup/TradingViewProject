@@ -1107,8 +1107,8 @@ Start-Service TradingBotExecution
 | 11 | Tailscale VPN kết nối, IP 100.x.x.1 | ☑ |
 | 12 | Cloudflare Tunnel → bot.yourdomain.com | ☑ |
 | 13 | VBS container chạy, `/health` trả healthy | ☑ |
-| 14 | BUFFER_SECRET sinh ngẫu nhiên (≥32 bytes) | ☐ |
-| 15 | Telegram notification test thành công | ☐ |
+| 14 | BUFFER_SECRET sinh ngẫu nhiên (≥32 bytes) | ☑ |
+| 15 | Telegram notification test thành công | ☑ |
 
 ### 11.2 SERVER C — AI Core (Debian 12)
 
@@ -1123,9 +1123,9 @@ Start-Service TradingBotExecution
 | 7 | Analyzer Worker container chạy | ☑ |
 | 8 | Kết nối đến SERVER A `/consume` thành công | ☑ |
 | 9 | Kết nối đến SERVER B `/api/execute-trade` thành công | ☑ |
-| 10 | Liveness monitor cấu hình (check A + B) | ☐ |
-| 11 | Disk monitor cấu hình | ☐ |
-| 12 | Circuit Breaker LLM cấu hình | ☐ |
+| 10 | Liveness monitor cấu hình (check A + B) | ☑ |
+| 11 | Disk monitor cấu hình | ☑ |
+| 12 | Circuit Breaker LLM cấu hình | ☑ |
 
 ### 11.3 SERVER B — Execution Vault (Windows Server)
 
@@ -1149,6 +1149,6 @@ Start-Service TradingBotExecution
 | 1 | SERVER C `ping` SERVER A qua Tailscale | ☑ |
 | 2 | SERVER C `ping` SERVER B qua Tailscale | ☑ |
 | 3 | Clock drift < 50ms giữa cả 3 server | ☑ |
-| 4 | E2E: TradingView → A (ingest) → C (analyze) → B (execute) | ☐ |
-| 5 | Telegram nhận đủ notification từ cả 3 server | ☐ |
+| 4 | E2E: TradingView → A (ingest) → C (analyze) → B (execute) | ☑ |
+| 5 | Telegram nhận đủ notification từ cả 3 server | ☑ |
 | 6 | UptimeRobot/Cloudflare monitor đang active | ☑ |

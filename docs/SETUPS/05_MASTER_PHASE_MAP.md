@@ -19,12 +19,12 @@ gantt
     Local Bot Consumer Worker  :done, p2, after p1, 2h
     Dashboard Queue Status     :done, p3, after p2, 1h
 
-    section Phase 4-7 (In Progress)
-    Remote ChromaDB Config     :active, p4, 2026-05-29, 1h
-    AI Analyzer Worker (Srv C) :p5, after p4, 3h
-    Execution Server (Srv B)   :p6, after p5, 2h
-    Docker Compose Templates   :p65, after p5, 1h
-    Integration Test E2E       :p7, after p6, 2h
+    section Phase 4-7 (Done)
+    Remote ChromaDB Config     :done, p4, 2026-05-29, 1h
+    AI Analyzer Worker (Srv C) :done, p5, after p4, 3h
+    Execution Server (Srv B)   :done, p6, after p5, 2h
+    Docker Compose Templates   :done, p65, after p5, 1h
+    Integration Test E2E       :done, p7, after p6, 2h
 ```
 
 ---
@@ -149,9 +149,9 @@ VpsSignalConsumer._process_signal()
 
 ---
 
-## 🔵 Phase 4: Remote ChromaDB Configuration — `ĐANG TRIỂN KHAI`
+## ✅ Phase 4: Remote ChromaDB Configuration — `HOÀN THÀNH`
 
-> **Server:** C (Linux 8U16G) | **Thời lượng:** ~1 giờ | **Trạng thái:** 🔵 In Progress (Teamwork Agent)
+> **Server:** C (Linux 8U16G) | **Thời lượng:** ~1 giờ | **Trạng thái:** ✅ Done
 
 **Mục tiêu:** Cho phép `server/rag.py` kết nối ChromaDB từ xa (trên SERVER C) thay vì chỉ dùng local PersistentClient.
 
@@ -193,9 +193,9 @@ else:
 
 ---
 
-## 🔵 Phase 5: AI Analyzer Worker (SERVER C) — `ĐANG TRIỂN KHAI`
+## ✅ Phase 5: AI Analyzer Worker (SERVER C) — `HOÀN THÀNH`
 
-> **Server:** C (Linux 8U16G) | **Thời lượng:** ~3 giờ | **Trạng thái:** 🔵 In Progress (Teamwork Agent)
+> **Server:** C (Linux 8U16G) | **Thời lượng:** ~3 giờ | **Trạng thái:** ✅ Done
 
 **Mục tiêu:** Daemon worker trên SERVER C thay thế vai trò phân tích của Local Bot. Poll tín hiệu thô từ SERVER A → RAG Analysis → Position Sizing → Push lệnh sạch sang SERVER B.
 
@@ -252,9 +252,9 @@ SERVER_B_SECRET=<secrets.token_hex(32)>
 
 ---
 
-## 🔵 Phase 6: Execution Server (SERVER B) — `ĐANG TRIỂN KHAI`
+## ✅ Phase 6: Execution Server (SERVER B) — `HOÀN THÀNH`
 
-> **Server:** B (Windows Server 2U4G) | **Thời lượng:** ~2 giờ | **Trạng thái:** 🔵 In Progress (Teamwork Agent)
+> **Server:** B (Windows Server 2U4G) | **Thời lượng:** ~2 giờ | **Trạng thái:** ✅ Done
 
 **Mục tiêu:** FastAPI app gọn nhẹ trên SERVER B — nhận lệnh đã phê duyệt từ SERVER C và đặt lệnh trên sàn ngay lập tức. SERVER B là **Execution Vault** — bảo mật tối đa API Keys giao dịch.
 
@@ -324,9 +324,9 @@ Content-Type: application/json
 
 ---
 
-## 🔵 Phase 6.5: Docker Compose Templates — `ĐANG TRIỂN KHAI`
+## ✅ Phase 6.5: Docker Compose Templates — `HOÀN THÀNH`
 
-> **Tất cả Server** | **Thời lượng:** ~1 giờ | **Trạng thái:** 🔵 In Progress (Teamwork Agent)
+> **Tất cả Server** | **Thời lượng:** ~1 giờ | **Trạng thái:** ✅ Done
 
 **Mục tiêu:** Tạo Docker Compose riêng biệt cho mỗi Server để deploy dễ dàng.
 
@@ -360,9 +360,9 @@ SERVER A (Gateway)                SERVER C (AI Core)              SERVER B (Exec
 
 ---
 
-## 🔵 Phase 7: End-to-End Integration Test — `ĐANG TRIỂN KHAI`
+## ✅ Phase 7: End-to-End Integration Test — `HOÀN THÀNH`
 
-> **Local Machine** | **Thời lượng:** ~2 giờ | **Trạng thái:** 🔵 In Progress (Teamwork Agent)
+> **Local Machine** | **Thời lượng:** ~2 giờ | **Trạng thái:** ✅ Done
 
 **Mục tiêu:** Mô phỏng toàn bộ luồng 3-Server trên cùng 1 máy bằng các port khác nhau. Chạy được với `pytest` mà không cần mạng thực.
 
