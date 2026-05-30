@@ -1094,10 +1094,10 @@ Start-Service TradingBotExecution
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
-| 1 | Debian 12 Minimal đã cài | ☐ |
-| 2 | `apt update && apt upgrade` | ☐ |
-| 3 | User `botuser` tạo, không dùng root | ☐ |
-| 4 | SSH key-only auth, PasswordAuthentication no | ☐ |
+| 1 | Debian 12 Minimal đã cài | ☑ |
+| 2 | `apt update && apt upgrade` | ☑ |
+| 3 | User `botuser` tạo, không dùng root | ☑ |
+| 4 | SSH key-only auth, PasswordAuthentication no | ☑ |
 | 5 | Fail2ban cấu hình và chạy | ☐ |
 | 6 | UFW firewall bật, chỉ allow SSH + Tailscale | ☐ |
 | 7 | NTP chrony đồng bộ (drift < 50ms) | ☐ |
@@ -1114,15 +1114,15 @@ Start-Service TradingBotExecution
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
-| 1 | Debian 12 đã cài (Standard OK cho 8U16G) | ☐ |
-| 2 | User `botuser`, SSH hardened | ☐ |
+| 1 | Debian 12 đã cài (Standard OK cho 8U16G) | ☑ |
+| 2 | User `botuser`, SSH hardened | ☑ |
 | 3 | NTP chrony đồng bộ | ☐ |
-| 4 | Docker CE + Compose V2 | ☐ |
-| 5 | Tailscale VPN kết nối, IP 100.x.x.3 | ☐ |
-| 6 | ChromaDB container chạy (:8000) | ☐ |
+| 4 | Docker CE + Compose V2 | ☑ |
+| 5 | Tailscale VPN kết nối, IP 100.x.x.3 | ☑ |
+| 6 | ChromaDB container chạy (:8000) | ☑ |
 | 7 | Analyzer Worker container chạy | ☐ |
-| 8 | Kết nối đến SERVER A `/consume` thành công | ☐ |
-| 9 | Kết nối đến SERVER B `/api/execute-trade` thành công | ☐ |
+| 8 | Kết nối đến SERVER A `/consume` thành công | ☑ |
+| 9 | Kết nối đến SERVER B `/api/execute-trade` thành công | ☑ |
 | 10 | Liveness monitor cấu hình (check A + B) | ☐ |
 | 11 | Disk monitor cấu hình | ☐ |
 | 12 | Circuit Breaker LLM cấu hình | ☐ |
@@ -1131,24 +1131,24 @@ Start-Service TradingBotExecution
 
 | # | Hạng mục | Trạng thái |
 |---|----------|-----------|
-| 1 | Windows Server 2022 cập nhật | ☐ |
-| 2 | Python 3.11+ cài | ☐ |
-| 3 | NTP w32time đồng bộ | ☐ |
-| 4 | Tailscale VPN kết nối, IP 100.x.x.2 | ☐ |
-| 5 | Firewall: port 5002 chỉ allow 100.0.0.0/8 | ☐ |
-| 6 | Execution Server chạy | ☐ |
-| 7 | SERVER_B_SECRET cấu hình | ☐ |
-| 8 | Exchange API Keys cấu hình (Binance/Bybit/Weex) | ☐ |
-| 9 | Test: POST `/api/execute-trade` từ SERVER C | ☐ |
-| 10 | Telegram notification test | ☐ |
+| 1 | Windows Server 2022 cập nhật | ☑ |
+| 2 | Python 3.11+ cài | ☑ |
+| 3 | NTP w32time đồng bộ | ☑ |
+| 4 | Tailscale VPN kết nối, IP 100.x.x.2 | ☑ |
+| 5 | Firewall: port 5002 chỉ allow 100.0.0.0/8 | ☑ |
+| 6 | Execution Server chạy | ☑ |
+| 7 | SERVER_B_SECRET cấu hình | ☑ |
+| 8 | Exchange API Keys cấu hình (Binance/Bybit/Weex) | ☑ |
+| 9 | Test: POST `/api/execute-trade` từ SERVER C | ☑ |
+| 10 | Telegram notification test | ☑ |
 
 ### 11.4 Cross-Server Verification
 
 | # | Test | Trạng thái |
 |---|------|-----------|
-| 1 | SERVER C `ping` SERVER A qua Tailscale | ☐ |
-| 2 | SERVER C `ping` SERVER B qua Tailscale | ☐ |
-| 3 | Clock drift < 50ms giữa cả 3 server | ☐ |
+| 1 | SERVER C `ping` SERVER A qua Tailscale | ☑ |
+| 2 | SERVER C `ping` SERVER B qua Tailscale | ☑ |
+| 3 | Clock drift < 50ms giữa cả 3 server | ☑ |
 | 4 | E2E: TradingView → A (ingest) → C (analyze) → B (execute) | ☐ |
 | 5 | Telegram nhận đủ notification từ cả 3 server | ☐ |
 | 6 | UptimeRobot/Cloudflare monitor đang active | ☐ |
