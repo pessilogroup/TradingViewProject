@@ -1,21 +1,75 @@
-//@version=5
-// Strategy template detailing the webhook setup for:
-// - "A.007 + MIS v2 Combined (Auto Paper Trading)"
-// - "A.007 + MIS v1 Combined (Auto Paper Trading)"
-//
-// Designed to route alerts through a local reverse proxy tunnel to the Local Server's `/webhook` endpoint.
-strategy("A.007 + MIS Webhook Integration", overlay=true)
+//@version=6
+// ============================================================================
+// MIS(A7-01B.V3) Webhook — Pure Indicator + Multi-Timeframe EMA + SL/TP
+// ============================================================================
+// Converted from strategy to indicator for clean separation on chart.
+// Adaptive EMA crossover with MTF reference lines and auto SL/TP drawing.
+// Webhook payload compatible with FastAPI WebhookGateway.
+// ============================================================================
+indicator("MIS(A7-01B.V3) Webhook", overlay=true, max_labels_count=100, max_lines_count=50)
 
-// --- Strategy Inputs & Parameters ---
-useA007 = input.bool(true, "Enable A.007 Breakout Logic", group="Strategy Settings")
-useMIS  = input.bool(true, "Enable MIS Trend Filter", group="Strategy Settings")
-webhookSecret = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret", group="Webhook Settings", tooltip="Secret key to authorize webhook requests")
-confidenceScore = input.int(85, "Confidence Score (%)", minval=0, maxval=100, group="Strategy Settings")
+// ═════════════════════════════════════════════════════════════════
+// INPUTS
+// ═════════════════════════════════════════════════════════════════
 
-// --- Mock Trading Logic (Replace with actual strategy conditions) ---
-fastEMA = ta.ema(close, 20)
-slowEMA = ta.ema(close, 50)
+// --- Core Settings ---
+grp_core = "Core Settings"
+webhookSecret   = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret", group=grp_core, tooltip="Secret key for FastAPI webhook auth")
+confidenceScore = input.int(85, "Confidence Score (%)", minval=0, maxval=100, group=grp_core)
+
+// --- Risk / SL-TP ---
+grp_risk = "Risk Management"
+atrSlMul = input.float(2.0, "SL Multiplier (x ATR)", minval=0.5, maxval=10.0, step=0.1, group=grp_risk)
+atrTpMul = input.float(4.0, "TP Multiplier (x ATR)", minval=1.0, maxval=20.0, step=0.5, group=grp_risk)
+
+// --- Visual Toggles ---
+grp_vis = "Visual Toggles"
+showEmaRibbon  = input.bool(true,  "EMA Ribbon (local fast/slow)", group=grp_vis)
+showMtfDaily   = input.bool(true,  "MTF: Daily EMA 20/50", group=grp_vis)
+showMtf1H      = input.bool(true,  "MTF: 1H EMA 20/50", group=grp_vis)
+showSlTp       = input.bool(true,  "SL/TP Lines on entry", group=grp_vis)
+showMarkers    = input.bool(true,  "Entry/Exit Markers", group=grp_vis)
+showTable      = input.bool(true,  "Status Table", group=grp_vis)
+showBgFlash    = input.bool(false, "Background Flash on entry", group=grp_vis)
+
+// ═════════════════════════════════════════════════════════════════
+// ADAPTIVE EMA CALCULATION
+// ═════════════════════════════════════════════════════════════════
+
+// Periods scale with timeframe to maintain consistent time windows
+adaptiveFast() =>
+    switch timeframe.period
+        "1"   => 3
+        "3"   => 4
+        "5"   => 5
+        "15"  => 8
+        "30"  => 12
+        "60"  => 20
+        "240" => 20
+        =>       20
+
+adaptiveSlow() =>
+    switch timeframe.period
+        "1"   => 8
+        "3"   => 10
+        "5"   => 13
+        "15"  => 21
+        "30"  => 34
+        "60"  => 50
+        "240" => 50
+        =>       50
+
+fastLen = adaptiveFast()
+slowLen = adaptiveSlow()
+
+fastEMA = ta.ema(close, fastLen)
+slowEMA = ta.ema(close, slowLen)
 atrVal  = ta.atr(14)
+rsiVal  = ta.rsi(close, 14)
+
+// ═════════════════════════════════════════════════════════════════
+// SIGNAL CONDITIONS
+// ═════════════════════════════════════════════════════════════════
 
 longCondition  = ta.crossover(fastEMA, slowEMA) and barstate.isconfirmed
 shortCondition = ta.crossunder(fastEMA, slowEMA) and barstate.isconfirmed
@@ -23,42 +77,170 @@ shortCondition = ta.crossunder(fastEMA, slowEMA) and barstate.isconfirmed
 longExitCondition  = ta.crossunder(close, fastEMA) and barstate.isconfirmed
 shortExitCondition = ta.crossover(close, fastEMA) and barstate.isconfirmed
 
-// --- Webhook Payload Generator Helper ---
-// Generates the strict JSON schema expected by the FastAPI WebhookGateway
+isBull = fastEMA > slowEMA
+isBear = fastEMA < slowEMA
+
+// ═════════════════════════════════════════════════════════════════
+// MULTI-TIMEFRAME REFERENCE EMAs
+// ═════════════════════════════════════════════════════════════════
+
+// Daily EMA 20/50 — [1] offset avoids lookahead bias
+dailyEma20 = request.security(syminfo.tickerid, "D", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma50 = request.security(syminfo.tickerid, "D", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// 1H EMA 20/50 — [1] offset avoids lookahead bias
+h1Ema20 = request.security(syminfo.tickerid, "60", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+h1Ema50 = request.security(syminfo.tickerid, "60", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// ═════════════════════════════════════════════════════════════════
+// SL / TP LINES (drawn on entry signal, cleared on exit)
+// ═════════════════════════════════════════════════════════════════
+
+var line slLine = na
+var line tpLine = na
+var float slPrice = na
+var float tpPrice = na
+var int   signalDir = 0  // 1=long, -1=short, 0=flat
+
+if longCondition
+    signalDir := 1
+    slPrice   := close - atrVal * atrSlMul
+    tpPrice   := close + atrVal * atrTpMul
+    // Clear old lines
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLine)
+        line.delete(tpLine)
+    // Draw new
+    if showSlTp
+        slLine := line.new(bar_index, slPrice, bar_index + 20, slPrice, color=color.new(#ff1744, 30), style=line.style_dashed, width=2)
+        tpLine := line.new(bar_index, tpPrice, bar_index + 20, tpPrice, color=color.new(#00c853, 30), style=line.style_dashed, width=2)
+
+if shortCondition
+    signalDir := -1
+    slPrice   := close + atrVal * atrSlMul
+    tpPrice   := close - atrVal * atrTpMul
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLine)
+        line.delete(tpLine)
+    if showSlTp
+        slLine := line.new(bar_index, slPrice, bar_index + 20, slPrice, color=color.new(#ff1744, 30), style=line.style_dashed, width=2)
+        tpLine := line.new(bar_index, tpPrice, bar_index + 20, tpPrice, color=color.new(#00c853, 30), style=line.style_dashed, width=2)
+
+// Clear SL/TP on exit
+if (signalDir == 1 and longExitCondition) or (signalDir == -1 and shortExitCondition)
+    signalDir := 0
+    slPrice   := na
+    tpPrice   := na
+    if not na(slLine)
+        line.delete(slLine)
+        slLine := na
+    if not na(tpLine)
+        line.delete(tpLine)
+        tpLine := na
+
+// ═════════════════════════════════════════════════════════════════
+// WEBHOOK PAYLOAD GENERATOR
+// ═════════════════════════════════════════════════════════════════
+
 generate_payload(action, signal_type, direction) =>
     payload = '{"secret":"' + webhookSecret + '"'
-    payload := payload + ',"source":"indicator"'
-    payload := payload + ',"indicator_name":"A.007 + MIS Combined"'
-    payload := payload + ',"symbol":"' + syminfo.ticker + '"'
-    payload := payload + ',"signal_type":"' + signal_type + '"'
-    payload := payload + ',"action":"' + action + '"'
-    payload := payload + ',"price":"' + str.tostring(close) + '"'
-    payload := payload + ',"interval":"' + timeframe.period + '"'
-    payload := payload + ',"exchange":"' + syminfo.prefix + '"'
-    payload := payload + ',"confidence_score":' + str.tostring(confidenceScore)
-    payload := payload + ',"metadata":{"direction":"' + direction + '"'
-    payload := payload + ',"atr_value":"' + str.tostring(atrVal) + '"}'
-    payload := payload + '}'
+    payload += ',"source":"indicator"'
+    payload += ',"indicator_name":"MIS(A7-01B.V3)"'
+    payload += ',"symbol":"' + syminfo.ticker + '"'
+    payload += ',"signal_type":"' + signal_type + '"'
+    payload += ',"action":"' + action + '"'
+    payload += ',"price":"' + str.tostring(close) + '"'
+    payload += ',"interval":"' + timeframe.period + '"'
+    payload += ',"exchange":"' + syminfo.prefix + '"'
+    payload += ',"confidence_score":' + str.tostring(confidenceScore)
+    payload += ',"metadata":{"direction":"' + direction + '"'
+    payload += ',"atr_value":"' + str.tostring(atrVal) + '"'
+    payload += ',"sl":"' + str.tostring(nz(slPrice, 0.0)) + '"'
+    payload += ',"tp":"' + str.tostring(nz(tpPrice, 0.0)) + '"}'
+    payload += '}'
     payload
 
+// ═════════════════════════════════════════════════════════════════
+// ALERT DISPATCH (Dual: alertcondition + alert)
+// ═════════════════════════════════════════════════════════════════
 
-// --- Execution & Alert Dispatch ---
-if (longCondition)
-    strategy.entry("Long", strategy.long)
+// Auto webhook alerts
+if longCondition
     alert(generate_payload("buy", "entry", "long"), alert.freq_once_per_bar_close)
 
-if (shortCondition)
-    strategy.entry("Short", strategy.short)
+if shortCondition
     alert(generate_payload("sell", "entry", "short"), alert.freq_once_per_bar_close)
 
-if (longExitCondition)
-    strategy.close("Long")
+if longExitCondition
     alert(generate_payload("sell", "exit", "long"), alert.freq_once_per_bar_close)
 
-if (shortExitCondition)
-    strategy.close("Short")
+if shortExitCondition
     alert(generate_payload("buy", "exit", "short"), alert.freq_once_per_bar_close)
 
-// --- Visualization ---
-plotshape(longCondition,  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, title="Long Entry")
-plotshape(shortCondition, style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, title="Short Entry")
+// Manual alertconditions (user can set in TradingView Alert UI)
+alertcondition(longCondition,  title="Long Entry",  message="MIS A7-01B: Long entry signal")
+alertcondition(shortCondition, title="Short Entry", message="MIS A7-01B: Short entry signal")
+alertcondition(longExitCondition,  title="Long Exit",  message="MIS A7-01B: Long exit signal")
+alertcondition(shortExitCondition, title="Short Exit", message="MIS A7-01B: Short exit signal")
+
+// ═════════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ═════════════════════════════════════════════════════════════════
+
+// --- Local EMA Ribbon ---
+pFast = plot(showEmaRibbon ? fastEMA : na, color=color.new(#2196f3, 20), linewidth=1, title="Fast EMA")
+pSlow = plot(showEmaRibbon ? slowEMA : na, color=color.new(#ff9800, 20), linewidth=2, title="Slow EMA")
+fill(pFast, pSlow, color=isBull ? color.new(#00c853, 88) : color.new(#ff1744, 88), title="EMA Ribbon Fill")
+
+// --- MTF Daily EMA Reference ---
+plot(showMtfDaily ? dailyEma20 : na, color=color.new(#e040fb, 40), linewidth=2, style=plot.style_stepline_diamond, title="Daily EMA 20")
+plot(showMtfDaily ? dailyEma50 : na, color=color.new(#e040fb, 70), linewidth=3, style=plot.style_stepline, title="Daily EMA 50")
+
+// --- MTF 1H EMA Reference ---
+plot(showMtf1H ? h1Ema20 : na, color=color.new(#00bcd4, 40), linewidth=1, style=plot.style_stepline_diamond, title="1H EMA 20")
+plot(showMtf1H ? h1Ema50 : na, color=color.new(#00bcd4, 70), linewidth=2, style=plot.style_stepline, title="1H EMA 50")
+
+// --- Entry/Exit Markers ---
+plotshape(showMarkers and longCondition,  style=shape.labelup,   location=location.belowbar, color=color.new(#00c853, 0), size=size.small, title="Long Entry",  text="L", textcolor=color.white)
+plotshape(showMarkers and shortCondition, style=shape.labeldown, location=location.abovebar, color=color.new(#ff1744, 0), size=size.small, title="Short Entry", text="S", textcolor=color.white)
+plotshape(showMarkers and longExitCondition,  style=shape.xcross, location=location.abovebar, color=color.new(#ff9800, 40), size=size.tiny, title="Long Exit")
+plotshape(showMarkers and shortExitCondition, style=shape.xcross, location=location.belowbar, color=color.new(#2196f3, 40), size=size.tiny, title="Short Exit")
+
+// --- Background Flash ---
+bgcolor(showBgFlash and longCondition  ? color.new(#00c853, 92) : na, title="Long Flash")
+bgcolor(showBgFlash and shortCondition ? color.new(#ff1744, 92) : na, title="Short Flash")
+
+// ═════════════════════════════════════════════════════════════════
+// STATUS TABLE — top-right, compact
+// ═════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 7, border_width=1)
+
+if showTable and barstate.islast
+    trendColor = isBull ? color.new(#00c853, 20) : color.new(#ff1744, 20)
+    trendText  = isBull ? "BULL" : "BEAR"
+    hdrBg      = color.new(#37474f, 10)
+
+    table.cell(infoTable, 0, 0, "A7-01B.V3", bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, timeframe.period + "m", bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 1, "Trend", text_size=size.small)
+    table.cell(infoTable, 1, 1, trendText, bgcolor=trendColor, text_color=color.white, text_size=size.small)
+
+    table.cell(infoTable, 0, 2, "EMA", text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(fastLen) + "/" + str.tostring(slowLen), text_size=size.small)
+
+    table.cell(infoTable, 0, 3, "RSI", text_size=size.small)
+    rsiColor = rsiVal > 70 ? color.new(#ff1744, 30) : rsiVal < 30 ? color.new(#00c853, 30) : color.new(color.gray, 70)
+    table.cell(infoTable, 1, 3, str.tostring(rsiVal, "#.0"), bgcolor=rsiColor, text_size=size.small)
+
+    table.cell(infoTable, 0, 4, "ATR", text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(atrVal, "#.0"), text_size=size.small)
+
+    table.cell(infoTable, 0, 5, "SL", text_size=size.small)
+    table.cell(infoTable, 1, 5, na(slPrice) ? "-" : str.tostring(slPrice, "#.0"), bgcolor=na(slPrice) ? na : color.new(#ff1744, 60), text_size=size.small)
+
+    table.cell(infoTable, 0, 6, "TP", text_size=size.small)
+    table.cell(infoTable, 1, 6, na(tpPrice) ? "-" : str.tostring(tpPrice, "#.0"), bgcolor=na(tpPrice) ? na : color.new(#00c853, 60), text_size=size.small)
