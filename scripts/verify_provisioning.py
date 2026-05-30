@@ -386,7 +386,7 @@ def main():
         
         # 4. SSH hardening
         print("Running Check 11.1.4 (SSH config checking)...")
-        code, out, err = conn_a.run("grep -E '^PasswordAuthentication no|^PermitRootLogin no' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null")
+        code, out, err = conn_a.run('grep -E "^PasswordAuthentication no|^PermitRootLogin no" /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null')
         p = code == 0 or conn_a.user == "botuser"  # If we logged in successfully as botuser via key, it's hardened
         results["11.1.4"] = {"passed": p, "msg": "SSH hardened (root disallowed or password authentication disabled)." if p else "SSH hardening flags not found."}
         
@@ -408,7 +408,7 @@ def main():
         # 7. NTP Chrony
         print("Running Check 11.1.7 (Chrony active check)...")
         code, out, err = conn_a.run("systemctl is-active chrony || systemctl is-active chronyd")
-        p = code == 0 and out.strip() == "active"
+        p = code == 0 and "active" in out.splitlines()
         results["11.1.7"] = {"passed": p, "msg": "Chrony NTP sync active." if p else "Chrony NTP sync inactive."}
         
         # 8. Swap space
@@ -479,7 +479,7 @@ def main():
         
         # 14. BUFFER_SECRET
         print("Running Check 11.1.14 (BUFFER_SECRET)...")
-        code, out, err = conn_a.run("grep -E '^BUFFER_SECRET=' /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null")
+        code, out, err = conn_a.run('grep -E "^BUFFER_SECRET=" /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null')
         p = False
         msg = "BUFFER_SECRET not found in env configuration files."
         if code == 0 and "BUFFER_SECRET" in out:
@@ -493,7 +493,7 @@ def main():
         
         # 15. Telegram
         print("Running Check 11.1.15 (Telegram credentials)...")
-        code, out, err = conn_a.run("grep -E '^TELEGRAM_BOT_TOKEN=' /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null")
+        code, out, err = conn_a.run('grep -E "^TELEGRAM_BOT_TOKEN=" /opt/trading-bot/.env /opt/trading-bot/vbs/.env /home/botuser/trading-bot/.env /home/botuser/trading-bot/vbs/.env 2>/dev/null')
         p = code == 0 and "TELEGRAM_BOT_TOKEN" in out
         results["11.1.15"] = {"passed": p, "msg": "Telegram token configured." if p else "Telegram credentials missing."}
 
@@ -521,7 +521,7 @@ def main():
         # 3. NTP
         print("Running Check 11.2.3 (Chrony status)...")
         code, out, err = conn_c.run("systemctl is-active chrony || systemctl is-active chronyd")
-        p = code == 0 and out.strip() == "active"
+        p = code == 0 and "active" in out.splitlines()
         results["11.2.3"] = {"passed": p, "msg": "Chrony NTP active." if p else "Chrony NTP inactive."}
         
         # 4. Docker
