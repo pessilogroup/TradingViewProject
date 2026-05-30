@@ -43,12 +43,13 @@ def _cmd_prefix(cmd_line: str) -> str:
 
 def _scar_consult_fast(cmd_line: str) -> str:
     """
-    In-process scar consult with TTL cache.
+    Scar consult with TTL cache + dual-path search.
 
-    Path:
-        1. Check cache (0ms) → hit? return cached advisory
-        2. Miss → embed in-process (~50ms) → Qdrant search (~50ms)
-        3. Store result in cache (hit or miss) with TTL
+    Path priority:
+        1. C: Check cache (0ms) → hit? return immediately
+        2. B: In-process embed + Qdrant search (~100ms)
+        3. A: Fallback to angati.exe subprocess (~300ms)
+        4. C: Store result in cache (5min TTL)
 
     Returns advisory string or "" if no relevant scars.
     """
@@ -65,16 +66,12 @@ def _scar_consult_fast(cmd_line: str) -> str:
         if now - ts < _SCAR_CACHE_TTL:
             return cached_advisory or ""
 
-    # ── B: In-process embed + search ──
+    # ── B: Try in-process embed + Qdrant (fastest) ──
     try:
-        # Use the already-warm fastembed model (loaded at boot)
         vector = scar_memory._embed(cmd_line)
 
-        # Get or create Qdrant client (reuse connection)
         if _qdrant_client_cached is None:
             _qdrant_client_cached = scar_memory._get_client()
-
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
 
         results = _qdrant_client_cached.search(
             collection_name=scar_memory.COLLECTION_NAME,
@@ -96,14 +93,34 @@ def _scar_consult_fast(cmd_line: str) -> str:
                 _scar_cache[prefix] = (now, advisory)
                 return advisory
 
-        # No match — cache the miss too (avoid re-querying)
+        # No match via Qdrant — cache miss
         _scar_cache[prefix] = (now, None)
         return ""
 
-    except Exception as exc:
-        print(f"[SRA Server] Scar consult fast error: {exc}", file=sys.stderr)
-        _scar_cache[prefix] = (now, None)  # Cache errors as miss
+    except Exception as exc_b:
+        # B failed (e.g., no Qdrant connection) — fall through to A
+        print(f"[SRA Server] Scar consult B (in-process) failed: {exc_b}, falling back to A (subprocess)", file=sys.stderr)
+
+    # ── A: Fallback to angati.exe subprocess (~300ms) ──
+    try:
+        scars = scar_memory.consult(cmd_line, top_k=3)
+        if scars:
+            relevant = [s for s in scars if s.get("score", 0) >= _SCAR_SCORE_THRESHOLD]
+            if relevant:
+                rules = [s.get("prevention_rule", "") for s in relevant if s.get("prevention_rule")]
+                if rules:
+                    advisory = " | ".join(rules[:2])
+                    _scar_cache[prefix] = (now, advisory)
+                    return advisory
+
+        _scar_cache[prefix] = (now, None)
         return ""
+
+    except Exception as exc_a:
+        print(f"[SRA Server] Scar consult A (subprocess) also failed: {exc_a}", file=sys.stderr)
+        _scar_cache[prefix] = (now, None)
+        return ""
+
 
 class ThreadingHTTPServer(ThreadingTCPServer, HTTPServer):
     daemon_threads = True
