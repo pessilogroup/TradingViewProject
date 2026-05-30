@@ -4,6 +4,7 @@ import re
 from unittest.mock import patch
 
 # Add scripts directory to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../scripts')))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../scripts')))
 
 import verify_provisioning

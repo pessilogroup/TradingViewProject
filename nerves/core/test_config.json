@@ -1,0 +1,36 @@
+{
+    "eval_thresholds": {
+        "tool_trajectory_avg_score": 0.8,
+        "response_quality_score": 0.7,
+        "scar_regression_pass": 1.0
+    },
+    "golden_datasets_dir": "lobes/knowledge/eval_datasets/",
+    "known_scar_patterns": [
+        {
+            "id": "SCAR-001",
+            "pattern": "CommandNotFoundException",
+            "description": "MCP vs Terminal confusion — executing MCP tool signatures in PowerShell"
+        },
+        {
+            "id": "SCAR-002",
+            "pattern": "UTF-16LE|encoding.*corrupt",
+            "description": "PowerShell encoding trap — Add-Content defaults to UTF-16LE"
+        },
+        {
+            "id": "SCAR-003",
+            "pattern": "&&|\\|\\||cat <<",
+            "description": "Shell Hallucination — Bash syntax in PowerShell"
+        },
+        {
+            "id": "SCAR-G2-001",
+            "pattern": "isinstance.*bool.*track_message|return.*True.*track",
+            "description": "Silent downstream contract breach — bool instead of List[Tuple]"
+        }
+    ],
+    "metadata": {
+        "version": "10.0.0",
+        "framework": "ADK-compatible evaluation",
+        "created": "2026-05-31",
+        "description": "Test configuration for ADK evaluation metrics integration"
+    }
+}
