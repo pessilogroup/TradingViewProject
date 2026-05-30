@@ -66,6 +66,33 @@ def parse_ssh_config(host):
     return settings
 
 
+def natural_sort_key(item):
+    """Sort key function for natural numeric sorting of checklist items (e.g. '11.1.2')."""
+    key, _ = item
+    return [int(x) for x in re.findall(r'\d+', key)]
+
+
+def is_ssh_connection_failure(code, stdout, stderr):
+    """Determine if the result indicates an SSH connection/authentication failure."""
+    if code == 255:
+        return True
+    if code in (-1, -2, -3):
+        return True
+    if stderr:
+        conn_indicators = [
+            "Permission denied (publickey",
+            "Connection timed out",
+            "Connection refused",
+            "Host key verification failed",
+            "ssh: connect to host",
+            "Connection closed by"
+        ]
+        for indicator in conn_indicators:
+            if indicator in stderr:
+                return True
+    return False
+
+
 def run_ssh_command(ip, user, key_path, cmd):
     """Execute command over SSH. Tries OpenSSH CLI first, falls back to Paramiko."""
     # Build OpenSSH command
@@ -76,8 +103,18 @@ def run_ssh_command(ip, user, key_path, cmd):
     
     try:
         res = subprocess.run(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
-        # If connection succeeds, return output
-        if res.returncode == 0 or ("Permission denied" not in res.stderr and "Connection timed out" not in res.stderr):
+        # Determine if OpenSSH command failed due to connection/auth issues
+        is_conn_error = (res.returncode == 255) or any(
+            msg in res.stderr for msg in [
+                "Permission denied (publickey",
+                "Connection timed out",
+                "Connection refused",
+                "Host key verification failed",
+                "ssh: connect to host",
+                "Connection closed by"
+            ]
+        )
+        if not is_conn_error:
             return res.returncode, res.stdout, res.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "Timeout expired"
@@ -171,20 +208,35 @@ class SSHConn:
         self.ip = ip
         self.user = user
         self.key_path = key_path
+        self.connection_failed = False
         
     def run(self, cmd):
+        # Fail-fast check
+        if self.connection_failed:
+            return -3, "", f"SSH connection failed: cached connection failure for {self.host_name}."
+            
         # Try primary user
         code, out, err = run_ssh_command(self.ip, self.user, self.key_path, cmd)
         
-        # Fallback to botuser if user is root and connection failed with authentication errors
-        if code != 0 and ("Permission denied" in err or "publickey" in err or "Auth failed" in err or "connection failed" in err):
-            fallback_user = "botuser"
-            if self.user != fallback_user:
-                # Try connection again with fallback user
+        # Check if primary connection failed due to connection/auth error
+        if is_ssh_connection_failure(code, out, err):
+            # Fallback to botuser if user is root
+            if self.user == "root":
+                fallback_user = "botuser"
                 code_fb, out_fb, err_fb = run_ssh_command(self.ip, fallback_user, self.key_path, cmd)
-                if code_fb == 0 or ("Permission denied" not in err_fb and "Connection timed out" not in err_fb):
+                # Fallback attempt is only considered successful if it did not return an SSH connection failure
+                if not is_ssh_connection_failure(code_fb, out_fb, err_fb):
                     self.user = fallback_user
                     return code_fb, out_fb, err_fb
+                else:
+                    # Both primary and fallback options fail due to connection/auth errors
+                    self.connection_failed = True
+                    return code_fb, out_fb, err_fb
+            else:
+                # Primary failed due to connection/auth error and no fallback options available
+                self.connection_failed = True
+                return code, out, err
+                
         return code, out, err
 
 
@@ -764,7 +816,7 @@ def main():
                 }
                 skipped_count += 1
 
-    for key, val in sorted(full_results.items()):
+    for key, val in sorted(full_results.items(), key=natural_sort_key):
         status_str = f"[{val['status']}]"
         print(f"  {status_str} {key}: {val['msg']}")
 
@@ -781,7 +833,7 @@ def main():
             "skipped": skipped_count,
             "total": len(full_results)
         },
-        "details": full_results
+        "details": dict(sorted(full_results.items(), key=natural_sort_key))
     }
 
     with open("provisioning_report.json", "w", encoding="utf-8") as f:
@@ -810,7 +862,7 @@ def main():
         "|----|-------------|--------|---------|"
     ]
 
-    for key, val in sorted(full_results.items()):
+    for key, val in sorted(full_results.items(), key=natural_sort_key):
         md_lines.append(f"| {key} | {val['description']} | **{val['status']}** | {val['msg']} |")
 
     md_lines.extend([
@@ -865,12 +917,10 @@ def main():
                             if match:
                                 num = int(match.group(1))
                                 key = f"{current_section}.{num}"
-                                if key in results:
-                                    passed = results[key]["passed"]
-                                    new_box = "☑" if passed else "☐"
+                                if key in results and results[key]["passed"]:
                                     parts = line.split("|")
                                     if len(parts) >= 4:
-                                        parts[-2] = f" {new_box} "
+                                        parts[-2] = " ☑ "
                                         line = "|".join(parts)
                         new_lines.append(line)
                         
