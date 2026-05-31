@@ -77,13 +77,13 @@ jobs:
           cd server
           python -m security.cli scan || echo "Warning: Review security scan report"
 
-  # ── 1B. ORGANIZED TEST SUITE (575 Tests — 4 Stages) ─────────────────
-  # Stage 1: Unit + Property   (399 tests) — Fast gate, pure logic
-  # Stage 2: Integration       ( 41 tests) — API routes, DB, webhooks
-  # Stage 3: System            (100 tests) — Cross-cutting: VBS, VPS, pipeline
-  # Stage 4: E2E + Security    ( 35 tests) — Playwright browser + auth
+  # ── 1B. ORGANIZED TEST SUITE (4 Stages — auto-counted) ─────────────────
+  # Stage 1: Unit + Property   — Fast gate, pure logic
+  # Stage 2: Integration       — API routes, DB, webhooks
+  # Stage 3: System            — Cross-cutting: VBS, VPS, pipeline
+  # Stage 4: E2E + Security    — Playwright browser + auth
   ci-tests:
-    name: Run Test Suite (575 Tests — Organized)
+    name: Run Organized Test Suite
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -148,57 +148,62 @@ jobs:
         if: steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
-      # ── Stage 1: Unit + Property Tests (399 tests) ──────────────────
+      # ── Stage 1: Unit + Property Tests ──────────────────────────────
       # Pure logic, no I/O, no network. Fastest feedback gate.
-      # Sources: tests/unit/ (382), tests/property/ (17)
-      - name: "Stage 1/4: Unit + Property Tests (399)"
+      # Sources: tests/unit/, tests/property/
+      - name: "Stage 1/4: Unit + Property Tests"
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          echo "🧪 Stage 1: Unit + Property — pure logic, fast gate"
+          COUNT=$(python -m pytest tests/unit/ tests/property/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
+          echo "🧪 Stage 1: Unit + Property — $COUNT tests (pure logic, fast gate)"
           python -m pytest tests/unit/ tests/property/ -x -n auto --dist worksteal --tb=short -q
 
-      # ── Stage 2: Integration Tests (41 tests) ───────────────────────
+      # ── Stage 2: Integration Tests ───────────────────────────────────
       # API routes, database, webhook pipeline, dashboard, health checks.
       # Sources: tests/integration/
-      - name: "Stage 2/4: Integration Tests (41)"
+      - name: "Stage 2/4: Integration Tests"
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          echo "🔗 Stage 2: Integration — API routes, DB, webhooks"
+          COUNT=$(python -m pytest tests/integration/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
+          echo "🔗 Stage 2: Integration — $COUNT tests (API routes, DB, webhooks)"
           python -m pytest tests/integration/ -x -n auto --dist worksteal --tb=short -q
 
-      # ── Stage 3: System Tests (100 tests) ───────────────────────────
+      # ── Stage 3: System Tests ─────────────────────────────────────────
       # Cross-cutting: VBS filtering, VPS analyzer, pipeline forwarding,
       # execution server, RAG remote, adversarial, decentralized approval.
       # Sources: tests/test_*.py (root-level)
-      - name: "Stage 3/4: System Tests (100)"
+      - name: "Stage 3/4: System Tests"
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          echo "⚙️ Stage 3: System — cross-cutting VBS/VPS/pipeline/adversarial"
-          python -m pytest tests/test_vps_analyzer.py tests/test_execution_server.py tests/test_pipeline_forwarding.py tests/test_rag_remote.py tests/test_vps_adversarial_1.py tests/test_vps_adversarial_2.py tests/test_verify_provisioning.py tests/test_decentralized_approval.py tests/test_vbs_filtering.py -x -n auto --dist worksteal --tb=short -q
+          SYSTEM_FILES=$(find tests/ -maxdepth 1 -name 'test_*.py' | sort | tr '\n' ' ')
+          COUNT=$(python -m pytest $SYSTEM_FILES --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
+          echo "⚙️ Stage 3: System — $COUNT tests (cross-cutting VBS/VPS/pipeline/adversarial)"
+          python -m pytest $SYSTEM_FILES -x -n auto --dist worksteal --tb=short -q
 
-      # ── Stage 4: E2E + Security Tests (35 tests) ────────────────────
+      # ── Stage 4: E2E + Security Tests ──────────────────────────────
       # Browser-based flows (Playwright), auth security properties.
-      # Sources: tests/e2e/ (29), tests/security/ (6)
-      - name: "Stage 4/4: E2E + Security Tests (35)"
+      # Sources: tests/e2e/, tests/security/
+      - name: "Stage 4/4: E2E + Security Tests"
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          echo "🔒 Stage 4: E2E + Security — browser flows, auth validation"
+          COUNT=$(python -m pytest tests/e2e/ tests/security/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
+          echo "🔒 Stage 4: E2E + Security — $COUNT tests (browser flows, auth validation)"
           python -m pytest tests/e2e/ tests/security/ -x --tb=short -q
 
       # Đánh dấu test đã pass cho hash này → lần sau bypass
