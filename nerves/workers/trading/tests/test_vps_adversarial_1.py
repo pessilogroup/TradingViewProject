@@ -274,7 +274,7 @@ async def test_consumer_pull_signals_timeout():
 
 @pytest.mark.asyncio
 async def test_consumer_poll_loop_recovers():
-    """Verify that poll_loop handles exceptions from pull_signals, sleeps 5s, and continues."""
+    """Verify that poll_loop handles exceptions from pull_signals, backs off, and continues."""
     from workers.vps_consumer import VpsSignalConsumer
 
     consumer = VpsSignalConsumer()
@@ -293,12 +293,14 @@ async def test_consumer_poll_loop_recovers():
 
     consumer.pull_signals = mock_pull_signals
 
-    # Mock asyncio.sleep to check it is called with 5 seconds for recovery
+    # Mock asyncio.sleep to check it is called with a backoff value
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         await consumer.poll_loop()
         
-        # Verify it slept 5 seconds on exception
-        mock_sleep.assert_any_call(5)
+        # Verify it slept with an exponential backoff value (5-8s range due to jitter)
+        assert mock_sleep.call_count >= 1
+        sleep_val = mock_sleep.call_args_list[0][0][0]
+        assert 5 <= sleep_val <= 8, f"Expected backoff in [5, 8], got {sleep_val}"
         # And it called pull_signals twice
         assert call_count == 2
 
