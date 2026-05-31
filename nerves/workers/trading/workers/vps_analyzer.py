@@ -609,7 +609,8 @@ class VpsAnalyzerWorker:
         log.info(f"[VpsAnalyzer] Forwarding to Server B: {url}")
         try:
             session = await self.get_session()
-            async with session.post(url, json=trade_payload, headers=headers, timeout=30) as resp:
+            timeout = aiohttp.ClientTimeout(connect=5, total=10)
+            async with session.post(url, json=trade_payload, headers=headers, timeout=timeout) as resp:
                 body = await resp.json()
                 if resp.status == 200:
                     log.info(
