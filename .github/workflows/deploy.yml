@@ -39,7 +39,7 @@ jobs:
               - 'vbs/**'
               - '.github/workflows/**'
 
-  # ── 1A. LINT & SECURITY (Fast ~30s) ────────────────────────────────
+  # ── 1A. LINT & SECURITY (Fast ~15s — zero pip install) ───────────
   ci-lint-security:
     name: Lint & Security Scan
     needs: changes
@@ -57,23 +57,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install lint tools
-        run: pip install ruff
-
       - name: Code Linting (Ruff)
-        run: ruff check server/ --exit-zero
+        run: pipx run ruff check server/ --exit-zero
 
       - name: Security AST Scan
         run: |
           cd server
           python -m security.cli scan || echo "Warning: Review security scan report"
 
-  # ── 1B. ORGANIZED TEST SUITE (4 Parallel Stages — auto-counted) ────
-  # All 4 stages run IN PARALLEL on separate runners for max speed.
-  # Stage 1: Unit + Property   — Fast gate, pure logic
-  # Stage 2: Integration       — API routes, DB, webhooks
-  # Stage 3: System            — Cross-cutting: VBS, VPS, pipeline
-  # Stage 4: E2E + Security    — Playwright browser + auth
+  # ── 1B. ORGANIZED TEST SUITE (2 Parallel Runners) ──────────────────
+  # Runner 1 (Fast):    Unit + Property + Integration + System (540 tests)
+  # Runner 2 (Browser): E2E + Security (35 tests)
+  # Both run IN PARALLEL — only 2 installs instead of 4.
   ci-tests:
     name: "Test: ${{ matrix.stage }}"
     needs: changes
@@ -83,22 +78,12 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - stage: "Unit + Property"
-            paths: "tests/unit/ tests/property/"
+          - stage: "Fast (Unit + Integration + System)"
+            paths: "tests/unit/ tests/property/ tests/integration/ __auto_root__"
             parallel: true
-            playwright: false
-          - stage: "Integration"
-            paths: "tests/integration/"
-            parallel: true
-            playwright: false
-          - stage: "System"
-            paths: "__auto_root__"
-            parallel: true
-            playwright: false
-          - stage: "E2E + Security"
+          - stage: "Browser (E2E + Security)"
             paths: "tests/e2e/ tests/security/"
             parallel: false
-            playwright: true
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -146,7 +131,7 @@ jobs:
           uv pip install --system -r server/requirements-test.txt
 
       - name: Cache Playwright browsers
-        if: steps.test-cache.outputs.cache-hit != 'true' && matrix.playwright
+        if: steps.test-cache.outputs.cache-hit != 'true'
         id: playwright-cache
         uses: actions/cache@v5
         with:
@@ -156,7 +141,7 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium Browser
-        if: steps.test-cache.outputs.cache-hit != 'true' && matrix.playwright && steps.playwright-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: "Run Tests: ${{ matrix.stage }}"
@@ -166,11 +151,13 @@ jobs:
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          # Resolve test paths (auto-detect root-level test files for System stage)
-          if [ "${{ matrix.paths }}" = "__auto_root__" ]; then
-            TEST_PATHS=$(find tests/ -maxdepth 1 -name 'test_*.py' | sort | tr '\n' ' ')
+          # Resolve test paths (expand __auto_root__ to root-level test files)
+          RAW_PATHS="${{ matrix.paths }}"
+          if echo "$RAW_PATHS" | grep -q '__auto_root__'; then
+            ROOT_FILES=$(find tests/ -maxdepth 1 -name 'test_*.py' | sort | tr '\n' ' ')
+            TEST_PATHS=$(echo "$RAW_PATHS" | sed "s|__auto_root__|$ROOT_FILES|")
           else
-            TEST_PATHS="${{ matrix.paths }}"
+            TEST_PATHS="$RAW_PATHS"
           fi
 
           # Auto-count tests
