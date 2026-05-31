@@ -39,7 +39,7 @@ jobs:
               - 'vbs/**'
               - '.github/workflows/**'
 
-  # ── 1A. LINT & SECURITY (Fast ~40s) ────────────────────────────────
+  # ── 1A. LINT & SECURITY (Fast ~30s) ────────────────────────────────
   ci-lint-security:
     name: Lint & Security Scan
     needs: changes
@@ -56,18 +56,9 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: |
-            nerves/workers/trading/requirements.txt
-            nerves/workers/trading/requirements-test.txt
 
-      - name: Install uv (fast pip)
-        run: pip install uv
-
-      - name: Install Dependencies
-        run: |
-          uv pip install --system -r server/requirements.txt
-          uv pip install --system -r server/requirements-test.txt
+      - name: Install lint tools
+        run: pip install ruff
 
       - name: Code Linting (Ruff)
         run: ruff check server/ --exit-zero
@@ -77,16 +68,37 @@ jobs:
           cd server
           python -m security.cli scan || echo "Warning: Review security scan report"
 
-  # ── 1B. ORGANIZED TEST SUITE (4 Stages — auto-counted) ─────────────────
+  # ── 1B. ORGANIZED TEST SUITE (4 Parallel Stages — auto-counted) ────
+  # All 4 stages run IN PARALLEL on separate runners for max speed.
   # Stage 1: Unit + Property   — Fast gate, pure logic
   # Stage 2: Integration       — API routes, DB, webhooks
   # Stage 3: System            — Cross-cutting: VBS, VPS, pipeline
   # Stage 4: E2E + Security    — Playwright browser + auth
   ci-tests:
-    name: Run Organized Test Suite
+    name: "Test: ${{ matrix.stage }}"
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - stage: "Unit + Property"
+            paths: "tests/unit/ tests/property/"
+            parallel: true
+            playwright: false
+          - stage: "Integration"
+            paths: "tests/integration/"
+            parallel: true
+            playwright: false
+          - stage: "System"
+            paths: "__auto_root__"
+            parallel: true
+            playwright: false
+          - stage: "E2E + Security"
+            paths: "tests/e2e/ tests/security/"
+            parallel: false
+            playwright: true
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -97,18 +109,17 @@ jobs:
         run: |
           CODE_HASH=$(find nerves/workers/trading -type f -name '*.py' | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
           echo "hash=$CODE_HASH" >> $GITHUB_OUTPUT
-          echo "📎 Code hash: $CODE_HASH"
 
       - name: Check test result cache
         id: test-cache
         uses: actions/cache@v5
         with:
           path: .test-passed
-          key: test-passed-${{ steps.code-hash.outputs.hash }}
+          key: test-passed-${{ matrix.stage }}-${{ steps.code-hash.outputs.hash }}
 
-      - name: Skip tests (cache hit — code unchanged)
+      - name: Skip tests (cache hit)
         if: steps.test-cache.outputs.cache-hit == 'true'
-        run: echo "⚡ Tests already passed for this code hash. Skipping full test suite."
+        run: echo "⚡ [${{ matrix.stage }}] Tests already passed for this code hash."
 
       - name: Create server symlink
         if: steps.test-cache.outputs.cache-hit != 'true'
@@ -135,7 +146,7 @@ jobs:
           uv pip install --system -r server/requirements-test.txt
 
       - name: Cache Playwright browsers
-        if: steps.test-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true' && matrix.playwright
         id: playwright-cache
         uses: actions/cache@v5
         with:
@@ -145,68 +156,34 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium Browser
-        if: steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        if: steps.test-cache.outputs.cache-hit != 'true' && matrix.playwright && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
-      # ── Stage 1: Unit + Property Tests ──────────────────────────────
-      # Pure logic, no I/O, no network. Fastest feedback gate.
-      # Sources: tests/unit/, tests/property/
-      - name: "Stage 1/4: Unit + Property Tests"
+      - name: "Run Tests: ${{ matrix.stage }}"
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          COUNT=$(python -m pytest tests/unit/ tests/property/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
-          echo "🧪 Stage 1: Unit + Property — $COUNT tests (pure logic, fast gate)"
-          python -m pytest tests/unit/ tests/property/ -x -n auto --dist worksteal --tb=short -q
+          # Resolve test paths (auto-detect root-level test files for System stage)
+          if [ "${{ matrix.paths }}" = "__auto_root__" ]; then
+            TEST_PATHS=$(find tests/ -maxdepth 1 -name 'test_*.py' | sort | tr '\n' ' ')
+          else
+            TEST_PATHS="${{ matrix.paths }}"
+          fi
 
-      # ── Stage 2: Integration Tests ───────────────────────────────────
-      # API routes, database, webhook pipeline, dashboard, health checks.
-      # Sources: tests/integration/
-      - name: "Stage 2/4: Integration Tests"
-        if: steps.test-cache.outputs.cache-hit != 'true'
-        env:
-          VPS_BUFFER_ENABLED: "false"
-          CHROMA_REMOTE: "false"
-        run: |
-          cd server
-          COUNT=$(python -m pytest tests/integration/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
-          echo "🔗 Stage 2: Integration — $COUNT tests (API routes, DB, webhooks)"
-          python -m pytest tests/integration/ -x -n auto --dist worksteal --tb=short -q
+          # Auto-count tests
+          COUNT=$(python -m pytest $TEST_PATHS --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)' || echo "?")
+          echo "🧪 [${{ matrix.stage }}] Running $COUNT tests"
 
-      # ── Stage 3: System Tests ─────────────────────────────────────────
-      # Cross-cutting: VBS filtering, VPS analyzer, pipeline forwarding,
-      # execution server, RAG remote, adversarial, decentralized approval.
-      # Sources: tests/test_*.py (root-level)
-      - name: "Stage 3/4: System Tests"
-        if: steps.test-cache.outputs.cache-hit != 'true'
-        env:
-          VPS_BUFFER_ENABLED: "false"
-          CHROMA_REMOTE: "false"
-        run: |
-          cd server
-          SYSTEM_FILES=$(find tests/ -maxdepth 1 -name 'test_*.py' | sort | tr '\n' ' ')
-          COUNT=$(python -m pytest $SYSTEM_FILES --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
-          echo "⚙️ Stage 3: System — $COUNT tests (cross-cutting VBS/VPS/pipeline/adversarial)"
-          python -m pytest $SYSTEM_FILES -x -n auto --dist worksteal --tb=short -q
+          # Run with or without parallelism
+          if [ "${{ matrix.parallel }}" = "true" ]; then
+            python -m pytest $TEST_PATHS -x -n auto --dist worksteal --tb=short -q
+          else
+            python -m pytest $TEST_PATHS -x --tb=short -q
+          fi
 
-      # ── Stage 4: E2E + Security Tests ──────────────────────────────
-      # Browser-based flows (Playwright), auth security properties.
-      # Sources: tests/e2e/, tests/security/
-      - name: "Stage 4/4: E2E + Security Tests"
-        if: steps.test-cache.outputs.cache-hit != 'true'
-        env:
-          VPS_BUFFER_ENABLED: "false"
-          CHROMA_REMOTE: "false"
-        run: |
-          cd server
-          COUNT=$(python -m pytest tests/e2e/ tests/security/ --collect-only -q 2>/dev/null | tail -1 | grep -oP '\d+(?= tests?)')
-          echo "🔒 Stage 4: E2E + Security — $COUNT tests (browser flows, auth validation)"
-          python -m pytest tests/e2e/ tests/security/ -x --tb=short -q
-
-      # Đánh dấu test đã pass cho hash này → lần sau bypass
       - name: Mark tests passed for cache
         if: steps.test-cache.outputs.cache-hit != 'true'
         run: |
