@@ -3,9 +3,10 @@ from pydantic import BaseModel, Field
 
 class IngestResponse(BaseModel):
     queued: bool
-    queue_id: int
-    expires_at: str
+    queue_id: Optional[int] = None
+    expires_at: Optional[str] = None
     status: str
+    duplicate_of: Optional[int] = None
 
 class QueueSignal(BaseModel):
     queue_id: int

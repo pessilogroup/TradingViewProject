@@ -73,6 +73,33 @@ async def write_audit_log(db: aiosqlite.Connection, queue_id: int, event: str, c
         (queue_id, event, utc_now_str(), consumer_id, detail)
     )
 
+async def check_duplicate(
+    symbol: str, action: str, price: float, window_seconds: int = 10
+) -> Optional[int]:
+    """Check if a signal with same symbol+action+price exists within the dedup window.
+
+    Uses a fingerprint of (symbol_upper, action_lower, rounded_price) within
+    a configurable time window.
+
+    Returns:
+        The existing queue_id if duplicate found, None otherwise.
+    """
+    cutoff = (utc_now() - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    sym = symbol.upper()
+    act = action.lower()
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            """SELECT id FROM signal_queue
+               WHERE UPPER(symbol) = ? AND LOWER(action) = ?
+                 AND received_at >= ?
+               ORDER BY id DESC LIMIT 1""",
+            (sym, act, cutoff),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
 async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
     """Insert a new signal into the queue."""
     now = utc_now()
@@ -101,7 +128,7 @@ async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
         quote_qty_float = 10.0
 
     interval = payload.get("interval", "")
-    exchange = payload.get("exchange") or "binance"
+    exchange = (payload.get("exchange") or "binance").upper()
     sl = payload.get("sl", "")
     tp = payload.get("tp", "")
     source = payload.get("source", "")

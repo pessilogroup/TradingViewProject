@@ -64,6 +64,41 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
     # Remove secret from payload before database persistence
     payload.pop("secret", None)
 
+    # ── Dedup check: reject same (symbol, action) within DEDUP_WINDOW_SECONDS ──
+    symbol = payload.get("symbol", "UNKNOWN")
+    if ":" in symbol:
+        symbol = symbol.split(":")[-1]
+    action = payload.get("action") or payload.get("side") or "alert"
+    price = payload.get("price")
+    try:
+        price_float = float(str(price).replace(",", "")) if price else 0.0
+    except (ValueError, TypeError):
+        price_float = 0.0
+
+    existing_id = await database.check_duplicate(
+        symbol, action, price_float, config.DEDUP_WINDOW_SECONDS
+    )
+    if existing_id is not None:
+        exchange = (payload.get("exchange") or "binance").upper()
+        log.info(
+            f"VBS Dedup: {symbol} {action} @ {price} is duplicate of #{existing_id} "
+            f"(within {config.DEDUP_WINDOW_SECONDS}s window)"
+        )
+        msg = (
+            f"🔁 <b>VBS Signal DEDUP</b>\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Action: <b>{action.upper()}</b>\n"
+            f"Duplicate of: <b>#{existing_id}</b>\n"
+            f"Exchange: {exchange}\n"
+            f"Blocked within {config.DEDUP_WINDOW_SECONDS}s window"
+        )
+        await notifier.send_telegram_alert(msg)
+        return {
+            "queued": False,
+            "duplicate_of": existing_id,
+            "status": "DUPLICATE"
+        }
+
     # Insert signal
     queue_id, expires_at = await database.insert_signal(payload)
     
@@ -73,9 +108,7 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
     _new_signal_event.set()
 
     # Notify Telegram asynchronously
-    symbol = payload.get("symbol", "UNKNOWN")
-    action = payload.get("action") or payload.get("side") or "alert"
-    exchange = payload.get("exchange") or "binance"
+    exchange = (payload.get("exchange") or "binance").upper()
     
     msg = (
         f"📥 <b>VBS Signal Queued</b>\n"
