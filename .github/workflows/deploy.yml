@@ -8,7 +8,7 @@ on:
     branches:
       - main
 
-# All actions upgraded to Node.js 24 native versions
+# All actions upgraded to Node.js 24 native versions (setup-python@v6, checkout@v6, cache@v5)
 
 jobs:
   # ── 0. CHANGE DETECTION ────────────────────────────────────────────
@@ -53,7 +53,7 @@ jobs:
         run: ln -s nerves/workers/trading server
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -77,7 +77,7 @@ jobs:
 
   # ── 1B. TESTS (Slow ~4min — skipped if cache hit) ──────────────────
   ci-tests:
-    name: Run Test Suite (520+ Tests)
+    name: Run Test Suite (574+ Tests)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -110,7 +110,7 @@ jobs:
 
       - name: Set up Python 3.11
         if: steps.test-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -118,12 +118,15 @@ jobs:
             nerves/workers/trading/requirements.txt
             nerves/workers/trading/requirements-test.txt
 
+      - name: Install uv (fast pip)
+        if: steps.test-cache.outputs.cache-hit != 'true'
+        run: pip install uv
+
       - name: Install Dependencies
         if: steps.test-cache.outputs.cache-hit != 'true'
         run: |
-          python -m pip install --upgrade pip
-          pip install -r server/requirements.txt
-          pip install -r server/requirements-test.txt
+          uv pip install --system -r server/requirements.txt
+          uv pip install --system -r server/requirements-test.txt
 
       - name: Cache Playwright browsers
         if: steps.test-cache.outputs.cache-hit != 'true'
@@ -139,14 +142,14 @@ jobs:
         if: steps.test-cache.outputs.cache-hit != 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
-      - name: Run Test Suite (520+ Tests)
+      - name: Run Test Suite (574+ Tests)
         if: steps.test-cache.outputs.cache-hit != 'true'
         env:
           VPS_BUFFER_ENABLED: "false"
           CHROMA_REMOTE: "false"
         run: |
           cd server
-          python -m pytest tests/ -n auto --tb=short
+          python -m pytest tests/ -x -n auto --dist worksteal --tb=short -q
 
       # Đánh dấu test đã pass cho hash này → lần sau bypass
       - name: Mark tests passed for cache
