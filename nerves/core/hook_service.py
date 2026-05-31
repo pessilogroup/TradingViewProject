@@ -16,6 +16,15 @@ References:
     - adk_callback_bridge.py: ADK Event/Context adapters
 """
 import sys
+
+# Configure sys.stdout and sys.stderr to ignore encoding errors (SCAR-019)
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+        sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+    except Exception:
+        pass
+
 import json
 import time as _time
 import threading
@@ -85,9 +94,36 @@ _stats = {
 
 
 def _cmd_prefix(cmd_line: str) -> str:
-    """Extract first 2 tokens of command for cache key grouping."""
-    tokens = cmd_line.strip().split()[:2]
-    return " ".join(tokens).lower()
+    """
+    Extract parameterized cache key from command for precise grouping.
+    Prioritizes file paths or extensions first, falling back to non-option words.
+    """
+    tokens = cmd_line.strip().split()
+    if not tokens:
+        return ""
+    binary = tokens[0].lower()
+    
+    if "/" in binary or "\\" in binary:
+        binary = Path(binary).name
+        
+    target = ""
+    # Phase 1: Look for any token that looks like a file path or has an extension
+    for t in tokens[1:]:
+        if not t.startswith("-") and ("/" in t or "\\" in t or "." in t):
+            if "/" in t or "\\" in t:
+                target = Path(t).name
+            else:
+                target = t
+            break
+            
+    # Phase 2: Fallback to the first non-option token longer than 3 chars
+    if not target:
+        for t in tokens[1:]:
+            if not t.startswith("-") and len(t) > 3:
+                target = t
+                break
+                
+    return f"{binary}:{target}".lower()
 
 
 def _scar_cache_invalidate(action: str):
@@ -468,6 +504,12 @@ def check_angati_version_async():
 def main():
     check_angati_version_async()
     port = 9105
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                port = int(sys.argv[i + 1])
+            except ValueError:
+                pass
     server_address = ('', port)
     httpd = ThreadingHTTPServer(server_address, SRAHookHandler)
     print(f"[SRA Server] Running SRA Hybrid Hook Server on port {port}...", file=sys.stderr)

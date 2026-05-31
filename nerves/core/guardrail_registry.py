@@ -83,6 +83,58 @@ def _resolve_npx_cmd() -> str:
 # Guardrail Handler Functions
 # ---------------------------------------------------------------------------
 
+def powershell_syntax_check(tool_name: str, tool_input: dict, context: dict) -> dict:
+    """
+    Windows PowerShell Syntax Guard — prevents running invalid bash statements/operators,
+    unrecognized unix commands, and improper command argument quoting on Windows.
+    """
+    if sys.platform != "win32":
+        return {"verdict": "ALLOW"}
+
+    cmd_line = tool_input.get("CommandLine", "")
+    if not cmd_line:
+        return {"verdict": "ALLOW"}
+
+    errors = []
+    if "&&" in cmd_line:
+        errors.append("Invalid operator '&&' in PowerShell. Use ';' or run commands sequentially, or use a Python script.")
+    if "||" in cmd_line:
+        errors.append("Invalid operator '||' in PowerShell. Use try/catch or if/else, or run a Python script.")
+    if "cat <<" in cmd_line or "<< EOF" in cmd_line:
+        errors.append("Invalid heredoc '<<' in Windows PowerShell. Use write_to_file or a Python script.")
+
+    # Validate gh api stopping-parser usage
+    if "gh api" in cmd_line and "--%" not in cmd_line:
+        errors.append("Potential 'gh api' argument parsing error. Always use the PowerShell stop-parsing operator '--%' (e.g. 'gh api --% repos/...') or quote your arguments to prevent PowerShell from splitting them.")
+
+    # Validate jq quoting/interpolation issues in PowerShell
+    if "jq" in cmd_line and '"' in cmd_line:
+        if '\\(' in cmd_line or '(' in cmd_line:
+            if any(p in cmd_line for p in (".name", ".conclusion", ".status", ".state")):
+                errors.append("PowerShell subexpression evaluation detected in 'jq' filter. Wrap 'jq' queries in single quotes (') instead of double quotes (\") to prevent PowerShell from executing '\\(.name)' as a command.")
+
+    subcommands = [s.strip() for s in cmd_line.replace("\n", " ").split(";")]
+    for sub in subcommands:
+        if not sub:
+            continue
+        words = sub.split()
+        first_word = words[0].lower() if words else ""
+        if "/" in first_word or "\\" in first_word:
+            first_word = Path(first_word).name.lower()
+            
+        if first_word in {"grep", "sed", "awk"}:
+            errors.append(f"Unix binary '{first_word}' is not natively supported on Windows. Use python scripts, python -c, or native tools (e.g. grep_search).")
+
+    if errors:
+        return {
+            "verdict": "BLOCK",
+            "reason": " | ".join(errors),
+            "remediation": "Rewrite the command using valid PowerShell syntax (e.g., replace '&&' with ';'), use Python, or use native file/search tools."
+        }
+
+    return {"verdict": "ALLOW"}
+
+
 def kg_guard_check(tool_name: str, tool_input: dict, context: dict) -> dict:
     """
     Knowledge Graph Guard — prevents writes to protected files.
@@ -327,19 +379,47 @@ def error_detect_post_tool(tool_name: str, tool_input: dict, context: dict) -> d
     return result
 
 
+import queue
+import threading
+
+_scar_record_queue = queue.Queue()
+
+def _scar_record_worker():
+    while True:
+        task = _scar_record_queue.get()
+        if task is None:
+            break
+        failed_action, error_msg, tool_name, cache_invalidator, context_name, prevention_rule = task
+        try:
+            import core_scar_memory as scar_memory
+            if scar_memory:
+                scar_memory.record_scar(
+                    failed_action=failed_action,
+                    error_signature=error_msg[:300],
+                    recovery_action="",
+                    prevention_rule=prevention_rule,
+                    context=context_name,
+                )
+                if cache_invalidator:
+                    cache_invalidator(failed_action)
+        except Exception as e:
+            print(f"[SRA Async Worker] Error recording scar: {e}", file=sys.stderr)
+        finally:
+            _scar_record_queue.task_done()
+
+_worker_thread = threading.Thread(target=_scar_record_worker, daemon=True)
+_worker_thread.start()
+
+
 def scar_record_on_error(tool_name: str, tool_input: dict, context: dict) -> dict:
     """
-    Scar Recording — records failures to scar memory for future consultation.
+    Scar Recording — records failures to scar memory for future consultation asynchronously.
 
     Closes the feedback loop: /on-error → scar record → /pre-tool scar consult.
     Records scars for run_command AND file write failures.
 
     Maps to ADK: on_error callback.
     """
-    scar_memory = context.get("scar_memory")
-    if not scar_memory:
-        return {"verdict": "ALLOW", "reason": "scar_memory not available"}
-
     error_msg = context.get("error", "") or context.get("tool_output", "")
     if isinstance(error_msg, dict):
         error_msg = json.dumps(error_msg)[:500]
@@ -359,23 +439,12 @@ def scar_record_on_error(tool_name: str, tool_input: dict, context: dict) -> dic
         failed_action = f"Tool {tool_name}"
         prevention_rule = f"Tool {tool_name} failed. Error: {error_msg[:200]}"
 
-    try:
-        scar_memory.record_scar(
-            failed_action=failed_action,
-            error_signature=error_msg[:300],
-            recovery_action="",
-            prevention_rule=prevention_rule,
-            context=f"hook_on_error/{tool_name}",
-        )
+    cache_invalidator = context.get("cache_invalidator")
+    context_name = f"hook_on_error/{tool_name}"
 
-        # Invalidate cache (if hook_service provides it)
-        cache_invalidator = context.get("cache_invalidator")
-        if cache_invalidator:
-            cache_invalidator(failed_action)
+    _scar_record_queue.put((failed_action, error_msg, tool_name, cache_invalidator, context_name, prevention_rule))
 
-        return {"verdict": "ALLOW", "action": f"scar_recorded:{tool_name}"}
-    except Exception as exc:
-        return {"verdict": "ALLOW", "reason": f"scar record error: {exc}"}
+    return {"verdict": "ALLOW", "action": f"scar_recorded_queued:{tool_name}"}
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +459,13 @@ FILE_WRITING_TOOLS = frozenset({
 
 GUARDRAILS = {
     # ── before_tool (pre-tool) ──
+    "powershell_syntax": {
+        "type": "before_tool",
+        "tools": {"run_command"},
+        "handler": powershell_syntax_check,
+        "short_circuit": True,
+        "description": "Windows PowerShell Syntax Guard — prevents running invalid statement separators/operators on Windows"
+    },
     "kg_guard": {
         "type": "before_tool",
         "tools": FILE_WRITING_TOOLS,

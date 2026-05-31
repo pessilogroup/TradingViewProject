@@ -124,9 +124,16 @@ class VpsSignalConsumer:
     async def poll_loop(self):
         """Continuous polling background task using long-polling."""
         log.info("[VpsConsumer] Starting background long-poll loop...")
+        import random
+        _backoff = 0  # current backoff in seconds (0 = no backoff)
+        _MAX_BACKOFF = 60
+        _consecutive_errors = 0
         while True:
             try:
                 signals = await self.pull_signals(limit=5)
+                # Reset backoff on success
+                _backoff = 0
+                _consecutive_errors = 0
                 if not signals:
                     # Sleep 1 second when the poll returns empty
                     await asyncio.sleep(1)
@@ -138,10 +145,37 @@ class VpsSignalConsumer:
             except asyncio.CancelledError:
                 log.info("[VpsConsumer] Background poll loop cancelled.")
                 break
+            except aiohttp.ClientResponseError as e:
+                _consecutive_errors += 1
+                if e.status in (401, 403):
+                    # Auth errors won't self-resolve — long backoff, no traceback
+                    _backoff = _MAX_BACKOFF
+                    if _consecutive_errors <= 3 or _consecutive_errors % 20 == 0:
+                        log.error(
+                            f"[VpsConsumer] AUTH ERROR (HTTP {e.status}): VPS_BUFFER_SECRET mismatch. "
+                            f"Check .env VPS_BUFFER_SECRET matches Server A BUFFER_SECRET. "
+                            f"Retrying in {_backoff}s (error #{_consecutive_errors})"
+                        )
+                else:
+                    # Other HTTP errors — standard backoff
+                    _backoff = min(_MAX_BACKOFF, max(5, _backoff * 2) + random.uniform(0, 2))
+                    log.error(f"[VpsConsumer] HTTP {e.status} from VBS. Sleeping {_backoff:.0f}s: {e}")
+                await asyncio.sleep(_backoff)
+            except (aiohttp.ClientConnectorError, ConnectionRefusedError, OSError) as e:
+                # Network/connection errors — exponential backoff with jitter
+                _consecutive_errors += 1
+                _backoff = min(_MAX_BACKOFF, max(5, _backoff * 2) + random.uniform(0, 2))
+                if _consecutive_errors <= 5 or _consecutive_errors % 20 == 0:
+                    log.warning(
+                        f"[VpsConsumer] Connection error to VBS (attempt #{_consecutive_errors}). "
+                        f"Sleeping {_backoff:.0f}s: {e}"
+                    )
+                await asyncio.sleep(_backoff)
             except Exception as e:
-                log.exception(f"[VpsConsumer] Error or connection issue in poll loop. Sleeping 5s: {e}")
-                # Sleep 5 seconds if a connection or other error occurs
-                await asyncio.sleep(5)
+                _consecutive_errors += 1
+                _backoff = min(_MAX_BACKOFF, max(5, _backoff * 2) + random.uniform(0, 2))
+                log.exception(f"[VpsConsumer] Unexpected error in poll loop. Sleeping {_backoff:.0f}s: {e}")
+                await asyncio.sleep(_backoff)
 
     async def _process_signal(self, signal: Dict[str, Any]):
         """Processes a single signal pulled from VPS."""
