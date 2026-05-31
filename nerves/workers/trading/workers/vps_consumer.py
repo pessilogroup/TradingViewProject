@@ -52,6 +52,11 @@ class VpsSignalConsumer:
             "limit": limit,
             "timeout": 30
         }
+        if getattr(config, "VPS_BUFFER_SOURCE_FILTER", None):
+            params["source"] = config.VPS_BUFFER_SOURCE_FILTER
+        if getattr(config, "VPS_BUFFER_EXCLUDE_FILTER", None):
+            params["exclude_source"] = config.VPS_BUFFER_EXCLUDE_FILTER
+            
         headers = {
             "X-Buffer-Secret": config.VPS_BUFFER_SECRET
         }

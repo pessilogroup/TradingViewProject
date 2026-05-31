@@ -31,6 +31,8 @@ async def lifespan(app: FastAPI):
     await database.init_db()
     from exchanges.registry import init_registry
     init_registry()
+    from exchanges.health_monitor import start_health_monitor
+    start_health_monitor()
     if config.TELEGRAM_BOT_ENABLED:
         import telegram_bot
         telegram_bot.start_bot()
@@ -39,6 +41,8 @@ async def lifespan(app: FastAPI):
     if config.TELEGRAM_BOT_ENABLED:
         import telegram_bot
         telegram_bot.stop_bot()
+    from exchanges.health_monitor import stop_health_monitor
+    stop_health_monitor()
     log.info("Execution Server shutting down.")
 
 

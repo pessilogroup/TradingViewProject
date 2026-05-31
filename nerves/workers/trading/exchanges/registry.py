@@ -13,17 +13,19 @@ class ExchangeRegistry:
         self._health_status: Dict[str, bool] = {}
 
     def register(self, adapter: ExchangeAdapter) -> None:
-        self._adapters[adapter.exchange_name] = adapter
-        self._health_status[adapter.exchange_name] = True
-        log.info(f"Registered ExchangeAdapter: {adapter.exchange_name}")
+        name = adapter.exchange_name.lower()
+        self._adapters[name] = adapter
+        self._health_status[name] = True
+        log.info(f"Registered ExchangeAdapter: {name}")
 
     def get_adapter(self, exchange_id: str) -> ExchangeAdapter:
-        if exchange_id not in self._adapters:
+        eid = exchange_id.lower()
+        if eid not in self._adapters:
             available = list(self._adapters.keys())
             raise ExchangeNotFoundError(
                 f"Exchange '{exchange_id}' not registered. Available: {available}"
             )
-        return self._adapters[exchange_id]
+        return self._adapters[eid]
 
     def list_exchanges(self) -> List[Dict[str, Any]]:
         return [
@@ -40,20 +42,21 @@ class ExchangeRegistry:
         return list(self._adapters.keys())
 
     def mark_unavailable(self, exchange_id: str) -> None:
-        self._health_status[exchange_id] = False
+        self._health_status[exchange_id.lower()] = False
 
     def mark_available(self, exchange_id: str) -> None:
-        self._health_status[exchange_id] = True
+        self._health_status[exchange_id.lower()] = True
 
     def is_available(self, exchange_id: str) -> bool:
-        return self._health_status.get(exchange_id, False)
+        return self._health_status.get(exchange_id.lower(), False)
 
     @property
     def default_exchange(self) -> str:
         """First registered exchange is the default."""
         import config
-        if config.DEFAULT_EXCHANGE in self._adapters:
-            return config.DEFAULT_EXCHANGE
+        default = config.DEFAULT_EXCHANGE.lower()
+        if default in self._adapters:
+            return default
         if not self._adapters:
             raise ExchangeNotFoundError("No exchanges registered")
         return next(iter(self._adapters))

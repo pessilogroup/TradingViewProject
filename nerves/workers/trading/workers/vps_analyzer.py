@@ -101,6 +101,7 @@ class VpsAnalyzerWorker:
             "consumer_id": self.consumer_id,
             "limit": 5,
             "timeout": self.LONG_POLL_TIMEOUT,
+            "exclude_source": "indicator",
         }
         headers = {"X-Buffer-Secret": config.VPS_BUFFER_SECRET}
 

@@ -211,6 +211,8 @@ VPS_CONSUMER_ID          = os.getenv("VPS_CONSUMER_ID", "local-01")
 VPS_POLL_INTERVAL_SECONDS= int(os.getenv("VPS_POLL_INTERVAL_SECONDS", "30"))
 VPS_STARTUP_PULL_LIMIT   = int(os.getenv("VPS_STARTUP_PULL_LIMIT", "50"))
 MAX_SIGNAL_AGE_MINUTES   = int(os.getenv("MAX_SIGNAL_AGE_MINUTES", "240"))
+VPS_BUFFER_SOURCE_FILTER  = os.getenv("VPS_BUFFER_SOURCE_FILTER", "")
+VPS_BUFFER_EXCLUDE_FILTER = os.getenv("VPS_BUFFER_EXCLUDE_FILTER", "")
 
 # ── Pipeline Forwarding: Server B Execution & Local Failover (Phase 5+) ──
 LOCAL_EXECUTE_URL = os.getenv("LOCAL_EXECUTE_URL", "").rstrip("/")

@@ -100,6 +100,8 @@ async def consume_long_poll(
     consumer_id: str = Query(..., description="Unique client worker identifier"),
     limit: int = Query(10, ge=1, le=100),
     timeout: int = Query(30, ge=5, le=60),
+    source: Optional[str] = Query(None, description="Include only signals from this source"),
+    exclude_source: Optional[str] = Query(None, description="Exclude signals from this source"),
     x_buffer_secret: Optional[str] = Header(None, alias="X-Buffer-Secret"),
 ):
     """
@@ -116,7 +118,7 @@ async def consume_long_poll(
     verify_buffer_secret(x_buffer_secret)
 
     # 1. Immediate check
-    signals = await database.consume_signals(consumer_id, limit)
+    signals = await database.consume_signals(consumer_id, limit, source, exclude_source)
     if signals:
         return {"signals": signals, "count": len(signals), "waited_seconds": 0}
 
@@ -128,7 +130,7 @@ async def consume_long_poll(
     try:
         await asyncio.wait_for(_new_signal_event.wait(), timeout=float(timeout))
         # Event fired — a new signal was just ingested, fetch it now
-        signals = await database.consume_signals(consumer_id, limit)
+        signals = await database.consume_signals(consumer_id, limit, source, exclude_source)
         waited = round(time.time() - t_start, 2)
         return {"signals": signals, "count": len(signals), "waited_seconds": waited}
     except asyncio.TimeoutError:
@@ -139,12 +141,14 @@ async def consume_long_poll(
 async def consume_signals(
     consumer_id: str = Query(..., description="Unique client worker identifier"),
     limit: int = Query(10, ge=1, le=100),
+    source: Optional[str] = Query(None, description="Include only signals from this source"),
+    exclude_source: Optional[str] = Query(None, description="Exclude signals from this source"),
     x_buffer_secret: Optional[str] = Header(None, alias="X-Buffer-Secret")
 ):
     """Local Bot polls this endpoint to pull pending signals."""
     verify_buffer_secret(x_buffer_secret)
     
-    signals = await database.consume_signals(consumer_id, limit)
+    signals = await database.consume_signals(consumer_id, limit, source, exclude_source)
     return {
         "signals": signals,
         "count": len(signals),

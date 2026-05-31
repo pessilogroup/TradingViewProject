@@ -146,18 +146,35 @@ async def get_pending_count() -> int:
             row = await cur.fetchone()
             return row[0] if row else 0
 
-async def consume_signals(consumer_id: str, limit: int) -> List[Dict[str, Any]]:
+async def consume_signals(
+    consumer_id: str, 
+    limit: int, 
+    source: Optional[str] = None, 
+    exclude_source: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Retrieve and dispatch pending signals, marking them as DISPATCHED."""
     now_str = utc_now_str()
     signals = []
     
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Build dynamic query based on source filters
+        query = "SELECT * FROM signal_queue WHERE status = 'PENDING' AND expires_at > ?"
+        params = [now_str]
+        
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+            
+        if exclude_source:
+            query += " AND (source IS NULL OR source != ?)"
+            params.append(exclude_source)
+            
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+        
         # Retrieve pending signals that are not expired yet
-        async with db.execute(
-            "SELECT * FROM signal_queue WHERE status = 'PENDING' AND expires_at > ? ORDER BY id ASC LIMIT ?",
-            (now_str, limit)
-        ) as cur:
+        async with db.execute(query, tuple(params)) as cur:
             rows = await cur.fetchall()
             
         if not rows:
