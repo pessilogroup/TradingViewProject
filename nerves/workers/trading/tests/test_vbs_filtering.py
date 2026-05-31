@@ -9,13 +9,11 @@ from unittest.mock import AsyncMock, patch
 import sys
 from pathlib import Path
 
-# Save original modules if they exist
-original_config = sys.modules.get('config')
-original_database = sys.modules.get('database')
+# All module names that overlap between server/ and vbs/
+_VBS_MODULE_NAMES = ['config', 'database', 'main', 'router', 'models', 'notifier', 'scheduler']
 
-# Clean out cached config and database modules so vbs imports its own files
-sys.modules.pop('config', None)
-sys.modules.pop('database', None)
+# Save original modules if they exist
+_originals = {name: sys.modules.pop(name, None) for name in _VBS_MODULE_NAMES}
 
 # Add vbs folder to front of sys.path
 vbs_path = str(Path(__file__).resolve().parents[4] / "vbs")
@@ -27,15 +25,11 @@ import database as vbs_db
 from main import app as vbs_app
 
 # Restore the original modules to sys.modules to prevent test pollution
-if original_config is not None:
-    sys.modules['config'] = original_config
-else:
-    sys.modules.pop('config', None)
-
-if original_database is not None:
-    sys.modules['database'] = original_database
-else:
-    sys.modules.pop('database', None)
+for name in _VBS_MODULE_NAMES:
+    if _originals[name] is not None:
+        sys.modules[name] = _originals[name]
+    else:
+        sys.modules.pop(name, None)
 
 
 @pytest.fixture(autouse=True)
