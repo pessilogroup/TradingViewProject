@@ -237,6 +237,7 @@ jobs:
           ssh botuser@${{ secrets.SERVER_A_IP }} 'bash -s' << 'EOF'
             set -e
             cd /opt/trading-bot
+            git reset --hard origin/main
             OLD_SHA=$(git rev-parse HEAD)
             echo "$OLD_SHA" > .rollback_sha
             git fetch origin
@@ -351,6 +352,7 @@ jobs:
             DEPLOY_DIR="/opt/trading-bot"
             [ ! -d "$DEPLOY_DIR/.git" ] && DEPLOY_DIR="/home/botuser/trading-bot"
             cd "$DEPLOY_DIR"
+            git reset --hard origin/main
             OLD_SHA=$(git rev-parse HEAD)
             echo "$OLD_SHA" > .rollback_sha
             git fetch origin
@@ -486,6 +488,7 @@ jobs:
             $OldSha | Out-File -FilePath .rollback_sha -Encoding utf8
             
             git fetch origin
+            git reset --hard origin/main
             git checkout main
             git pull origin main
             
