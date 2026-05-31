@@ -1,4 +1,6 @@
 //@version=6
+// V3.3: Refactored payload to use VBS_Webhook_Lib (shared library)
+import dinhvietdan88/VBS_Webhook_Lib/3 as vbs
 // ============================================================================
 // MIS(A7-01B.V3) Webhook — Forecast Visual Risk Management
 // ============================================================================
@@ -368,44 +370,43 @@ if exitLong or exitShort
     trailStop  := na
 
 // ═══════════════════════════════════════════════════════════════
-// WEBHOOK PAYLOAD
+// WEBHOOK PAYLOAD (via VBS_Webhook_Lib)
 // ═══════════════════════════════════════════════════════════════
 
-generate_payload(action, signal_type, direction) =>
-    payload = '{"secret":"' + webhookSecret + '"'
-    payload += ',"source":"indicator"'
-    payload += ',"indicator_name":"MIS(A7-01B.V3)"'
-    payload += ',"version":"' + VERSION + '"'
-    payload += ',"symbol":"' + syminfo.ticker + '"'
-    payload += ',"signal_type":"' + signal_type + '"'
-    payload += ',"action":"' + action + '"'
-    payload += ',"price":"' + str.tostring(close) + '"'
-    payload += ',"interval":"' + timeframe.period + '"'
-    payload += ',"exchange":"' + syminfo.prefix + '"'
-    payload += ',"confidence_score":' + str.tostring(confidenceScore)
-    payload += ',"metadata":{"direction":"' + direction + '"'
-    payload += ',"atr_value":"' + str.tostring(atrVal) + '"'
-    payload += ',"sl":"' + str.tostring(nz(slPrice, 0.0)) + '"'
-    payload += ',"tp":"' + str.tostring(nz(tpPrice, 0.0)) + '"'
-    payload += ',"rrr_ratio":"' + str.tostring(activeRRR) + '"'
-    payload += ',"rrr_preset":"' + rrrPreset + '"'
-    payload += ',"sl_mode":"' + slMode + '"'
-    payload += ',"tp_mode":"' + tpMode + '"'
-    payload += ',"trail_stop":"' + str.tostring(nz(trailStop, 0.0)) + '"}}'
-    payload
+buildMisMeta(direction) =>
+    vbs.meta_join6(
+         vbs.meta_str("direction", direction),
+         vbs.meta_float("atr_value", atrVal),
+         vbs.meta_float("sl", nz(slPrice, 0.0)),
+         vbs.meta_float("tp", nz(tpPrice, 0.0)),
+         vbs.meta_float("trail_stop", nz(trailStop, 0.0)),
+         vbs.meta_str("rrr_preset", rrrPreset)
+     )
 
 // ═══════════════════════════════════════════════════════════════
 // ALERT DISPATCH
 // ═══════════════════════════════════════════════════════════════
 
 if longCondition
-    alert(generate_payload("buy", "entry", "long"), alert.freq_once_per_bar_close)
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "buy", "entry", "long", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("long")),
+         alert.freq_once_per_bar_close)
 if shortCondition
-    alert(generate_payload("sell", "entry", "short"), alert.freq_once_per_bar_close)
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "sell", "entry", "short", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("short")),
+         alert.freq_once_per_bar_close)
 if exitLong
-    alert(generate_payload("sell", "exit", "long"), alert.freq_once_per_bar_close)
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "sell", "exit", "long", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("long")),
+         alert.freq_once_per_bar_close)
 if exitShort
-    alert(generate_payload("buy", "exit", "short"), alert.freq_once_per_bar_close)
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "buy", "exit", "short", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("short")),
+         alert.freq_once_per_bar_close)
 
 alertcondition(longCondition, title="Long Entry", message="MIS A7-01B: Long entry signal")
 alertcondition(shortCondition, title="Short Entry", message="MIS A7-01B: Short entry signal")
