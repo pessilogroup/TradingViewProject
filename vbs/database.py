@@ -296,7 +296,7 @@ async def stale_cleanup() -> int:
     async with aiosqlite.connect(config.DB_PATH) as db:
         # Get count
         async with db.execute(
-            "SELECT id FROM signal_queue WHERE status IN ('PENDING', 'DISPATCHED') AND expires_at < ?",
+            "SELECT id, source FROM signal_queue WHERE status IN ('PENDING', 'DISPATCHED') AND expires_at < ?",
             (now_str,)
         ) as cur:
             rows = await cur.fetchall()
@@ -305,6 +305,9 @@ async def stale_cleanup() -> int:
             return 0
             
         ids = [row[0] for row in rows]
+        # Count non-indicator signals for alerting
+        alert_count = sum(1 for row in rows if row[1] != "indicator")
+        
         placeholders = ",".join("?" for _ in ids)
         
         await db.execute(
@@ -316,8 +319,8 @@ async def stale_cleanup() -> int:
             await write_audit_log(db, q_id, "STALE", detail="Expired via TTL scheduler")
             
         await db.commit()
-        log.info(f"VBS Cleanup: marked {len(ids)} expired signals as STALE")
-        return len(ids)
+        log.info(f"VBS Cleanup: marked {len(ids)} expired signals as STALE ({alert_count} alertable)")
+        return alert_count
 
 async def requeue_timeouts(timeout_minutes: float) -> Tuple[int, List[Dict[str, Any]]]:
     """Requeue signals that were dispatched but never ACKed within the timeout period."""
