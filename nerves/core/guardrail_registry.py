@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Guardrail Registry — Declarative Safety Policies
+Guardrail Registry — Declarative Safety Policies (V2)
 
-Formalizes the Angati hook service's inline guardrail logic into a
+Formalizes the Angati hook service's guardrail logic into a
 declarative registry, aligning with Google ADK's callback/guardrail
 architecture pattern.
 
@@ -22,6 +22,13 @@ Isomorphism:
     ADK after_tool_callback   ↔  Guardrail type="after_tool"
     ConsensusEngine GO/BLOCK  ↔  short_circuit=True/False
 
+Changes V1 → V2:
+    - Added _resolve_angati_exe() centralized utility
+    - Fixed search_scars() bug → consult()
+    - Added scar_record_on_error guardrail
+    - Added gitnexus_post_commit with shell=False (npx.cmd)
+    - B+C+A scar consult integrated via hook_service._scar_consult_fast()
+
 References:
     - KI: google-adk-deep-research §8 (Callback & Guardrail System)
     - antigravity_perspective.md §15 (Native Muscle Exclusivity)
@@ -31,9 +38,45 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 AGENTS_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Shared Utilities
+# ---------------------------------------------------------------------------
+
+_angati_exe_cache: Optional[Path] = None
+
+
+def _resolve_angati_exe() -> Optional[Path]:
+    """
+    Single source of truth for angati.exe path resolution.
+    Caches result after first successful lookup.
+    """
+    global _angati_exe_cache
+    if _angati_exe_cache is not None and _angati_exe_cache.exists():
+        return _angati_exe_cache
+
+    candidates = [
+        AGENTS_ROOT / "angati.exe",
+        AGENTS_ROOT / "tools" / "angati" / "angati.exe",
+        AGENTS_ROOT / "spine" / "angati" / "angati.exe",
+    ]
+    for c in candidates:
+        if c.exists():
+            _angati_exe_cache = c
+            return c
+    return None
+
+
+def _resolve_npx_cmd() -> str:
+    """Resolve npx to npx.cmd on Windows for subprocess without shell=True."""
+    npx_cmd = Path(r"C:\Program Files\nodejs\npx.cmd")
+    if npx_cmd.exists():
+        return str(npx_cmd)
+    return "npx.cmd"  # Fallback to PATH lookup
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +94,8 @@ def kg_guard_check(tool_name: str, tool_input: dict, context: dict) -> dict:
     if not target_file:
         return {"verdict": "ALLOW"}
 
-    angati_exe = AGENTS_ROOT / "angati.exe"
-    if not angati_exe.exists():
-        angati_exe = AGENTS_ROOT / "tools" / "angati" / "angati.exe"
-
-    if not angati_exe.exists():
+    angati_exe = _resolve_angati_exe()
+    if not angati_exe:
         return {"verdict": "ALLOW", "reason": "angati.exe not found — allowing by default"}
 
     try:
@@ -87,10 +127,8 @@ def circuit_breaker_check(tool_name: str, tool_input: dict, context: dict) -> di
     Maps to ADK: before_tool_callback with short-circuit.
     Maps to Angati: Amygdala scar-driven pattern detection.
     """
-    try:
-        sys.path.insert(0, str(AGENTS_ROOT / "nerves" / "core"))
-        import core_scar_memory as scar_memory
-    except ImportError:
+    scar_memory = context.get("scar_memory")
+    if not scar_memory:
         return {"verdict": "ALLOW", "reason": "scar_memory not available"}
 
     instruction = f"Executing tool {tool_name} with arguments: {json.dumps(tool_input)}"
@@ -111,27 +149,43 @@ def scar_consult_advisory(tool_name: str, tool_input: dict, context: dict) -> di
     """
     Scar Consultation — advisory check against historical failures.
 
+    Uses the B+C+A fast consult from hook_service if available,
+    falls back to scar_memory.consult() subprocess.
+
     Maps to ADK: before_tool_callback without short-circuit (advisory only).
     Maps to Angati: Hippocampus long-term memory consultation.
     """
-    try:
-        sys.path.insert(0, str(AGENTS_ROOT / "nerves" / "core"))
-        import core_scar_memory as scar_memory
-    except ImportError:
-        return {"verdict": "ALLOW"}
-
     cmd_line = tool_input.get("CommandLine", "")
     if not cmd_line:
         return {"verdict": "ALLOW"}
 
-    try:
-        results = scar_memory.search_scars(cmd_line, top_k=3)
-        if results:
+    # Try the optimized B+C+A fast path (injected by hook_service)
+    fast_consult = context.get("scar_consult_fast")
+    if fast_consult:
+        advisory = fast_consult(cmd_line)
+        if advisory:
             return {
                 "verdict": "WARN",
-                "reason": "Similar commands have caused issues before",
-                "scars": results[:3]
+                "reason": f"Similar command failed before: {advisory}",
             }
+        return {"verdict": "ALLOW"}
+
+    # Fallback: direct scar_memory.consult()
+    scar_memory = context.get("scar_memory")
+    if not scar_memory:
+        return {"verdict": "ALLOW"}
+
+    try:
+        results = scar_memory.consult(cmd_line, top_k=3)
+        if results:
+            relevant = [s for s in results if s.get("score", 0) >= 0.82]
+            if relevant:
+                rules = [s.get("prevention_rule", "") for s in relevant if s.get("prevention_rule")]
+                if rules:
+                    return {
+                        "verdict": "WARN",
+                        "reason": f"Similar command failed before: {' | '.join(rules[:2])}",
+                    }
     except Exception:
         pass
 
@@ -145,10 +199,8 @@ def reflex_advisory(tool_name: str, tool_input: dict, context: dict) -> dict:
     Maps to ADK: contextual awareness callbacks.
     Maps to Angati: ReflexSvc (keyword → SKILL.md).
     """
-    try:
-        sys.path.insert(0, str(AGENTS_ROOT / "nerves" / "core"))
-        import core_reflex as reflex
-    except ImportError:
+    reflex = context.get("reflex")
+    if not reflex:
         return {"verdict": "ALLOW"}
 
     instruction = f"Executing tool {tool_name} with arguments: {json.dumps(tool_input)}"
@@ -174,16 +226,156 @@ def gitnexus_post_commit(tool_name: str, tool_input: dict, context: dict) -> dic
         return {"verdict": "SKIP"}
 
     try:
+        npx_cmd = _resolve_npx_cmd()
         subprocess.run(
-            ["npx", "gitnexus", "analyze", "--embeddings"],
+            [npx_cmd, "gitnexus", "analyze", "--embeddings"],
             cwd=str(AGENTS_ROOT),
             capture_output=True, text=True, encoding="utf-8", errors="ignore",
-            timeout=120, shell=True, check=False
+            timeout=120, check=False
         )
     except Exception as exc:
         return {"verdict": "ALLOW", "reason": f"gitnexus error: {exc}"}
 
     return {"verdict": "ALLOW", "action": "gitnexus_analyze_completed"}
+
+
+def memory_stats_post_commit(tool_name: str, tool_input: dict, context: dict) -> dict:
+    """
+    Memory Stats — refresh stats after git operations.
+    """
+    cmd_line = tool_input.get("CommandLine", "").lower()
+    if "git commit" not in cmd_line and "git merge" not in cmd_line:
+        return {"verdict": "SKIP"}
+
+    angati_exe = _resolve_angati_exe()
+    if not angati_exe:
+        return {"verdict": "ALLOW"}
+
+    try:
+        subprocess.run(
+            [str(angati_exe), "memory", "stats"],
+            capture_output=True, text=True, encoding="utf-8", errors="ignore",
+            timeout=15, check=False
+        )
+    except Exception as exc:
+        return {"verdict": "ALLOW", "reason": f"memory stats error: {exc}"}
+
+    return {"verdict": "ALLOW"}
+
+
+# Error patterns for run_command failure detection in post-tool
+_ERROR_PATTERNS = [
+    "SyntaxError", "NameError", "TypeError", "ImportError",
+    "ModuleNotFoundError", "FileNotFoundError", "PermissionError",
+    "TimeoutExpired", "ConnectionRefusedError", "OSError",
+    "ValueError", "KeyError", "IndexError", "AttributeError",
+    "Traceback (most recent call last)",
+    "command not found", "is not recognized",
+    "The term", "CommandNotFoundException",
+    "Access is denied", "ENOENT",
+]
+
+
+def error_detect_post_tool(tool_name: str, tool_input: dict, context: dict) -> dict:
+    """
+    Error Detection — catches run_command failures in post-tool output.
+
+    Bridges the gap where IDE does NOT call /on-error for run_command
+    failures. Inspects tool_output for error patterns and records scars.
+
+    This guardrail fires on after_tool for run_command, inspects the
+    output text, and if error patterns are found + exit code != 0,
+    delegates to scar_record_on_error.
+    """
+    # Only run_command has meaningful output to inspect
+    tool_output = context.get("tool_output", "")
+    if not tool_output:
+        return {"verdict": "SKIP"}
+
+    # Normalize output to string
+    output_str = ""
+    exit_code = None
+    if isinstance(tool_output, dict):
+        output_str = str(tool_output.get("Output", "")) + str(tool_output.get("Stderr", ""))
+        exit_code = tool_output.get("ExitCode")
+    else:
+        output_str = str(tool_output)
+
+    # Check for exit code failure
+    if exit_code is not None and exit_code == 0:
+        return {"verdict": "SKIP", "reason": "exit code 0 — no error"}
+
+    # Scan for error patterns
+    detected = []
+    for pattern in _ERROR_PATTERNS:
+        if pattern in output_str:
+            detected.append(pattern)
+
+    if not detected:
+        return {"verdict": "SKIP", "reason": "no error patterns detected"}
+
+    # Error detected! Delegate to scar recording
+    error_snippet = output_str[:500]
+    context["error"] = error_snippet
+    result = scar_record_on_error(tool_name, tool_input, context)
+
+    # Enhance the result
+    patterns_found = ", ".join(detected[:3])
+    result["action"] = f"error_detected_post_tool:{patterns_found}"
+    print(f"[SRA Server] Error detected in post-tool output: {patterns_found}", file=sys.stderr)
+
+    return result
+
+
+def scar_record_on_error(tool_name: str, tool_input: dict, context: dict) -> dict:
+    """
+    Scar Recording — records failures to scar memory for future consultation.
+
+    Closes the feedback loop: /on-error → scar record → /pre-tool scar consult.
+    Records scars for run_command AND file write failures.
+
+    Maps to ADK: on_error callback.
+    """
+    scar_memory = context.get("scar_memory")
+    if not scar_memory:
+        return {"verdict": "ALLOW", "reason": "scar_memory not available"}
+
+    error_msg = context.get("error", "") or context.get("tool_output", "")
+    if isinstance(error_msg, dict):
+        error_msg = json.dumps(error_msg)[:500]
+    else:
+        error_msg = str(error_msg)[:500]
+
+    # Determine what failed
+    if tool_name == "run_command":
+        cmd_line = tool_input.get("CommandLine", "unknown command")
+        failed_action = cmd_line[:300]
+        prevention_rule = f"Command failed: {cmd_line[:100]}. Error: {error_msg[:150]}"
+    elif tool_name in {"write_to_file", "replace_file_content", "multi_replace_file_content"}:
+        target_file = tool_input.get("TargetFile", "unknown file")
+        failed_action = f"Write to {target_file}"
+        prevention_rule = f"File write failed: {target_file}. Error: {error_msg[:150]}"
+    else:
+        failed_action = f"Tool {tool_name}"
+        prevention_rule = f"Tool {tool_name} failed. Error: {error_msg[:200]}"
+
+    try:
+        scar_memory.record_scar(
+            failed_action=failed_action,
+            error_signature=error_msg[:300],
+            recovery_action="",
+            prevention_rule=prevention_rule,
+            context=f"hook_on_error/{tool_name}",
+        )
+
+        # Invalidate cache (if hook_service provides it)
+        cache_invalidator = context.get("cache_invalidator")
+        if cache_invalidator:
+            cache_invalidator(failed_action)
+
+        return {"verdict": "ALLOW", "action": f"scar_recorded:{tool_name}"}
+    except Exception as exc:
+        return {"verdict": "ALLOW", "reason": f"scar record error: {exc}"}
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +389,7 @@ FILE_WRITING_TOOLS = frozenset({
 })
 
 GUARDRAILS = {
+    # ── before_tool (pre-tool) ──
     "kg_guard": {
         "type": "before_tool",
         "tools": FILE_WRITING_TOOLS,
@@ -225,12 +418,37 @@ GUARDRAILS = {
         "short_circuit": False,
         "description": "Reflex System — keyword-triggered skill advisory"
     },
+
+    # ── after_tool (post-tool) ──
     "gitnexus_post_commit": {
         "type": "after_tool",
         "tools": {"run_command"},
         "handler": gitnexus_post_commit,
         "short_circuit": False,
         "description": "GitNexus Post-Commit — KG update after git operations"
+    },
+    "memory_stats_post_commit": {
+        "type": "after_tool",
+        "tools": {"run_command"},
+        "handler": memory_stats_post_commit,
+        "short_circuit": False,
+        "description": "Memory Stats — refresh after git operations"
+    },
+    "error_detect": {
+        "type": "after_tool",
+        "tools": {"run_command"},
+        "handler": error_detect_post_tool,
+        "short_circuit": False,
+        "description": "Error Detection — catches run_command errors in post-tool (bridges IDE gap)"
+    },
+
+    # ── on_error ──
+    "scar_record": {
+        "type": "on_error",
+        "tools": {"*"},  # Record scars for ALL tool errors
+        "handler": scar_record_on_error,
+        "short_circuit": False,
+        "description": "Scar Recording — records failures for future prevention"
     },
 }
 
@@ -249,16 +467,17 @@ def evaluate_guardrails(
     Evaluate all guardrails matching the given lifecycle type and tool.
 
     Args:
-        lifecycle_type: "before_tool" or "after_tool"
+        lifecycle_type: "before_tool", "after_tool", or "on_error"
         tool_name: Name of the tool being invoked
         tool_input: Tool arguments
-        context: Additional context (session state, etc.)
+        context: Additional context (scar_memory, reflex, etc.)
 
     Returns:
         dict with keys:
             - decision: "allow" | "deny"
             - verdicts: List of individual guardrail results
             - message: Denial reason if blocked
+            - advisory: Combined advisory text if any
     """
     if context is None:
         context = {}
@@ -266,6 +485,7 @@ def evaluate_guardrails(
     verdicts = []
     blocked = False
     block_message = ""
+    advisories = []
 
     for name, guardrail in GUARDRAILS.items():
         if guardrail["type"] != lifecycle_type:
@@ -282,6 +502,12 @@ def evaluate_guardrails(
             result["guardrail"] = name
             verdicts.append(result)
 
+            # Collect advisories
+            if result.get("advisory"):
+                advisories.append(result["advisory"])
+            if result.get("verdict") == "WARN" and result.get("reason"):
+                advisories.append(result["reason"])
+
             # Short-circuit on BLOCK
             if guardrail["short_circuit"] and result.get("verdict") == "BLOCK":
                 blocked = True
@@ -297,6 +523,6 @@ def evaluate_guardrails(
 
     return {
         "decision": "deny" if blocked else "allow",
-        "message": block_message if blocked else "",
-        "verdicts": verdicts
+        "message": block_message if blocked else (" | ".join(advisories) if advisories else ""),
+        "verdicts": verdicts,
     }

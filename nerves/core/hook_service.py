@@ -1,17 +1,33 @@
 #!/usr/bin/env python3
+"""
+SRA Hybrid Hook Server — Declarative Architecture (V2)
+
+HTTP server running on :9105 that intercepts Antigravity IDE tool calls
+via /pre-tool, /post-tool, and /on-error endpoints.
+
+V2 Architecture:
+    - Inline if/elif gates REPLACED by guardrail_registry.evaluate_guardrails()
+    - B+C+A _scar_consult_fast() stays here for in-process performance
+    - Dependencies injected into guardrails via context dict
+    - ADK telemetry export via adk_callback_bridge.py
+
+References:
+    - guardrail_registry.py: Declarative policy definitions
+    - adk_callback_bridge.py: ADK Event/Context adapters
+"""
 import sys
 import json
-import subprocess
+import time as _time
+import threading
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingTCPServer
-import threading
 
 AGENTS_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(AGENTS_ROOT))
 sys.path.insert(0, str(AGENTS_ROOT / "nerves" / "core"))
 
-# Eagerly load core libraries
+# ── Eagerly load core libraries ──────────────────────────────
 try:
     import core_scar_memory as scar_memory
     import core_reflex as reflex
@@ -24,21 +40,60 @@ except Exception as e:
     scar_memory = None
     reflex = None
 
-# ── Scar Consult B+C Hybrid ──────────────────────────────────
+# ── Load guardrail registry ──────────────────────────────────
+try:
+    from guardrail_registry import evaluate_guardrails
+    print("[SRA Server] Guardrail registry loaded.", file=sys.stderr)
+except Exception as e:
+    print(f"[SRA Server] Guardrail registry load error: {e}", file=sys.stderr)
+    evaluate_guardrails = None
+
+# ── Load ADK telemetry exporter ───────────────────────────────
+try:
+    from adk_callback_bridge import AngatiCallbackContext, ADKTelemetryExporter
+    _telemetry = ADKTelemetryExporter(
+        output_path=str(AGENTS_ROOT / "memory" / "hook_events.jsonl")
+    )
+    print("[SRA Server] ADK telemetry exporter loaded.", file=sys.stderr)
+except Exception as e:
+    print(f"[SRA Server] ADK telemetry warning: {e}", file=sys.stderr)
+    _telemetry = None
+    AngatiCallbackContext = None
+
+
+# ── Scar Consult B+C+A ───────────────────────────────────────
 # B: In-process fastembed (already warm) + direct Qdrant search
 # C: TTL cache by command prefix (5 min)
-import time as _time
+# A: Fallback to angati.exe subprocess
 
 _scar_cache = {}          # {cmd_prefix: (timestamp, advisory_str | None)}
 _SCAR_CACHE_TTL = 300     # 5 minutes
 _SCAR_SCORE_THRESHOLD = 0.82
 _qdrant_client_cached = None
 
+# Stats counters
+_stats = {
+    "pre_tool_calls": 0,
+    "post_tool_calls": 0,
+    "on_error_calls": 0,
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "blocks": 0,
+    "advisories": 0,
+    "start_time": _time.time(),
+}
+
 
 def _cmd_prefix(cmd_line: str) -> str:
     """Extract first 2 tokens of command for cache key grouping."""
     tokens = cmd_line.strip().split()[:2]
     return " ".join(tokens).lower()
+
+
+def _scar_cache_invalidate(action: str):
+    """Invalidate scar cache for a command prefix. Called from on-error."""
+    prefix = _cmd_prefix(action)
+    _scar_cache.pop(prefix, None)
 
 
 def _scar_consult_fast(cmd_line: str) -> str:
@@ -64,7 +119,10 @@ def _scar_consult_fast(cmd_line: str) -> str:
     if prefix in _scar_cache:
         ts, cached_advisory = _scar_cache[prefix]
         if now - ts < _SCAR_CACHE_TTL:
+            _stats["cache_hits"] += 1
             return cached_advisory or ""
+
+    _stats["cache_misses"] += 1
 
     # ── B: Try in-process embed + Qdrant (fastest) ──
     try:
@@ -122,8 +180,26 @@ def _scar_consult_fast(cmd_line: str) -> str:
         return ""
 
 
+# ── Build guardrail context ──────────────────────────────────
+
+def _build_context(**extra) -> dict:
+    """Build context dict for guardrail handlers with injected dependencies."""
+    ctx = {
+        "scar_memory": scar_memory,
+        "reflex": reflex,
+        "scar_consult_fast": _scar_consult_fast,
+        "cache_invalidator": _scar_cache_invalidate,
+    }
+    ctx.update(extra)
+    return ctx
+
+
+# ── HTTP Server ───────────────────────────────────────────────
+
 class ThreadingHTTPServer(ThreadingTCPServer, HTTPServer):
     daemon_threads = True
+    allow_reuse_address = True
+    allow_reuse_port = True
 
     def handle_error(self, request, client_address):
         # Silence connection reset exceptions when clients exit abruptly
@@ -133,6 +209,7 @@ class ThreadingHTTPServer(ThreadingTCPServer, HTTPServer):
             pass
         else:
             super().handle_error(request, client_address)
+
 
 class SRAHookHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -151,29 +228,44 @@ class SRAHookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             body = json.dumps({"status": "healthy"}).encode('utf-8')
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, body)
+        elif self.path == "/stats":
+            uptime = _time.time() - _stats["start_time"]
+            stats_data = {
+                **_stats,
+                "uptime_seconds": round(uptime, 1),
+                "cache_size": len(_scar_cache),
+                "guardrails_loaded": evaluate_guardrails is not None,
+                "scar_memory_loaded": scar_memory is not None,
+                "reflex_loaded": reflex is not None,
+                "telemetry_loaded": _telemetry is not None,
+            }
+            # Remove non-serializable start_time
+            stats_data.pop("start_time", None)
+            body = json.dumps(stats_data, indent=2).encode('utf-8')
+            self._send_json(200, body)
         else:
             self.send_response(404)
             self.end_headers()
 
+    def _send_json(self, status: int, body: bytes):
+        """Send a JSON response with proper headers."""
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         post_data = self.rfile.read(content_length)
-        
+
         try:
             input_data = json.loads(post_data.decode('utf-8'))
         except Exception as e:
             body = json.dumps({"error": f"Invalid JSON: {e}"}).encode('utf-8')
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(400, body)
             return
 
         if self.path == "/pre-tool":
@@ -184,11 +276,7 @@ class SRAHookHandler(BaseHTTPRequestHandler):
             response_data = self.handle_on_error(input_data)
         elif self.path == "/shutdown":
             body = json.dumps({"status": "shutdown"}).encode('utf-8')
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, body)
             threading.Thread(target=self.server.shutdown).start()
             return
         else:
@@ -197,142 +285,79 @@ class SRAHookHandler(BaseHTTPRequestHandler):
             return
 
         body = json.dumps(response_data).encode('utf-8')
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(200, body)
 
     def handle_pre_tool(self, input_data):
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
-        
-        print(f"[SRA Server] PreToolUse intercepting: {tool_name}", file=sys.stderr)
-        
-        # 1. Evaluate KG Guard
-        file_writing_tools = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
-        if tool_name in file_writing_tools and tool_input:
-            target_file = tool_input.get("TargetFile")
-            if target_file:
-                angati_exe = AGENTS_ROOT / "tools" / "angati" / "angati.exe"
-                if not angati_exe.exists():
-                    angati_exe = AGENTS_ROOT / "angati.exe"
-                
-                if angati_exe.exists():
-                    try:
-                        res = subprocess.run(
-                            [str(angati_exe), "kg", "guard", "--file", str(target_file), "--action", "edit"],
-                            capture_output=True,
-                            text=True,
-                            encoding="utf-8",
-                            errors="ignore",
-                            timeout=15,
-                            check=False
-                        )
-                        if res.returncode == 2:
-                            print(f"[SRA Server] Blocked by KG Guard for file {target_file}", file=sys.stderr)
-                            return {
-                                "decision": "deny",
-                                "message": "Blocked by KG Guard (Exit Code 2). Write sandbox patch to C:\\Users\\pesil\\EAIS\\_sandbox_patches\\ instead."
-                            }
-                        elif res.returncode == 1:
-                            print(f"[SRA Server] Caution by KG Guard for file {target_file}", file=sys.stderr)
-                    except subprocess.TimeoutExpired:
-                        print("[SRA Server] KG Guard timed out — allowing by default", file=sys.stderr)
-                    except Exception as exc:
-                        print(f"[SRA Server] Failed to run KG Guard: {exc}", file=sys.stderr)
-        
-        # 2. Circuit Breaker
-        if tool_input:
-            instruction = f"Executing tool {tool_name} with arguments: {json.dumps(tool_input)}"
-            if scar_memory:
-                try:
-                    if scar_memory.circuit_breaker_check(instruction):
-                        print("[SRA Server] Circuit breaker tripped!", file=sys.stderr)
-                        return {
-                            "decision": "deny",
-                            "message": "Circuit breaker broken: This exact failure pattern has occurred >= 3 times in 1 hour."
-                        }
-                except Exception as exc:
-                    print(f"[SRA Server] Circuit breaker error: {exc}", file=sys.stderr)
-            
-            # 2.5 Scar Memory Consult — in-process B+C hybrid
-            #     B: fastembed (already warm) + direct Qdrant → ~100ms
-            #     C: TTL cache by command prefix → 0ms on cache hit
-            if scar_memory and tool_name == "run_command":
-                try:
-                    cmd_line = tool_input.get("CommandLine", "")
-                    if cmd_line:
-                        advisory = _scar_consult_fast(cmd_line)
-                        if advisory:
-                            print(f"[SRA Server] Scar advisory for run_command: {advisory}", file=sys.stderr)
-                            return {
-                                "decision": "allow",
-                                "message": f"[SCAR ADVISORY] Similar command failed before: {advisory}"
-                            }
-                except Exception as exc:
-                    print(f"[SRA Server] Scar consult error: {exc}", file=sys.stderr)
+        _stats["pre_tool_calls"] += 1
 
-            # 3. Reflex
-            if reflex:
+        if _VERBOSE:
+            print(f"[SRA Server] PreToolUse intercepting: {tool_name}", file=sys.stderr)
+
+        # ── Declarative guardrail evaluation ──
+        if evaluate_guardrails and tool_input:
+            context = _build_context()
+            result = evaluate_guardrails("before_tool", tool_name, tool_input, context)
+
+            # Emit ADK telemetry
+            if _telemetry and AngatiCallbackContext:
                 try:
-                    reflex_output = reflex.run_reflex(instruction)
-                    if reflex_output:
-                        print(f"[SRA Server] Reflex advisory: {reflex_output}", file=sys.stderr)
-                except Exception as e:
-                    print(f"[SRA Server] Reflex error: {e}", file=sys.stderr)
-                    
+                    ctx = AngatiCallbackContext.from_hook_data(input_data, lifecycle="before_tool")
+                    event = ctx.to_guardrail_event(result)
+                    _telemetry.record(event)
+                except Exception:
+                    pass
+
+            # Log verdicts
+            for v in result.get("verdicts", []):
+                verdict = v.get("verdict", "")
+                name = v.get("guardrail", "")
+                if verdict == "BLOCK":
+                    print(f"[SRA Server] BLOCKED by {name}: {v.get('reason', '')}", file=sys.stderr)
+                    _stats["blocks"] += 1
+                elif verdict == "WARN":
+                    print(f"[SRA Server] WARN from {name}: {v.get('reason', '')}", file=sys.stderr)
+                    _stats["advisories"] += 1
+                elif v.get("advisory"):
+                    print(f"[SRA Server] Advisory from {name}: {v['advisory']}", file=sys.stderr)
+
+            if result["decision"] == "deny":
+                return {
+                    "decision": "deny",
+                    "message": result.get("message", "Blocked by guardrail")
+                }
+
+            # Return advisory message if any
+            message = result.get("message", "")
+            if message:
+                return {
+                    "decision": "allow",
+                    "message": f"[SCAR ADVISORY] {message}"
+                }
+
         return {"decision": "allow"}
 
     def handle_post_tool(self, input_data):
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
-        
-        print(f"[SRA Server] PostToolUse processing: {tool_name}", file=sys.stderr)
-        
-        is_git_commit_or_merge = False
-        if tool_name == "run_command":
-            cmd_line = tool_input.get("CommandLine", "").lower()
-            if "git commit" in cmd_line or "git merge" in cmd_line:
-                is_git_commit_or_merge = True
+        tool_output = input_data.get("tool_output", "")
+        _stats["post_tool_calls"] += 1
 
-        if is_git_commit_or_merge:
-            try:
-                subprocess.run(
-                    ["npx", "gitnexus", "analyze", "--embeddings"],
-                    cwd=str(AGENTS_ROOT),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="ignore",
-                    timeout=120,
-                    shell=True,
-                    check=False
-                )
-            except subprocess.TimeoutExpired:
-                print("[SRA Server] gitnexus analyze timed out", file=sys.stderr)
-            except Exception as exc:
-                print(f"[SRA Server] gitnexus analyze error: {exc}", file=sys.stderr)
+        if _VERBOSE:
+            print(f"[SRA Server] PostToolUse processing: {tool_name}", file=sys.stderr)
 
-            angati_exe = AGENTS_ROOT / "tools" / "angati" / "angati.exe"
-            if not angati_exe.exists():
-                angati_exe = AGENTS_ROOT / "angati.exe"
-            if angati_exe.exists():
-                try:
-                    subprocess.run(
-                        [str(angati_exe), "memory", "stats"],
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="ignore",
-                        timeout=15,
-                        check=False
-                    )
-                except subprocess.TimeoutExpired:
-                    print("[SRA Server] memory stats timed out", file=sys.stderr)
-                except Exception as exc:
-                    print(f"[SRA Server] memory stats error: {exc}", file=sys.stderr)
+        # ── Declarative guardrail evaluation ──
+        if evaluate_guardrails and tool_input:
+            context = _build_context(tool_output=tool_output)
+            result = evaluate_guardrails("after_tool", tool_name, tool_input, context)
+
+            # Log actions
+            for v in result.get("verdicts", []):
+                action = v.get("action", "")
+                if action:
+                    print(f"[SRA Server] Post-tool action: {action}", file=sys.stderr)
+
         return {"status": "ok"}
 
     def handle_on_error(self, input_data):
@@ -340,54 +365,44 @@ class SRAHookHandler(BaseHTTPRequestHandler):
         tool_input = input_data.get("tool_input", {})
         tool_output = input_data.get("tool_output", "")
         error_msg = input_data.get("error", "") or str(tool_output)[:500]
-        
+        _stats["on_error_calls"] += 1
+
         print(f"[SRA Server] OnError processing: {tool_name}", file=sys.stderr)
-        
-        # ── Record to Scar Memory ─────────────────────────────────
-        # Close the feedback loop: /on-error → scar → /pre-tool consult
-        if scar_memory and tool_name == "run_command":
-            cmd_line = tool_input.get("CommandLine", "unknown command")
-            try:
-                scar_memory.record_scar(
-                    failed_action=cmd_line[:300],
-                    error_signature=error_msg[:300],
-                    recovery_action="",
-                    prevention_rule=f"Command failed: {cmd_line[:100]}. Error: {error_msg[:150]}",
-                    context="hook_on_error/run_command",
-                )
-                print(f"[SRA Server] Scar recorded for: {cmd_line[:80]}", file=sys.stderr)
-                # Invalidate cache for this command prefix so next consult picks it up
-                prefix = _cmd_prefix(cmd_line)
-                _scar_cache.pop(prefix, None)
-            except Exception as exc:
-                print(f"[SRA Server] Scar record error: {exc}", file=sys.stderr)
-        
-        # ── Incident Responder ────────────────────────────────────
-        incident_responder = AGENTS_ROOT / "nerves" / "workers" / "incident_responder.py"
-        if incident_responder.exists():
-            try:
-                subprocess.run(
-                    ["python", str(incident_responder), "check"],
-                    cwd=str(AGENTS_ROOT),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="ignore",
-                    timeout=30,
-                    check=False
-                )
-            except subprocess.TimeoutExpired:
-                print("[SRA Server] incident responder timed out", file=sys.stderr)
-            except Exception as exc:
-                print(f"[SRA Server] incident responder error: {exc}", file=sys.stderr)
+
+
+        # ── Declarative guardrail evaluation ──
+        if evaluate_guardrails:
+            context = _build_context(
+                error=error_msg,
+                tool_output=tool_output,
+            )
+            result = evaluate_guardrails("on_error", tool_name, tool_input, context)
+
+            # Emit ADK telemetry
+            if _telemetry and AngatiCallbackContext:
+                try:
+                    ctx = AngatiCallbackContext.from_hook_data(input_data, lifecycle="on_error")
+                    event = ctx.to_guardrail_event(result)
+                    _telemetry.record(event)
+                except Exception:
+                    pass
+
+            for v in result.get("verdicts", []):
+                action = v.get("action", "")
+                if action:
+                    print(f"[SRA Server] On-error action: {action}", file=sys.stderr)
+
         return {"status": "ok"}
+
+
+# ── Version Check ─────────────────────────────────────────────
 
 def check_angati_version_async():
     """Runs asynchronously in a daemon thread to check version compatibility of local and brain angati.exe."""
     def run_check():
         import os
         import hashlib
-        
+
         # 1. Resolve local path
         local_path = None
         env_local = os.environ.get("ANGATI_LOCAL_EXE_PATH")
@@ -449,12 +464,14 @@ def check_angati_version_async():
     t.start()
     return t
 
+
 def main():
     check_angati_version_async()
     port = 9105
     server_address = ('', port)
     httpd = ThreadingHTTPServer(server_address, SRAHookHandler)
     print(f"[SRA Server] Running SRA Hybrid Hook Server on port {port}...", file=sys.stderr)
+    print(f"[SRA Server] Endpoints: /pre-tool, /post-tool, /on-error, /health, /stats, /shutdown", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
