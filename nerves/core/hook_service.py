@@ -70,6 +70,8 @@ except Exception as e:
     AngatiCallbackContext = None
 
 
+_VERBOSE = False
+
 # ── Scar Consult B+C+A ───────────────────────────────────────
 # B: In-process fastembed (already warm) + direct Qdrant search
 # C: TTL cache by command prefix (5 min)
@@ -513,7 +515,7 @@ def main():
     server_address = ('', port)
     httpd = ThreadingHTTPServer(server_address, SRAHookHandler)
     print(f"[SRA Server] Running SRA Hybrid Hook Server on port {port}...", file=sys.stderr)
-    print(f"[SRA Server] Endpoints: /pre-tool, /post-tool, /on-error, /health, /stats, /shutdown", file=sys.stderr)
+    print("[SRA Server] Endpoints: /pre-tool, /post-tool, /on-error, /health, /stats, /shutdown", file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

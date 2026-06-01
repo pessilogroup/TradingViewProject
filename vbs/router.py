@@ -110,20 +110,17 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
         f"Expires: {expires_at} UTC"
     )
     
-    # Tạo các nút tương tác (Inline Keyboard)
+    # [SCAR] Lược bỏ nút Approve/Cancel ở VBS để nhường quyền xử lý cho Server B (TradeEngine).
     reply_markup = {
         "inline_keyboard": [
-            [
-                {"text": "✅ Approve", "callback_data": f"approve_{queue_id}"},
-                {"text": "❌ Hủy lệnh", "callback_data": f"cancel_{queue_id}"}
-            ],
             [
                 {"text": "📈 Xem Chart", "url": f"https://www.tradingview.com/chart/?symbol={exchange}:{symbol}"}
             ]
         ]
     }
     
-    await notifier.send_telegram_alert(msg, reply_markup=reply_markup)
+    # Gửi thông báo ẩn (Silent) để không làm phiền người dùng trước khi Server B gửi thông báo phân tích AI.
+    await notifier.send_telegram_alert(msg, reply_markup=reply_markup, silent=True)
 
     return {
         "queued": True,

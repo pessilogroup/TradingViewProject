@@ -35,8 +35,10 @@ References:
 """
 
 import json
+import queue
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -113,17 +115,12 @@ def powershell_syntax_check(tool_name: str, tool_input: dict, context: dict) -> 
             if any(p in cmd_line for p in (".name", ".conclusion", ".status", ".state")):
                 errors.append("PowerShell subexpression evaluation detected in 'jq' filter. Wrap 'jq' queries in single quotes (') instead of double quotes (\") to prevent PowerShell from executing '\\(.name)' as a command.")
 
-    subcommands = [s.strip() for s in cmd_line.replace("\n", " ").split(";")]
-    for sub in subcommands:
-        if not sub:
-            continue
-        words = sub.split()
-        first_word = words[0].lower() if words else ""
-        if "/" in first_word or "\\" in first_word:
-            first_word = Path(first_word).name.lower()
-            
-        if first_word in {"grep", "sed", "awk"}:
-            errors.append(f"Unix binary '{first_word}' is not natively supported on Windows. Use python scripts, python -c, or native tools (e.g. grep_search).")
+    # Validate Unix commands (including piped or chained commands like | grep)
+    import re
+    unix_match = re.search(r'(?:^|\||;)\s*(grep|sed|awk)\b', cmd_line.lower())
+    if unix_match:
+        binary = unix_match.group(1)
+        errors.append(f"Unix binary '{binary}' is not natively supported on Windows. Use python scripts, python -c, or native tools (e.g. grep_search).")
 
     if errors:
         return {
@@ -378,9 +375,6 @@ def error_detect_post_tool(tool_name: str, tool_input: dict, context: dict) -> d
 
     return result
 
-
-import queue
-import threading
 
 _scar_record_queue = queue.Queue()
 

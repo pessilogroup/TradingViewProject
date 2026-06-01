@@ -29,7 +29,7 @@ def sanitize_for_telegram_html(text: str) -> str:
     
     return text
 
-async def send_telegram_alert(message: str, reply_markup: dict = None):
+async def send_telegram_alert(message: str, reply_markup: dict = None, silent: bool = False):
     """Sends a Telegram alert to all configured chat IDs."""
     if not config.TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
         return
@@ -42,7 +42,8 @@ async def send_telegram_alert(message: str, reply_markup: dict = None):
             payload = {
                 "chat_id": chat_id,
                 "text": html_message,
-                "parse_mode": "HTML"
+                "parse_mode": "HTML",
+                "disable_notification": silent
             }
             if reply_markup:
                 payload["reply_markup"] = reply_markup
