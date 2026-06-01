@@ -87,11 +87,56 @@ async def _get_vbs_metadata(signal_id: int) -> dict:
                         "tg_messages": payload.get("tg_messages", []),
                         "vbs_received_at": payload.get("vbs_received_at", ""),
                         "vbs_expires_at": payload.get("vbs_expires_at", ""),
-                        "vbs_queue_id": payload.get("vbs_queue_id")
+                        "vbs_queue_id": payload.get("vbs_queue_id"),
+                        "payload": payload
                     }
     except Exception as e:
         log.warning(f"NotificationHub: Failed to fetch VBS metadata for signal #{signal_id}: {e}")
     return {}
+
+
+def _format_indicator_details_for_rejection(payload: dict) -> str:
+    """Format indicator name, timeframe, price, confidence, and metadata for rejection message."""
+    details = []
+    
+    # 1. Chỉ báo
+    ind_name = payload.get("indicator_name") or payload.get("indicator")
+    if ind_name:
+        details.append(f"• Chỉ báo: {ind_name}")
+        
+    # 2. Chi tiết: Khung TG, Giá, Độ tin cậy
+    specs = []
+    interval = payload.get("interval")
+    if interval:
+        specs.append(f"Khung TG: {interval}")
+        
+    price = payload.get("price")
+    if price is not None:
+        try:
+            price_val = f"{float(str(price).replace(',', '')):,.2f}"
+            specs.append(f"Giá: {price_val}")
+        except (ValueError, TypeError):
+            specs.append(f"Giá: {price}")
+            
+    conf = payload.get("confidence_score") or payload.get("confidence")
+    if conf is not None:
+        specs.append(f"Độ tin cậy: {conf}%")
+        
+    if specs:
+        details.append(f"• Chi tiết: {', '.join(specs)}")
+        
+    # 3. Metadata
+    meta = payload.get("metadata")
+    if meta:
+        if isinstance(meta, dict):
+            # Strip secret and format nicely
+            meta_clean = {k: v for k, v in meta.items() if k not in {"secret"}}
+            meta_str = json.dumps(meta_clean)
+        else:
+            meta_str = str(meta)
+        details.append(f"• Metadata: <code>{meta_str}</code>")
+        
+    return "\n".join(details)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -144,29 +189,31 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
     # Try editing original VBS Queue message to avoid spam
     vbs_meta = await _get_vbs_metadata(event.signal_id)
     tg_msgs = vbs_meta.get("tg_messages")
+    payload = vbs_meta.get("payload") or {}
     if tg_msgs:
         vbs_time = vbs_meta.get("vbs_received_at") or "N/A"
         vbs_qid = vbs_meta.get("vbs_queue_id") or "N/A"
         
-        if event.reason == "low_confidence":
-            edit_msg = (
-                f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
-                f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
-                f"Symbol: {event.symbol} - Action: ~~{event.action.upper()}~~ (cancel)\n\n"
-                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Lý do: {reason_text}"
-            )
-            if getattr(event, "analysis_text", ""):
-                edit_msg += f"\n• 🧠 Phân tích AI: {event.analysis_text[:300]}..."
-        else:
-            edit_msg = (
-                f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
-                f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
-                f"Symbol: {event.symbol} - Action: ~~{event.action.upper()}~~ (cancel)\n\n"
-                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Chiến lược: {event.action.upper()}\n"
-                f"• Lý do: {reason_text}"
-            )
-            if event.reason == "invalid_timeframe":
-                edit_msg += f" (Khung 1H/Daily mới hợp lệ)"
+        ind_details = _format_indicator_details_for_rejection(payload)
+        strategy_text = ""
+        if not payload.get("indicator_name") and not payload.get("indicator"):
+            strategy_text = f" - Chiến lược: {event.action.upper()}"
+
+        edit_msg = (
+            f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
+            f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
+            f"Symbol: {event.symbol} - Action: ~~{event.action.upper()}~~ (cancel)\n\n"
+            f"• Sàn: {getattr(event, 'exchange', 'binance').upper()}{strategy_text}\n"
+        )
+        if ind_details:
+            edit_msg += f"{ind_details}\n"
+            
+        edit_msg += f"• Lý do: {reason_text}"
+        
+        if event.reason == "low_confidence" and getattr(event, "analysis_text", ""):
+            edit_msg += f"\n• 🧠 Phân tích AI: {event.analysis_text[:300]}..."
+        elif event.reason == "invalid_timeframe":
+            edit_msg += f" (Khung 1H/Daily mới hợp lệ)"
 
         edited = False
         for m in tg_msgs:
@@ -212,17 +259,24 @@ async def notify_indicator_signal_rejected(event: IndicatorSignalRejected) -> No
     if not event.is_recovered:
         vbs_meta = await _get_vbs_metadata(event.signal_id)
         tg_msgs = vbs_meta.get("tg_messages")
+        payload = vbs_meta.get("payload") or {}
         if tg_msgs:
             vbs_time = vbs_meta.get("vbs_received_at") or "N/A"
             vbs_qid = vbs_meta.get("vbs_queue_id") or "N/A"
             action_val = event.signal_type.upper() if event.signal_type else "INDICATOR"
+            
+            ind_details = _format_indicator_details_for_rejection(payload)
+            
             edit_msg = (
                 f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
                 f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
                 f"Symbol: {event.symbol} - Action: ~~{action_val}~~ (cancel)\n\n"
-                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Chỉ báo: {event.indicator_name}\n"
-                f"• Lý do: {reason_text}"
+                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()}\n"
             )
+            if ind_details:
+                edit_msg += f"{ind_details}\n"
+                
+            edit_msg += f"• Lý do: {reason_text}"
 
             edited = False
             for m in tg_msgs:
@@ -248,6 +302,13 @@ async def notify_indicator_signal(event: IndicatorSignalReceived) -> None:
     Format and send a rich Telegram notification for indicator alerts.
     High-priority prefix added when confidence_score > 80 (REQ 6.4, Prop 17).
     """
+    if event.signal_type in {"entry", "exit"}:
+        log.info(
+            f"NotificationHub: Suppressing rich alert for trade signal {event.symbol} "
+            f"({event.signal_type}) to avoid duplication."
+        )
+        return
+
     exchange = getattr(event, 'exchange', 'binance')
 
     # REQ 6.4 / Prop 17: High-priority gate
