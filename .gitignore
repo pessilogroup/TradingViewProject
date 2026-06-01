@@ -63,4 +63,9 @@ id_ed25519.pub
 scratch/
 project.tar.gz
 
-
+# Runtime artifacts (PID files, runtime DBs, logs)
+*.pid
+.server.pid
+signal_queue.db
+nerves/workers/trading/logs/trading.log
+logs/simulation_*.log
