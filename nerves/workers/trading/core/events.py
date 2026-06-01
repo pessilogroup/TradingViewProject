@@ -51,6 +51,8 @@ class SignalReceived(Event):
     exchange: str = "binance"
     rag_advice: str = ""
     mode: str = ""            # "MTT" | "MIS" | "" (empty = not specified)
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ class IndicatorSignalReceived(Event):
     metadata: Optional[Dict[str, Any]] = None
     source_ip: str = ""
     exchange: str = "binance"
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,8 @@ class IndicatorSignalRejected(Event):
     signal_type: str = ""
     reason: str = ""
     exchange: str = "binance"
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)

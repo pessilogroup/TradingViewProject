@@ -242,6 +242,9 @@ class VpsSignalConsumer:
         # 4. Dispatch to EventBus
         source = payload.get("source", "")
         indicator_name = payload.get("indicator_name") or payload.get("indicator") or ""
+        
+        age_minutes = float(signal.get("age_minutes", 0.0))
+        is_recovered = age_minutes > 2.0
         is_indicator = source == "indicator" or (
             indicator_name and action.lower() not in {"buy", "sell", "alert"}
         )
@@ -275,6 +278,8 @@ class VpsSignalConsumer:
                 metadata=metadata,
                 source_ip="127.0.0.1",
                 exchange=signal.get("exchange", "binance"),
+                is_recovered=is_recovered,
+                age_minutes=age_minutes,
             ))
             
             # Indicator signals do not place orders, they are just persisted. Send ACK immediately.
@@ -304,6 +309,8 @@ class VpsSignalConsumer:
                 source_ip="127.0.0.1",
                 payload=payload,
                 exchange=exchange,
+                is_recovered=is_recovered,
+                age_minutes=age_minutes,
             ))
 
     # ── EventBus Callback Handlers ───────────────────────────────────────────

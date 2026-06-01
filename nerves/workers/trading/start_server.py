@@ -59,7 +59,39 @@ def _kill_port(p: int) -> None:
         print(f"[Sovereign Launcher] No stale process on :{p}", flush=True)
 
 
+def _kill_stale_pid() -> None:
+    """Read .server.pid and kill the stale process if it exists and is python.exe."""
+    pid_file = Path(".server.pid")
+    if pid_file.exists():
+        try:
+            old_pid = pid_file.read_text().strip()
+            if old_pid.isdigit():
+                # Check if process is running and is python
+                out = subprocess.check_output(
+                    ["tasklist", "/FI", f"PID eq {old_pid}", "/FI", "IMAGENAME eq python.exe", "/NH"],
+                    text=True, stderr=subprocess.DEVNULL
+                )
+                if "python.exe" in out.lower():
+                    subprocess.run(
+                        ["taskkill", "/PID", old_pid, "/F"],
+                        capture_output=True,
+                    )
+                    print(f"[Sovereign Launcher] Killed zombie PID {old_pid} from .server.pid", flush=True)
+                else:
+                    print(f"[Sovereign Launcher] PID {old_pid} from .server.pid is not python or not running.", flush=True)
+        except Exception as e:
+            print(f"[Sovereign Launcher] kill_stale_pid warning: {e}", flush=True)
+        finally:
+            # Clean up the file
+            try:
+                pid_file.unlink()
+            except Exception:
+                pass
+
+
 # ── SCAR-TVP-002: Kill stale server before binding ───────────────────────────
+from pathlib import Path
+_kill_stale_pid()
 _kill_port(port)
 
 if kill_only:
@@ -82,6 +114,13 @@ print(f"[Sovereign Launcher] Port {port} bound with SO_REUSEADDR + UTF-8 OK", fl
 config = uvicorn.Config("main:app", host="0.0.0.0", port=port, log_level="info")
 server = uvicorn.Server(config)
 
+# Write PID to .server.pid
+try:
+    Path(".server.pid").write_text(str(os.getpid()))
+    print(f"[Sovereign Launcher] Wrote PID {os.getpid()} to .server.pid", flush=True)
+except Exception as e:
+    print(f"[Sovereign Launcher] Warning: failed to write .server.pid: {e}", flush=True)
+
 
 async def serve():
     config.load()
@@ -91,4 +130,7 @@ async def serve():
     await server.shutdown()
 
 
-asyncio.run(serve())
+try:
+    asyncio.run(serve())
+except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
+    print("\n[Sovereign Launcher] Server stopped gracefully by user (Ctrl+C).", flush=True)

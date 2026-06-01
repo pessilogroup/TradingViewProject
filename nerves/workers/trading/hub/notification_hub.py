@@ -124,14 +124,20 @@ async def notify_indicator_signal_rejected(event: IndicatorSignalRejected) -> No
     }
     reason_text = reason_map.get(event.reason, event.reason)
 
-    msg = (
-        f"⛔ **Tín Hiệu Chỉ Báo Bị Từ Chối**\n"
-        f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
-        f"- Mã: `{event.symbol}`\n"
-        f"- Chỉ báo: `{event.indicator_name}`\n"
-        f"- Lý do: {reason_text}\n"
-        f"- Signal ID: `#{event.signal_id}`"
-    )
+    if event.is_recovered:
+        msg = (
+            f"🕒 **[PHỤC HỒI] Tín Hiệu Bị Từ Chối (cách đây {event.age_minutes}p)**\n"
+            f"- Mã: `{event.symbol}` | Lý do: {reason_text}"
+        )
+    else:
+        msg = (
+            f"⛔ **Tín Hiệu Chỉ Báo Bị Từ Chối**\n"
+            f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
+            f"- Mã: `{event.symbol}`\n"
+            f"- Chỉ báo: `{event.indicator_name}`\n"
+            f"- Lý do: {reason_text}\n"
+            f"- Signal ID: `#{event.signal_id}`"
+        )
     log.info(f"NotificationHub: Rejected indicator signal #{event.signal_id} on {event.exchange} — {event.reason}")
     await notifier.notify_all(msg)
 
@@ -151,29 +157,52 @@ async def notify_indicator_signal(event: IndicatorSignalReceived) -> None:
     # REQ 6.4 / Prop 17: High-priority gate
     priority_prefix = "🔴 **KHẨN CẤP** — " if event.confidence_score > 80 else ""
 
-    msg = (
-        f"{priority_prefix}📊 **Chỉ Báo Kỹ Thuật (Indicator Alert)**\n"
-        f"- Sàn: `{exchange.upper()}`\n"
-        f"- Mã: `{event.symbol}`\n"
-        f"- Loại tín hiệu: `{event.signal_type.upper()}`\n"
-        f"- Chỉ báo: `{event.indicator_name}`\n"
-        f"- Khung TG: `{event.interval or 'N/A'}`\n"
-        f"- Giá: `{event.price or 'N/A'}`\n"
-        f"- Độ tin cậy: `{event.confidence_score}%`\n"
-    )
+    if event.is_recovered:
+        msg = (
+            f"🕒 **[PHỤC HỒI] Chỉ Báo Kỹ Thuật (cách đây {event.age_minutes}p)**\n"
+            f"- Mã: `{event.symbol}` | Chỉ báo: `{event.indicator_name}`\n"
+            f"- Khung TG: `{event.interval or 'N/A'}` | Giá: `{event.price or 'N/A'}`\n"
+            f"- Độ tin cậy: `{event.confidence_score}%`"
+        )
+        if event.conditions_met:
+            msg += f"\n- Điều kiện: `{', '.join(event.conditions_met)}`"
+    else:
+        msg = (
+            f"{priority_prefix}📊 **Chỉ Báo Kỹ Thuật (Indicator Alert)**\n"
+            f"- Sàn: `{exchange.upper()}`\n"
+            f"- Mã: `{event.symbol}`\n"
+            f"- Loại tín hiệu: `{event.signal_type.upper()}`\n"
+            f"- Chỉ báo: `{event.indicator_name}`\n"
+            f"- Khung TG: `{event.interval or 'N/A'}`\n"
+            f"- Giá: `{event.price or 'N/A'}`\n"
+            f"- Độ tin cậy: `{event.confidence_score}%`\n"
+        )
 
-    if event.conditions_met:
-        cond_str = ", ".join(event.conditions_met)
-        msg += f"- Điều kiện: `{cond_str}`\n"
+        if event.conditions_met:
+            cond_str = ", ".join(event.conditions_met)
+            msg += f"- Điều kiện: `{cond_str}`\n"
 
-    if event.metadata:
-        msg += f"\n📝 **Metadata:**\n```json\n{event.metadata}\n```"
+        if event.metadata:
+            msg += f"\n📝 **Metadata:**\n```json\n{event.metadata}\n```"
 
     log.info(
         f"NotificationHub: Indicator Alert for {event.symbol} "
         f"({event.indicator_name}, confidence={event.confidence_score}%)"
     )
-    await notifier.notify_all(msg)
+    
+    if event.is_recovered:
+        await notifier.notify_all(msg)
+    else:
+        try:
+            import telegram_bot
+            await telegram_bot.send_interactive_indicator_alert(
+                signal_id=event.signal_id,
+                symbol=event.symbol,
+                message=msg
+            )
+        except Exception as e:
+            log.error(f"NotificationHub: Failed to trigger interactive indicator alert: {e}")
+            await notifier.notify_all(msg + f"\n\n*(Lỗi tương tác: {e})*")
 
 
 
