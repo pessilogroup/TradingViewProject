@@ -84,15 +84,6 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
             f"VBS Dedup: {symbol} {action} @ {price} is duplicate of #{existing_id} "
             f"(within {config.DEDUP_WINDOW_SECONDS}s window)"
         )
-        msg = (
-            f"🔁 <b>VBS Signal DEDUP</b>\n"
-            f"Symbol: <b>{symbol}</b>\n"
-            f"Action: <b>{action.upper()}</b>\n"
-            f"Duplicate of: <b>#{existing_id}</b>\n"
-            f"Exchange: {exchange}\n"
-            f"Blocked within {config.DEDUP_WINDOW_SECONDS}s window"
-        )
-        await notifier.send_telegram_alert(msg)
         return {
             "queued": False,
             "duplicate_of": existing_id,
