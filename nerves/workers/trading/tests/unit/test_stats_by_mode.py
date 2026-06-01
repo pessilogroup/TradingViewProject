@@ -25,7 +25,10 @@ async def _make_db():
             id INTEGER PRIMARY KEY,
             signal_id INTEGER,
             status TEXT,
-            pnl REAL
+            pnl REAL,
+            order_type TEXT DEFAULT 'MARKET',
+            order_id TEXT,
+            exchange TEXT DEFAULT 'binance'
         )
     """)
     await db.commit()
@@ -39,8 +42,8 @@ async def _seed(db, rows):
             "INSERT INTO signals (id, mode) VALUES (?, ?)", (i, mode)
         )
         await db.execute(
-            "INSERT INTO trades (id, signal_id, status, pnl) VALUES (?, ?, ?, ?)",
-            (i, i, status, pnl),
+            "INSERT INTO trades (id, signal_id, status, pnl, order_id, exchange) VALUES (?, ?, ?, ?, ?, ?)",
+            (i, i, status, pnl, f"10000{i}", "binance"),
         )
     await db.commit()
 
@@ -150,3 +153,49 @@ async def test_get_stats_by_mode_unknown_mode_grouped_as_other():
 
     # MIS sentinel must still exist with 0 trades
     assert result["by_mode"]["MIS"]["total_trades"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_stats_by_mode_weex_dry_run_included():
+    """weex dry-run trades must be included when demo=False, but binance dry-run must be excluded."""
+    from data.query_service import get_stats_by_mode
+
+    db = await _make_db()
+    
+    await db.execute("INSERT INTO signals (id, mode) VALUES (1, 'MTT')")
+    await db.execute("INSERT INTO signals (id, mode) VALUES (2, 'MTT')")
+    await db.execute("INSERT INTO signals (id, mode) VALUES (3, 'MTT')")
+    
+    # 1. Binance dry-run trade
+    await db.execute(
+        "INSERT INTO trades (id, signal_id, status, pnl, order_type, order_id, exchange) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (1, 1, "FILLED", 10.0, "DRY_RUN", "DRY-LIM-12345", "binance")
+    )
+    # 2. Weex dry-run trade
+    await db.execute(
+        "INSERT INTO trades (id, signal_id, status, pnl, order_type, order_id, exchange) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (2, 2, "FILLED", 20.0, "DRY_RUN", "DRY-WEX-54", "weex")
+    )
+    # 3. Normal Binance trade
+    await db.execute(
+        "INSERT INTO trades (id, signal_id, status, pnl, order_type, order_id, exchange) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (3, 3, "FILLED", 30.0, "LIMIT", "REAL-12345", "binance")
+    )
+    await db.commit()
+
+    with patch("data.query_service.aiosqlite.connect") as mock_connect:
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=db)
+        mock_ctx.__aexit__ = AsyncMock(return_value=None)
+        mock_connect.value = mock_ctx
+        mock_connect.return_value = mock_ctx
+
+        # When demo=False (default)
+        result = await get_stats_by_mode(demo=False)
+
+    await db.close()
+
+    # Total should be 2: Weex dry-run (20.0) + Normal Binance (30.0)
+    assert result["overall"]["total_trades"] == 2
+    assert result["overall"]["total_pnl"] == pytest.approx(50.0)
+

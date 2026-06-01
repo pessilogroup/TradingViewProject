@@ -64,18 +64,18 @@ async def client_with_trades(client, tmp_path):
     sig5 = await database.insert_signal("BTCUSDT", "sell", 65000.0, 50.0, "127.0.0.1")
 
     await database.insert_trade(signal_id=sig1, symbol="BTCUSDT", side="BUY",
-        order_id="ORD001", status="FILLED", requested_qty=50,
+        order_id="100001", status="FILLED", requested_qty=50,
         executed_qty=0.000735, executed_price=68000.0, pnl=200.0)
     await database.insert_trade(signal_id=sig2, symbol="BTCUSDT", side="SELL",
-        order_id="ORD002", status="FILLED", requested_qty=50,
+        order_id="100002", status="FILLED", requested_qty=50,
         executed_qty=0.000694, executed_price=72000.0, pnl=150.0)
     await database.insert_trade(signal_id=sig3, symbol="ETHUSDT", side="BUY",
-        order_id="ORD003", status="FILLED", requested_qty=30,
+        order_id="100003", status="FILLED", requested_qty=30,
         executed_qty=0.00857, executed_price=3500.0, pnl=-80.0)
     await database.insert_trade(signal_id=sig4, symbol="BTCUSDT", side="BUY",
-        order_id=None, status="FAILED", requested_qty=50, error_message="Insufficient balance")
+        order_id="100004", status="FAILED", requested_qty=50, error_message="Insufficient balance")
     await database.insert_trade(signal_id=sig5, symbol="BTCUSDT", side="SELL",
-        order_id="ORD005", status="FILLED", requested_qty=50,
+        order_id="100005", status="FILLED", requested_qty=50,
         executed_qty=0.000769, executed_price=65000.0, pnl=320.0)
 
     yield client
