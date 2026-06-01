@@ -29,10 +29,11 @@ def sanitize_for_telegram_html(text: str) -> str:
     
     return text
 
-async def send_telegram_alert(message: str, reply_markup: dict = None, silent: bool = False):
-    """Sends a Telegram alert to all configured chat IDs."""
+async def send_telegram_alert(message: str, reply_markup: dict = None, silent: bool = False) -> list:
+    """Sends a Telegram alert to all configured chat IDs. Returns sent message metadata."""
+    sent_messages = []
     if not config.TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-        return
+        return sent_messages
 
     url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
     html_message = sanitize_for_telegram_html(message)
@@ -50,7 +51,16 @@ async def send_telegram_alert(message: str, reply_markup: dict = None, silent: b
                 
             try:
                 response = await client.post(url, json=payload)
-                if response.status_code != 200:
+                if response.status_code == 200:
+                    try:
+                        resp_json = response.json()
+                        msg_id = resp_json.get("result", {}).get("message_id")
+                        if msg_id:
+                            sent_messages.append({"chat_id": chat_id, "message_id": msg_id})
+                    except Exception as parse_err:
+                        log.error(f"Failed to parse Telegram sendMessage response: {parse_err}")
+                else:
                     log.error(f"Telegram Alert Error (chat={chat_id}): {response.text}")
             except Exception as e:
                 log.error(f"Failed to send Telegram alert to {chat_id}: {e}")
+    return sent_messages

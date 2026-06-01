@@ -22,7 +22,7 @@ async def start_telegram_long_polling():
         while True:
             try:
                 # Long polling parameters: timeout=20s blocks the connection until an update arrives
-                response = await client.post(url, json={"offset": offset, "timeout": 20, "allowed_updates": ["callback_query"]})
+                response = await client.post(url, json={"offset": offset, "timeout": 20, "allowed_updates": ["message", "callback_query"]})
                 
                 if response.status_code == 200:
                     data = response.json()

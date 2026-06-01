@@ -456,3 +456,23 @@ async def get_queue_status() -> Dict[str, Any]:
         },
         "pending_signals": pending_signals
     }
+
+async def update_signal_payload(queue_id: int, extra_data: Dict[str, Any]) -> bool:
+    """Updates payload_json in the queue by merging in new keys."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT payload_json FROM signal_queue WHERE id = ?", (queue_id,)) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return False
+            payload = json.loads(row["payload_json"])
+            
+        payload.update(extra_data)
+        new_payload_json = json.dumps(payload)
+        
+        async with db.execute(
+            "UPDATE signal_queue SET payload_json = ? WHERE id = ?",
+            (new_payload_json, queue_id)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0

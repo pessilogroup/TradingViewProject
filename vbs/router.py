@@ -93,11 +93,6 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
     # Insert signal
     queue_id, expires_at = await database.insert_signal(payload)
     
-    # ── V2: Wake up any Long Poll waiters ──
-    # Set the event so /consume-long endpoints waiting for a new signal
-    # are unblocked immediately instead of waiting out the full timeout.
-    _new_signal_event.set()
-
     # Notify Telegram asynchronously
     exchange = (payload.get("exchange") or "binance").upper()
     
@@ -120,7 +115,15 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
     }
     
     # Gửi thông báo ẩn (Silent) để không làm phiền người dùng trước khi Server B gửi thông báo phân tích AI.
-    await notifier.send_telegram_alert(msg, reply_markup=reply_markup, silent=True)
+    sent_msgs = await notifier.send_telegram_alert(msg, reply_markup=reply_markup, silent=True)
+    if sent_msgs:
+        await database.update_signal_payload(queue_id, {"tg_messages": sent_msgs})
+
+    # ── V2: Wake up any Long Poll waiters ──
+    # Set the event so /consume-long endpoints waiting for a new signal
+    # are unblocked immediately instead of waiting out the full timeout.
+    # Woken up only after the VBS Telegram message coordinates are persisted.
+    _new_signal_event.set()
 
     return {
         "queued": True,
