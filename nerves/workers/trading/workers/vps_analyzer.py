@@ -170,11 +170,34 @@ class VpsAnalyzerWorker:
         # If advice contains error messages (RAG unavailable), reject
         if advice.startswith("⚠️"):
             log.warning(f"[VpsAnalyzer] Signal #{queue_id} rejected: RAG error - {advice[:100]}")
+            try:
+                from notifier import notify_all
+                msg = (
+                    f"⚠️ **RAG Analyzer ERROR [Signal #{queue_id}]**\n"
+                    f"• Symbol: `{symbol}`\n"
+                    f"• Action: `{action.upper()}`\n\n"
+                    f"❌ **Error:**\n{advice}"
+                )
+                await notify_all(msg)
+            except Exception as te:
+                log.warning(f"Failed to send telegram error alert: {te}")
             return None
 
         # Default: approve if not explicitly rejected, or if approved keywords found
         if is_rejected and not is_approved:
             log.info(f"[VpsAnalyzer] Signal #{queue_id} rejected by AI analysis")
+            try:
+                from notifier import notify_all
+                msg = (
+                    f"❌ **RAG Analyzer Rejected [Signal #{queue_id}]**\n"
+                    f"• Symbol: `{symbol}`\n"
+                    f"• Action: `{action.upper()}`\n"
+                    f"• Price: `{price}`\n\n"
+                    f"📝 **AI Analysis:**\n{advice}"
+                )
+                await notify_all(msg)
+            except Exception as te:
+                log.warning(f"Failed to send telegram rejection alert: {te}")
             return None
 
         # 5. Compute position sizing
@@ -226,10 +249,28 @@ class VpsAnalyzerWorker:
             "sl": sl_price,
             "tp": tp_price,
             "analysis": advice,
+            "analysis_text": advice,
             "risk_per_trade": risk_per_trade,
             "stop_loss_pct": stop_loss_pct,
             "exchange": payload.get("exchange", config.DEFAULT_EXCHANGE),
         }
+
+        # Send Telegram notification for approval
+        try:
+            from notifier import notify_all
+            msg = (
+                f"🧠 **RAG Analyzer Approved [Signal #{queue_id}]**\n"
+                f"• Symbol: `{symbol}`\n"
+                f"• Action: `{action.upper()}`\n"
+                f"• Price: `{price_val}`\n"
+                f"• Position Qty: `{round(qty, 8)}`\n"
+                f"• Stop Loss: `{sl_price}`\n"
+                f"• Take Profit: `{tp_price}`\n\n"
+                f"📝 **AI Analysis:**\n{advice}"
+            )
+            await notify_all(msg)
+        except Exception as te:
+            log.warning(f"Failed to send telegram approval alert: {te}")
 
         log.info(
             f"[VpsAnalyzer] Signal #{queue_id} APPROVED: "
