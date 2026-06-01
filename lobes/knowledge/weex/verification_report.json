@@ -1,0 +1,46 @@
+{
+  "status": "success",
+  "total_files": 10,
+  "files": {
+    "weex_api_index.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_signatures_auth.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_spot_api_v1_v3.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_futures_usdt_m_api.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_futures_coin_m_api.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_copy_trading_api.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_websocket_channels.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_rate_limits_weights.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_market_data_announcements.md": {
+      "status": "passed",
+      "errors": []
+    },
+    "weex_sandbox_guide.md": {
+      "status": "passed",
+      "errors": []
+    }
+  }
+}
