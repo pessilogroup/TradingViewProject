@@ -66,6 +66,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ═══ API ═══════════════════════════════════════════════
 async function apiFetch(path, opts = {}) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('demo') === 'true') {
+        const sep = path.includes('?') ? '&' : '?';
+        path = `${path}${sep}demo=true`;
+    }
     const headers = { ...(opts.headers || {}) };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     try {

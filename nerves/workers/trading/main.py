@@ -1248,11 +1248,13 @@ async def get_trades_endpoint(
     offset: int = Query(0, ge=0),
     from_date: Optional[str] = Query(None, description="ISO format: 2026-01-01"),
     to_date: Optional[str] = Query(None, description="ISO format: 2026-12-31"),
+    demo: bool = Query(False, description="Include mock/demo trades"),
 ):
     """Truy van lich su giao dich."""
     return await database.get_trades(
         symbol=symbol, limit=limit, offset=offset,
         from_date=from_date, to_date=to_date,
+        demo=demo,
     )
 
 
@@ -1260,18 +1262,20 @@ async def get_trades_endpoint(
 @app.get("/trades/stats")
 async def get_stats_endpoint(
     symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),
+    demo: bool = Query(False, description="Include mock/demo trades"),
 ):
     """Tinh metrics hieu suat: Win Rate, Profit Factor, Drawdown."""
-    return await database.get_stats(symbol=symbol)
+    return await database.get_stats(symbol=symbol, demo=demo)
 
 
 # ═══ EQUITY CURVE ENDPOINT ════════════════════════════════════
 @app.get("/trades/equity")
 async def get_equity_endpoint(
     symbol: Optional[str] = Query(None, description="Filter theo cap giao dich"),
+    demo: bool = Query(False, description="Include mock/demo trades"),
 ):
     """Tra ve equity curve data cho Chart.js."""
-    return await database.get_equity_curve(symbol=symbol)
+    return await database.get_equity_curve(symbol=symbol, demo=demo)
 
 
 # ═══ TRADE ANALYSIS ENDPOINT ═════════════════════════════════
@@ -1283,6 +1287,7 @@ async def get_trade_analysis_endpoint(
     to_date: Optional[str] = Query(None, description="ISO format: 2026-12-31"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    demo: bool = Query(False, description="Include mock/demo trades"),
 ):
     """Trade analysis with advanced filtering — powers Trade Analysis tab."""
     # Build filter conditions
@@ -1301,6 +1306,8 @@ async def get_trade_analysis_endpoint(
     if to_date:
         conditions.append("t.created_at <= ?")
         params.append(to_date)
+    if not demo:
+        conditions.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 

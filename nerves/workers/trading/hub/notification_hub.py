@@ -545,12 +545,13 @@ async def notify_trade_executed(event: TradeExecuted) -> None:
     exchange = getattr(event, 'exchange', 'binance')
     order_type = event.order_type or "MARKET"
 
+    price_str = f"{event.executed_price:.4f}" if event.executed_price is not None else "N/A"
     msg = (
         f"✅ **Đã Đặt Lệnh {exchange.title()}**\n"
         f"- Mã: `{event.symbol}`\n"
         f"- Lệnh: `{event.side} {order_type}`\n"
         f"- Số lượng: `{event.executed_qty}` (Value: `~{event.quote_qty}$`)\n"
-        f"- Giá khớp: `{event.executed_price:.4f}`\n"
+        f"- Giá khớp: `{price_str}`\n"
     )
     if event.stop_loss_price:
         msg += f"- Cắt lỗ (SL): `{event.stop_loss_price}`\n"

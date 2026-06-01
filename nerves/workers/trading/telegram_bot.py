@@ -2433,13 +2433,15 @@ def _register_trade_lifecycle_handlers():
             return
         sl = f"{event.stop_loss_price:,.4f}" if event.stop_loss_price else "—"
         tp = f"{event.take_profit_price:,.4f}" if event.take_profit_price else "—"
+        price = f"{event.executed_price:,.4f}" if event.executed_price is not None else "—"
+        qty = f"{event.executed_qty:,.4f}" if event.executed_qty is not None else "—"
         text = (
             f"✅ <b>LỆNH ĐÃ KHỚP</b>\n\n"
             f"🏦 Sàn: <code>{event.exchange.upper()}</code>\n"
             f"📌 Mã: <code>{event.symbol}</code>\n"
             f"📊 Chiều: <code>{event.side.upper()}</code>\n"
-            f"💰 Giá khớp: <code>{event.executed_price:,.4f}</code>\n"
-            f"📦 Khối lượng: <code>{event.executed_qty:,.4f}</code>\n"
+            f"💰 Giá khớp: <code>{price}</code>\n"
+            f"📦 Khối lượng: <code>{qty}</code>\n"
             f"🛡️ Stop-Loss: <code>{sl}</code>\n"
             f"🎯 Take-Profit: <code>{tp}</code>\n"
             f"🆔 Trade ID: <code>#{event.trade_id}</code>"

@@ -18,6 +18,7 @@ async def get_trades(
     offset: int = 0,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    demo: bool = False,
 ) -> Dict[str, Any]:
     """Truy van lich su giao dich voi pagination va filter."""
     conditions = []
@@ -32,6 +33,8 @@ async def get_trades(
     if to_date:
         conditions.append("t.created_at <= ?")
         params.append(to_date)
+    if not demo:
+        conditions.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -65,7 +68,7 @@ async def get_trades(
 # QUERY — PERFORMANCE STATS
 # ═══════════════════════════════════════════════════════════════
 
-async def get_stats(symbol: Optional[str] = None) -> Dict[str, Any]:
+async def get_stats(symbol: Optional[str] = None, demo: bool = False) -> Dict[str, Any]:
     """Tinh metrics hieu suat: Win Rate, Profit Factor, Drawdown."""
     conditions = ["t.status = 'FILLED'"]
     params: list = []
@@ -73,6 +76,8 @@ async def get_stats(symbol: Optional[str] = None) -> Dict[str, Any]:
     if symbol:
         conditions.append("t.symbol = ?")
         params.append(symbol.upper())
+    if not demo:
+        conditions.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
 
     where = f"WHERE {' AND '.join(conditions)}"
 
@@ -168,7 +173,7 @@ def _build_mode_stats(pnl_list: list) -> Dict[str, Any]:
     }
 
 
-async def get_stats_by_mode() -> Dict[str, Any]:
+async def get_stats_by_mode(demo: bool = False) -> Dict[str, Any]:
     """Performance metrics grouped by strategy mode (MTT vs MIS).
 
     JOINs trades → signals to access the signals.mode column (added Phase 2).
@@ -182,10 +187,15 @@ async def get_stats_by_mode() -> Dict[str, Any]:
             }
         }
     """
+    where_conds = ["t.status = 'FILLED'", "t.pnl IS NOT NULL"]
+    if not demo:
+        where_conds.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
+    where_clause = " AND ".join(where_conds)
+
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await db.execute_fetchall(
-            """
+            f"""
             SELECT t.pnl,
                    CASE
                      WHEN s.mode IS NULL OR TRIM(s.mode) = '' THEN 'OTHER'
@@ -193,8 +203,7 @@ async def get_stats_by_mode() -> Dict[str, Any]:
                    END AS mode
             FROM trades t
             LEFT JOIN signals s ON s.id = t.signal_id
-            WHERE t.status = 'FILLED'
-              AND t.pnl IS NOT NULL
+            WHERE {where_clause}
             """,
         )
 
@@ -229,6 +238,7 @@ async def get_stats_by_mode() -> Dict[str, Any]:
 async def get_recent_trades(
     limit: int = 10,
     symbol: Optional[str] = None,
+    demo: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return the last N FILLED trades with signal mode for the /backtest history panel.
 
@@ -241,6 +251,8 @@ async def get_recent_trades(
     if symbol:
         conditions.append("t.symbol = ?")
         params.append(symbol.upper())
+    if not demo:
+        conditions.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
 
     where = f"WHERE {' AND '.join(conditions)}"
     params.append(limit)
@@ -275,7 +287,7 @@ async def get_recent_trades(
 # QUERY — EQUITY CURVE
 # ═══════════════════════════════════════════════════════════════
 
-async def get_equity_curve(symbol: Optional[str] = None) -> Dict[str, Any]:
+async def get_equity_curve(symbol: Optional[str] = None, demo: bool = False) -> Dict[str, Any]:
     """Tra ve equity curve data cho Chart.js."""
     conditions = ["t.status = 'FILLED'", "t.pnl IS NOT NULL"]
     params: list = []
@@ -283,6 +295,8 @@ async def get_equity_curve(symbol: Optional[str] = None) -> Dict[str, Any]:
     if symbol:
         conditions.append("t.symbol = ?")
         params.append(symbol.upper())
+    if not demo:
+        conditions.append("(LOWER(t.exchange) = 'weex' OR (t.order_type != 'DRY_RUN' AND t.order_id IS NOT NULL AND t.order_id NOT LIKE 'DRY-%' AND t.order_id NOT LIKE 'ORD%'))")
 
     where = f"WHERE {' AND '.join(conditions)}"
 

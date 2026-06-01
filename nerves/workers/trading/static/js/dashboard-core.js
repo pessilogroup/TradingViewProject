@@ -119,6 +119,11 @@ function switchTab(name) {
 
 // ═══ API FETCH ═══
 async function apiFetch(url, opts = {}) {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('demo') === 'true') {
+    const sep = url.includes('?') ? '&' : '?';
+    url = `${url}${sep}demo=true`;
+  }
   try {
     const res = await fetch(API_BASE + url, {
       credentials: 'include',           // always send session cookie
