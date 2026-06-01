@@ -218,6 +218,11 @@ class VpsSignalConsumer:
         quote_qty = signal.get("quote_qty")
         mode = payload.get("mode", "").strip().upper()
         
+        # Inject VBS timestamps and queue ID for later downstream edit use
+        payload["vbs_received_at"] = signal.get("received_at")
+        payload["vbs_expires_at"] = signal.get("expires_at")
+        payload["vbs_queue_id"] = queue_id
+
         try:
             local_signal_id = await database.insert_signal(
                 symbol=symbol,

@@ -104,6 +104,8 @@ async def process_signal(event: SignalReceived) -> None:
             quote_qty=event.quote_qty,
             rag_advice=event.rag_advice,
             exchange=getattr(event, "exchange", "binance") or "binance",
+            is_recovered=event.is_recovered,
+            age_minutes=event.age_minutes,
         ))
         return
 
@@ -184,6 +186,8 @@ async def process_signal(event: SignalReceived) -> None:
         tp=event.tp,
         exchange=event.exchange,
         mode=getattr(event, "mode", ""),
+        is_recovered=event.is_recovered,
+        age_minutes=event.age_minutes,
     ))
 
 

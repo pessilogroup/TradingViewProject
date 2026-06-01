@@ -21,8 +21,11 @@ Design Invariants (v6.0 INV-5/6):
   - Uses set_bus() pattern for test isolation.
 """
 import logging
+import json
 from pathlib import Path
+import aiosqlite
 
+import config
 import notifier
 
 from core.event_bus import bus as _default_bus
@@ -72,6 +75,25 @@ def remove_pending_trade(signal_id: int):
     return PENDING_TRADES.pop(signal_id, None)
 
 
+async def _get_vbs_metadata(signal_id: int) -> dict:
+    """Helper to query VBS message metadata from local database payload."""
+    try:
+        async with aiosqlite.connect(config.DB_PATH) as db:
+            async with db.execute("SELECT payload FROM signals WHERE id = ?", (signal_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    payload = json.loads(row[0])
+                    return {
+                        "tg_messages": payload.get("tg_messages", []),
+                        "vbs_received_at": payload.get("vbs_received_at", ""),
+                        "vbs_expires_at": payload.get("vbs_expires_at", ""),
+                        "vbs_queue_id": payload.get("vbs_queue_id")
+                    }
+    except Exception as e:
+        log.warning(f"NotificationHub: Failed to fetch VBS metadata for signal #{signal_id}: {e}")
+    return {}
+
+
 # ═══════════════════════════════════════════════════════════════
 # HANDLER: SignalRejected → Rejection Notification
 # ═══════════════════════════════════════════════════════════════
@@ -95,22 +117,68 @@ async def notify_signal_rejected(event: SignalRejected) -> None:
 
     reason_text = reason_map.get(event.reason, event.reason)
 
-    msg = (
-        f"⛔ **Tín Hiệu Bị Từ Chối**\n"
-        f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
-        f"- Mã: `{event.symbol}`\n"
-        f"- Hành động: `{event.action.upper()}`\n"
-        f"- Lý do: {reason_text}\n"
-        f"- Signal ID: `#{event.signal_id}`"
-    )
-
-    if event.reason == "invalid_timeframe":
-        msg += (
-            f"\n\n💡 Chiến lược MIS v1 chỉ cho phép khung 1H (60). "
-            f"Vui lòng kiểm tra cài đặt TradingView Alert."
+    if event.reason == "low_confidence" and getattr(event, "analysis_text", ""):
+        msg = (
+            f"🔴 **TỰ ĐỘNG TỪ CHỐI** — `{event.symbol}` trên `{getattr(event, 'exchange', 'binance').upper()}`\n"
+            f"- Hành động: `{event.action.upper()}`\n"
+            f"- Lý do: {reason_text}\n\n"
+            f"🧠 **Phân tích AI:**\n{event.analysis_text[:500]}"
         )
+    else:
+        msg = (
+            f"⛔ **Tín Hiệu Bị Từ Chối**\n"
+            f"- Sàn: `{getattr(event, 'exchange', 'binance').upper()}`\n"
+            f"- Mã: `{event.symbol}`\n"
+            f"- Hành động: `{event.action.upper()}`\n"
+            f"- Lý do: {reason_text}\n"
+            f"- Signal ID: `#{event.signal_id}`"
+        )
+        if event.reason == "invalid_timeframe":
+            msg += (
+                f"\n\n💡 Chiến lược MIS v1 chỉ cho phép khung 1H (60). "
+                f"Vui lòng kiểm tra cài đặt TradingView Alert."
+            )
 
     log.info(f"NotificationHub: Rejected signal #{event.signal_id} on {getattr(event, 'exchange', 'binance')} — {event.reason}")
+
+    # Try editing original VBS Queue message to avoid spam
+    vbs_meta = await _get_vbs_metadata(event.signal_id)
+    tg_msgs = vbs_meta.get("tg_messages")
+    if tg_msgs:
+        vbs_time = vbs_meta.get("vbs_received_at") or "N/A"
+        vbs_qid = vbs_meta.get("vbs_queue_id") or "N/A"
+        
+        if event.reason == "low_confidence":
+            edit_msg = (
+                f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
+                f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
+                f"Symbol: {event.symbol} - Action: ~~{event.action.upper()}~~ (cancel)\n\n"
+                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Lý do: {reason_text}"
+            )
+            if getattr(event, "analysis_text", ""):
+                edit_msg += f"\n• 🧠 Phân tích AI: {event.analysis_text[:300]}..."
+        else:
+            edit_msg = (
+                f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
+                f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
+                f"Symbol: {event.symbol} - Action: ~~{event.action.upper()}~~ (cancel)\n\n"
+                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Chiến lược: {event.action.upper()}\n"
+                f"• Lý do: {reason_text}"
+            )
+            if event.reason == "invalid_timeframe":
+                edit_msg += f" (Khung 1H/Daily mới hợp lệ)"
+
+        edited = False
+        for m in tg_msgs:
+            if await notifier.edit_telegram_message(m["chat_id"], m["message_id"], edit_msg):
+                edited = True
+        
+        if edited:
+            log.info(f"NotificationHub: Edited original VBS Telegram message for signal #{event.signal_id}")
+            await notifier.send_discord_alert(msg)
+            return
+
+    # Fallback to normal broadcast if not edited
     await notifier.notify_all(msg)
 
 
@@ -139,6 +207,34 @@ async def notify_indicator_signal_rejected(event: IndicatorSignalRejected) -> No
             f"- Signal ID: `#{event.signal_id}`"
         )
     log.info(f"NotificationHub: Rejected indicator signal #{event.signal_id} on {event.exchange} — {event.reason}")
+
+    # Try editing original VBS Queue message to avoid spam
+    if not event.is_recovered:
+        vbs_meta = await _get_vbs_metadata(event.signal_id)
+        tg_msgs = vbs_meta.get("tg_messages")
+        if tg_msgs:
+            vbs_time = vbs_meta.get("vbs_received_at") or "N/A"
+            vbs_qid = vbs_meta.get("vbs_queue_id") or "N/A"
+            action_val = event.signal_type.upper() if event.signal_type else "INDICATOR"
+            edit_msg = (
+                f"📥 VBS Signal Queued - Time: <code>{vbs_time}</code> UTC\n"
+                f"⛔️ <b>Tín Hiệu Chỉ Báo Bị Từ Chối</b> ( ID: #{vbs_qid} Queue - #{event.signal_id}: Signal )\n"
+                f"Symbol: {event.symbol} - Action: ~~{action_val}~~ (cancel)\n\n"
+                f"• Sàn: {getattr(event, 'exchange', 'binance').upper()} - Chỉ báo: {event.indicator_name}\n"
+                f"• Lý do: {reason_text}"
+            )
+
+            edited = False
+            for m in tg_msgs:
+                if await notifier.edit_telegram_message(m["chat_id"], m["message_id"], edit_msg):
+                    edited = True
+            
+            if edited:
+                log.info(f"NotificationHub: Edited original VBS Telegram message for indicator signal #{event.signal_id}")
+                await notifier.send_discord_alert(msg)
+                return
+
+    # Fallback to normal broadcast if not edited
     await notifier.notify_all(msg)
 
 
@@ -227,12 +323,13 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
 
     # ── Tier 1: Auto-Approve (confidence >= 8) ───────────────
     if confidence >= 8:
+        prefix = f"🕒 **[PHỤC HỒI - {event.age_minutes}p]** " if getattr(event, 'is_recovered', False) else ""
         log.info(
             f"NotificationHub: ✅ Auto-approving trade for #{event.signal_id} {event.symbol} "
-            f"(confidence={confidence}/10)"
+            f"(confidence={confidence}/10, recovered={getattr(event, 'is_recovered', False)})"
         )
         await notifier.notify_all(
-            f"🟢 **AUTO-APPROVE** — `{event.symbol}` trên `{exchange.upper()}`\n"
+            f"{prefix}🟢 **AUTO-APPROVE** — `{event.symbol}` trên `{exchange.upper()}`\n"
             f"- Điểm AI: `{confidence}/10`\n"
             f"- Hành động: `{event.action.upper()}`\n"
             f"- Giá: `{event.price or 'Market'}`\n"
@@ -330,24 +427,30 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
             tp_pct=tp_pct
         )
 
-        try:
-            import telegram_bot
-            sent_pairs = await telegram_bot.send_interactive_trade_approval(
-                signal_id=event.signal_id,
-                message=msg,
-            )
-            if not sent_pairs:
-                # Fallback to normal notify if bot not running
-                await notifier.notify_all(msg + "\n\n*(Bot chưa bật, không thể dùng nút bấm duyệt lệnh)*")
-            else:
-                # REQ7: Register sent messages with ApprovalTimeoutManager for auto-timeout
-                timeout_mgr = telegram_bot.get_approval_timeout_mgr()
-                if timeout_mgr and isinstance(sent_pairs, list):
-                    for chat_id, message_id in sent_pairs:
-                        timeout_mgr.track_message(event.signal_id, chat_id, message_id)
-        except Exception as e:
-            log.error(f"NotificationHub: Failed to trigger interactive message: {e}")
-            await notifier.notify_all(msg + f"\n\n*(Lỗi tương tác: {e})*")
+        is_recovered = getattr(event, 'is_recovered', False)
+        if is_recovered:
+            msg = f"🕒 **[PHỤC HỒI VBS Queue - cách đây {event.age_minutes}p] Lệnh Cần Duyệt**\n\n" + msg
+            # Disable interactive buttons for recovered signals (User Request)
+            await notifier.notify_all(msg + "\n\n*(Tín hiệu phục hồi không có nút tương tác)*")
+        else:
+            try:
+                import telegram_bot
+                sent_pairs = await telegram_bot.send_interactive_trade_approval(
+                    signal_id=event.signal_id,
+                    message=msg,
+                )
+                if not sent_pairs:
+                    # Fallback to normal notify if bot not running
+                    await notifier.notify_all(msg + "\n\n*(Bot chưa bật, không thể dùng nút bấm duyệt lệnh)*")
+                else:
+                    # REQ7: Register sent messages with ApprovalTimeoutManager for auto-timeout
+                    timeout_mgr = telegram_bot.get_approval_timeout_mgr()
+                    if timeout_mgr and isinstance(sent_pairs, list):
+                        for chat_id, message_id in sent_pairs:
+                            timeout_mgr.track_message(event.signal_id, chat_id, message_id)
+            except Exception as e:
+                log.error(f"NotificationHub: Failed to trigger interactive message: {e}")
+                await notifier.notify_all(msg + f"\n\n*(Lỗi tương tác: {e})*")
         return
 
     # ── Tier 3: Auto-Reject (confidence < 5) ─────────────────
@@ -356,21 +459,16 @@ async def process_analysis_complete(event: AnalysisComplete) -> None:
         f"(confidence={confidence}/10)"
     )
     # BUG-01 fix: Emit SignalRejected to honour the event contract.
-    # Previously only notifier.notify_all() was called, silently breaking
-    # any downstream audit/telemetry handlers subscribed to SignalRejected.
+    # Passes analysis_text so the subscriber notify_signal_rejected can edit VBS message or fallback.
     await _bus.emit(SignalRejected(
         signal_id=event.signal_id,
         symbol=event.symbol,
         action=event.action,
         reason="low_confidence",
         exchange=exchange,
+        analysis_text=event.analysis_text,
     ))
-    await notifier.notify_all(
-        f"🔴 **TỰ ĐỘNG TỪ CHỐI** — `{event.symbol}` trên `{exchange.upper()}`\n"
-        f"- Điểm AI: `{confidence}/10` (< 5 — quá thấp)\n"
-        f"- Hành động: `{event.action.upper()}`\n\n"
-        f"🧠 **Phân tích AI:**\n{event.analysis_text[:500]}"
-    )
+    return
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -78,6 +78,8 @@ async def process_alert(event: AlertTriggered) -> None:
         sl="",
         tp="",
         exchange=getattr(event, "exchange", None) or "binance",
+        is_recovered=event.is_recovered,
+        age_minutes=event.age_minutes,
     ))
 
 
@@ -280,4 +282,6 @@ async def process_validated_signal(event: SignalValidated) -> None:
         vision_result=vision_result,
         combined_score=combined_score_str,
         exchange=getattr(event, 'exchange', 'binance'),
+        is_recovered=event.is_recovered,
+        age_minutes=event.age_minutes,
     ))

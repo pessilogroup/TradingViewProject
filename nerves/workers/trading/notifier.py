@@ -30,9 +30,14 @@ def sanitize_for_telegram_html(text: str) -> str:
     text = text.replace('&lt;i&gt;', '<i>').replace('&lt;/i&gt;', '</i>')
     text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
     text = text.replace('&lt;pre&gt;', '<pre>').replace('&lt;/pre&gt;', '</pre>')
+    text = text.replace('&lt;s&gt;', '<s>').replace('&lt;/s&gt;', '</s>')
+    text = text.replace('&lt;strike&gt;', '<strike>').replace('&lt;/strike&gt;', '</strike>')
     
     # 2. Convert Bold: **text** -> <b>text</b>
     text = re.compile(r'\*\*(.*?)\*\*').sub(r'<b>\1</b>', text)
+    
+    # Convert ~~text~~ -> <s>text</s>
+    text = re.compile(r'~~(.*?)~~').sub(r'<s>\1</s>', text)
     
     # 3. Convert Italic: *text* -> <i>text</i>
     # Note: Using a more restrictive regex for italics to avoid catching lone asterisks or sub-parts of words
@@ -75,6 +80,43 @@ async def send_telegram_alert(message: str):
                     log.error(f"Failed to send Telegram alert to {chat_id}: {e}")
     except Exception as e:
         log.error(f"Telegram session error: {e}")
+
+async def edit_telegram_message(chat_id: int, message_id: int, text: str) -> bool:
+    """Edit an existing Telegram message. Returns True on success."""
+    if not config.TELEGRAM_BOT_TOKEN:
+        return False
+
+    # Try using active Telegram bot sender first if available
+    try:
+        import telegram_bot
+        sender = telegram_bot.get_sender()
+        if sender:
+            # chat_id and message_id must be integers for TelegramBot API
+            return await sender.edit_message(chat_id=int(chat_id), message_id=int(message_id), text=text)
+    except Exception as e:
+        log.warning(f"Failed to edit via telegram_bot: {e}")
+
+    # Fallback to direct HTTP request if bot daemon is not running or fails
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/editMessageText"
+    html_message = sanitize_for_telegram_html(text)
+    payload = {
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "text": html_message,
+        "parse_mode": "HTML"
+    }
+    import socket
+    conn = aiohttp.TCPConnector(family=socket.AF_INET)
+    try:
+        async with aiohttp.ClientSession(connector=conn) as session:
+            async with session.post(url, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    return True
+                else:
+                    log.error(f"Telegram Edit API Error (chat={chat_id}, msg={message_id}): {await response.text()}")
+    except Exception as e:
+        log.error(f"Failed to edit Telegram message directly: {e}")
+    return False
 
 async def send_discord_alert(message: str):
     """Gửi tin nhắn báo cáo qua Discord Webhook (Bất đồng bộ)"""
