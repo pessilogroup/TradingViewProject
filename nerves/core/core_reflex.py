@@ -22,6 +22,15 @@ Usage:
   python angati_reflex.py --task "..." --spaces angati eais
 """
 import sys
+
+# Configure sys.stdout and sys.stderr to ignore encoding errors (SCAR-019)
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+        sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+    except Exception:
+        pass
+
 import json
 from pathlib import Path
 
@@ -187,7 +196,10 @@ if __name__ == "__main__":
         result = {}
         for s in spaces:
             result[s] = _query_space(args.task, s)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        try:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        except UnicodeEncodeError:
+            print(json.dumps(result, indent=2, ensure_ascii=True))
     else:
         output = run_reflex(args.task, args.spaces)
         if output:

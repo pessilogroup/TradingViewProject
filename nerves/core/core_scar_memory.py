@@ -25,6 +25,15 @@ Usage:
   python scar_memory.py test
 """
 import sys
+
+# Configure sys.stdout and sys.stderr to ignore encoding errors (SCAR-019)
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+        sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
+    except Exception:
+        pass
+
 import json
 import argparse
 import hashlib
@@ -721,7 +730,10 @@ def self_test() -> dict:
 
 def main():
     if sys.stdout.encoding != 'utf-8':
-        sys.stdout.reconfigure(encoding='utf-8')
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+        except Exception:
+            pass
 
     parser = argparse.ArgumentParser(
         description="Scar Memory — Failure-Recovery Pattern Learning (Phase 7)",
@@ -799,7 +811,10 @@ def main():
     else:
         result = {"error": f"Unknown command: {args.command}"}
 
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    try:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    except UnicodeEncodeError:
+        print(json.dumps(result, indent=2, ensure_ascii=True))
 
 
 if __name__ == "__main__":
