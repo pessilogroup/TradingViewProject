@@ -588,3 +588,36 @@ Implement a validation check or audit step to ensure:
 ### Verification
 - [ ] A verification script runs and confirms all generated `.md` files contain valid markdown structure.
 - [ ] An endpoint index file is generated listing all crawled endpoints and their mapped markdown files.
+
+## Follow-up — 2026-06-01T18:04:56+07:00
+
+Create a Master Plan to record the results of dry-run tests (Option 1) and plan the deployment and execution of real micro-volume trades on the WEEX Mainnet (Option 2).
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Document Dry-Run Analysis (Option 1)
+Execute the dry-run test (`test_weex_trial.py`) to gather real-time data from WEEX. Document the results including the scanned candle data, mock order execution success, simulated slippage/latencies, and the computed SEPA risk parameters (risk amount, position sizing, and stop-loss/take-profit boundaries).
+
+### R2. Mainnet Deployment Strategy (Option 2 Plan)
+Draft a strategic roadmap to transition from dry-run to real mainnet execution using minimal trade volumes. The plan must detail:
+1.  **Credential Setup**: Securing and injecting production credentials securely in `.env`.
+2.  **Safety Thresholds**: Hard limits on maximum order sizes, max daily losses, and drawdowns.
+3.  **Failover & Rejection Handling**: How to catch connectivity errors (e.g. `getaddrinfo failed` or HTTP 4xx/5xx) and route trades to fallbacks (Binance/Bybit) or Telegram notifications.
+4.  **Verification Steps**: Minimal smoke tests to perform before allowing automated TradingView webhook signals to execute.
+
+### R3. Output Target File
+Save the resulting master plan document as a clean, structured Markdown file at:
+`C:\Users\pesil\working\mj_trading\TradingViewProject\lobes\knowledge\weex\weex_master_plan.md`
+
+## Acceptance Criteria
+
+### Master Plan Structure & Completeness
+- [ ] The file `lobes/knowledge/weex/weex_master_plan.md` contains a summary section for Option 1 and a detailed checklist/strategy for Option 2.
+- [ ] Option 1 records actual mock execution values (price, timestamp, size) parsed from the dry-run output logs.
+- [ ] Option 2 contains concrete checklist items for safety parameters, error handlers, and fallback rules.
+
+### Validation
+- [ ] The generated Markdown file has valid links, syntax, and follows standard knowledge base formatting.
