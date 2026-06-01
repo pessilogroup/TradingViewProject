@@ -16,15 +16,24 @@ All private/authenticated REST API and WebSocket login requests require API keys
 
 The signature payload string is constructed by concatenating specific request fields in the following order:
 
-```
-timestamp + METHOD + requestPath + body
-```
+*   **Format when Query String is Empty (or POST requests with body):**
+    ```
+    timestamp + METHOD + requestPath + body
+    ```
+*   **Format when Query String is Not Empty (typically GET/DELETE requests with query parameters):**
+    ```
+    timestamp + METHOD + requestPath + "?" + queryString + body
+    ```
 
 ### 2.1 Description of Fields
 *   `timestamp`: The exact string value passed in the `ACCESS-TIMESTAMP` header (e.g., `1684812345000`).
 *   `METHOD`: The HTTP request method in uppercase (e.g., `GET`, `POST`, `DELETE`).
-*   `requestPath`: The relative path of the request, including any query parameters (e.g., `/api/v1/spot/trade/order_info?symbol=BTCUSDT&orderId=1234567890`).
+*   `requestPath`: The relative path of the request, excluding query parameters (e.g., `/api/v3/order` or `/api/v1/spot/trade/order_info`).
+*   `queryString`: The raw query parameters after the `?` in the URL (e.g., `symbol=BTCUSDT&limit=20`).
 *   `body`: The JSON string body of the request (for `POST` or `PUT` requests). If there is no body (e.g., a `GET` request or `POST` request with an empty body), this must be an empty string (`""`).
+
+> [!NOTE]
+> For V2 APIs, the signature string can also be constructed by treating `requestPath` as containing the query string (e.g. `requestPath` = `/api/v1/spot/trade/order_info?symbol=BTCUSDT&orderId=1234567890`), which yields the same concatenated result. The V3 specifications explicitly decouple the base path and the query string.
 
 ---
 

@@ -547,3 +547,44 @@ Integrity mode: development
   - Simulated button callback triggers `TradeApproved` and executes successfully via the engine.
 - [ ] Run the complete test suite (`pytest server/tests/`) and confirm all tests pass.
 
+## Follow-up — 2026-06-01T17:26:08+07:00
+
+Extract all API documentation from the WEEX platform (https://www.weex.com/api-doc/) and update the local knowledge files inside the project's knowledge base.
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Comprehensive Crawling of WEEX API Docs
+Extract all pages and subpages of the WEEX API documentation starting from https://www.weex.com/api-doc/. This includes, but is not limited to:
+*   Spot Trading (V1, V3)
+*   Futures/Contract Trading (V2, V3, USDT-M, Coin-M)
+*   Copy Trading & Social Trading APIs
+*   WebSocket API (public and private channels)
+*   Signature Calculation & Authentication mechanisms
+*   Rate limits and weight specifications
+*   Supported trading pairs and announcements
+
+The crawling can utilize automated scripts (such as Python BeautifulSoup, Playwright, or direct requests) to fetch the dynamic content.
+
+### R2. Update and Organize Local Knowledge Base (KIs)
+Update existing markdown files and create new markdown files inside the local knowledge base directory:
+`C:\Users\pesil\working\mj_trading\TradingViewProject\lobes\knowledge\weex`
+The files should be cleanly structured, readable, and written in Markdown. All API models, endpoints, request parameters, response schemas, and code snippets must be preserved.
+
+### R3. Automated Link & Schema Audit
+Implement a validation check or audit step to ensure:
+*   There are no broken relative links or placeholders in the generated markdown files.
+*   All code examples (Python/Go/Curl) are syntactically valid and match WEEX requirements.
+
+## Acceptance Criteria
+
+### Documentation Completeness & Structure
+- [ ] Every document category found on https://www.weex.com/api-doc/ has a corresponding `.md` file in `lobes/knowledge/weex`.
+- [ ] No placeholders, draft notes, or unfinished sections are present in the final documents.
+- [ ] The signature rules explicitly detail BOTH the V2 and V3 signing logic (differentiating query parameter concatenation).
+
+### Verification
+- [ ] A verification script runs and confirms all generated `.md` files contain valid markdown structure.
+- [ ] An endpoint index file is generated listing all crawled endpoints and their mapped markdown files.

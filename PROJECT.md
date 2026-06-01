@@ -1,20 +1,19 @@
-# Project: TradingView Desktop CDP and Webhook Automation
+# Project: WEEX API Documentation Extraction and Knowledge Base Integration
 
 ## Architecture
-- **TradingView Desktop**: Runs on Windows with `--remote-debugging-port=9222`. Installed either in standard directories or as an MSIX package.
-- **CDP client**: Python script using standard libraries or light-weight CDP protocol (or wrapping node.js MCP CLI) to connect to port 9222.
-- **FastAPI Webhook Server**: Ingress point (`/webhook`) that parses indicator signal payloads and stores them in the database (`indicator_signals` table in `trades.db`).
+- **WEEX API Crawler/Extractor**: A Python crawler script (e.g. `weex_crawler.py`) that uses `requests` and parses dynamic or static documentation content from WEEX (`https://www.weex.com/api-doc`).
+- **Local Knowledge Base**: Mapped markdown files under `lobes/knowledge/weex/` and synchronized to `C:/Users/pesil/EAIS/.agents/lobes/knowledge/weex/`.
+- **Knowledge Graph Ingestion**: Ingests markdown files into L1 Hybrid Memory (sqlite-vec) and Graph Memory (Entities/Relations) using the `angati/memory_store` and `memory` node/edge creation MCP tools.
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | M1_Explorer | Analyze CDP target, standard/MSIX paths, DOM selectors, webhook payload | none | IN_PROGRESS (890b524f, 91a4d93c, 00b944aa) |
-| 2 | M2_Implementer | Implement auto-launcher, CDP symbol/indicator extractor, and E2E webhook poster | M1 | PLANNED |
-| 3 | M3_Verification | Verify E2E run against live server and SQLite DB, perform forensic audit | M2 | PLANNED |
+| 1 | M1_Explore | Investigate WEEX doc structure, categories, schema and outline crawl layout | none | DONE |
+| 2 | M2_Scrape_Update | Implement crawler/downloader, generate `.md` files, sync paths | M1 | DONE |
+| 3 | M3_Ingest | Ingest compiled KIs into L1 Hybrid Memory and Graph Memory | M2 | DONE |
+| 4 | M4_Audit | Validate links, schema structure, signatures (V2 vs V3), run checks | M3 | DONE |
 
 ## Interface Contracts
-- **CDP Server**: `http://localhost:9222/json/version`
-- **FastAPI /webhook**:
-  - Request body (JSON indicator signal payload, e.g. symbol, interval, close, studies like ATR14, SMA50, SMA150, SMA200).
-  - Query parameter: `?secret=<WEBHOOK_SECRET>` or header token for validation.
-  - Return: HTTP 200/202 with confirmation.
+- **Markdown File Formats**: Standardized header schemas, tables for query parameters, code blocks for python/curl examples.
+- **Signing logic**: Detail query param differences for V2 and V3 (V2: signature can treat query string inside path; V3: explicitly decouples path and query string).
+- **Ingestion tools**: Call `memory_store` and graph node/relation tools properly.
