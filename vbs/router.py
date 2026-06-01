@@ -4,7 +4,7 @@ import platform
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query, status, Request, Body
 
 import config
@@ -109,7 +109,21 @@ async def ingest_signal(request: Request, x_buffer_secret: Optional[str] = Heade
         f"Exchange: {exchange}\n"
         f"Expires: {expires_at} UTC"
     )
-    await notifier.send_telegram_alert(msg)
+    
+    # Tạo các nút tương tác (Inline Keyboard)
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Approve", "callback_data": f"approve_{queue_id}"},
+                {"text": "❌ Hủy lệnh", "callback_data": f"cancel_{queue_id}"}
+            ],
+            [
+                {"text": "📈 Xem Chart", "url": f"https://www.tradingview.com/chart/?symbol={exchange}:{symbol}"}
+            ]
+        ]
+    }
+    
+    await notifier.send_telegram_alert(msg, reply_markup=reply_markup)
 
     return {
         "queued": True,

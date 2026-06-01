@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -165,6 +164,19 @@ async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
         
         log.info(f"VBS Queue Signal #{queue_id} stored: {action} {symbol} (expires at {expires_str})")
         return queue_id, expires_str
+
+async def update_signal_status(queue_id: int, status: str, detail: str = "") -> bool:
+    """Updates the status of a specific signal (e.g. APPROVED, CANCELLED)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            "UPDATE signal_queue SET status = ? WHERE id = ? AND status = 'PENDING'",
+            (status, queue_id)
+        ) as cursor:
+            if cursor.rowcount > 0:
+                await write_audit_log(db, queue_id, status, detail=detail)
+                await db.commit()
+                return True
+            return False
 
 async def get_pending_count() -> int:
     """Return the number of pending signals."""
@@ -382,7 +394,6 @@ async def audit_cleanup(days: int) -> int:
 
 async def get_queue_status() -> Dict[str, Any]:
     """Retrieve queue statistics and pending items."""
-    now_str = utc_now_str()
     today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
     
     async with aiosqlite.connect(config.DB_PATH) as db:

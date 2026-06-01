@@ -7,6 +7,8 @@ from fastapi import FastAPI
 import config
 import database
 import scheduler
+import telegram_bot
+import asyncio
 from router import router
 
 # Configure logging
@@ -26,10 +28,14 @@ async def lifespan(app: FastAPI):
     await database.init_db()
     scheduler.start_scheduler()
     
+    # Start Telegram Long Polling for Interactive Buttons
+    telegram_task = asyncio.create_task(telegram_bot.start_telegram_long_polling())
+    
     yield
     
     # Shutdown
     scheduler.stop_scheduler()
+    telegram_task.cancel()
 
 app = FastAPI(
     title="Minervini Trading Bot Signal Buffer Queue (VBS)",
