@@ -51,6 +51,8 @@ class SignalReceived(Event):
     exchange: str = "binance"
     rag_advice: str = ""
     mode: str = ""            # "MTT" | "MIS" | "" (empty = not specified)
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,8 @@ class IndicatorSignalReceived(Event):
     metadata: Optional[Dict[str, Any]] = None
     source_ip: str = ""
     exchange: str = "binance"
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,8 @@ class IndicatorSignalRejected(Event):
     signal_type: str = ""
     reason: str = ""
     exchange: str = "binance"
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,8 @@ class SignalValidated(Event):
     tp: str = ""
     exchange: str = "binance"
     mode: str = ""            # "MTT" | "MIS" | "" — forwarded from SignalReceived
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 
@@ -118,6 +126,7 @@ class SignalRejected(Event):
     reason: str = ""
     interval: str = ""
     exchange: str = "binance"
+    analysis_text: str = ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -138,6 +147,8 @@ class TradeApproved(Event):
     approved_by: str = "AI"  # "AI" or "Human"
     analysis_text: str = ""
     mode: str = ""            # "MTT" | "MIS" | "" — forwarded from SignalValidated
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -213,6 +224,8 @@ class AlertTriggered(Event):
     quote_qty: float = 10.0
     rag_advice: str = ""
     exchange: str = "binance"
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -233,6 +246,8 @@ class AnalysisComplete(Event):
     vision_result: Optional[Dict[str, Any]] = None
     should_trade: bool = False  # confidence >= 8
     interactive_required: bool = False  # True if Human approval is needed
+    is_recovered: bool = False
+    age_minutes: float = 0.0
 
 
 # ═══════════════════════════════════════════════════════════════

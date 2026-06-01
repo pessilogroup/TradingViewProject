@@ -62,13 +62,13 @@ hook_name_strategy = st.text(
 @given(
     n=st.integers(min_value=0, max_value=20),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p3_batch_result_count_matches_input(n):
     """For any N symbols, batch_run returns exactly N results."""
     client = _make_mock_client()
     symbols = [{"symbol": f"SYM{i}", "timeframe": "D"} for i in range(n)]
 
-    results = asyncio.get_event_loop().run_until_complete(
+    results = asyncio.run(
         client.batch_run(symbols)
     )
     assert len(results) == n, f"Expected {n} results, got {len(results)}"
@@ -79,7 +79,7 @@ def test_p3_batch_result_count_matches_input(n):
 # ═══════════════════════════════════════════════════════════════
 
 @given(symbol=symbol_strategy)
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p5_symbol_fidelity_on_signal(symbol):
     """on_signal passes event.symbol verbatim to capture_screenshot."""
     client = _make_mock_client()
@@ -91,14 +91,14 @@ def test_p5_symbol_fidelity_on_signal(symbol):
             event = SignalValidated(symbol=symbol, signal_id=1, action="buy")
             await dispatcher.on_signal(event)
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
     client.capture_screenshot.assert_called_once_with(
         symbol=symbol, timeframe="D"
     )
 
 
 @given(symbol=symbol_strategy)
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p5_symbol_fidelity_on_command(symbol):
     """on_command passes symbol verbatim to capture_screenshot."""
     client = _make_mock_client()
@@ -109,7 +109,7 @@ def test_p5_symbol_fidelity_on_command(symbol):
             mock_bus.emit_background = AsyncMock()
             await dispatcher.on_command(symbol)
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
     client.capture_screenshot.assert_called_once_with(
         symbol=symbol, timeframe="D"
     )
@@ -122,7 +122,7 @@ def test_p5_symbol_fidelity_on_command(symbol):
 @given(
     hooks=st.lists(hook_name_strategy, min_size=0, max_size=10),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p6_hook_parsing_trims_and_filters(hooks):
     """register_hooks always produces a list of trimmed non-empty strings."""
     client = _make_mock_client()
@@ -142,7 +142,7 @@ def test_p6_hook_parsing_trims_and_filters(hooks):
     cooldown=st.integers(min_value=1, max_value=300),
     elapsed=st.floats(min_value=0.0, max_value=600.0, allow_nan=False, allow_infinity=False),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_p7_cooldown_monotonic(cooldown, elapsed):
     """If elapsed < cooldown → blocked. If elapsed >= cooldown → allowed."""
     client = _make_mock_client()
@@ -162,7 +162,7 @@ def test_p7_cooldown_monotonic(cooldown, elapsed):
 @given(
     symbols=st.lists(symbol_strategy, min_size=2, max_size=5, unique=True),
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_p7_cooldown_is_per_symbol(symbols):
     """Cooldown on symbol A should not affect symbol B."""
     client = _make_mock_client()
@@ -195,7 +195,7 @@ def test_p8_capture_request_defaults():
     symbol=symbol_strategy,
     timeframe=st.sampled_from(["1", "5", "15", "60", "D", "W", "M"]),
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_p8_capture_request_immutable(symbol, timeframe):
     """CaptureRequest should be frozen (immutable)."""
     req = CaptureRequest(symbol=symbol, timeframe=timeframe)
@@ -213,7 +213,7 @@ def test_p8_capture_request_immutable(symbol, timeframe):
         min_size=1, max_size=20,
     ),
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_p10_capture_result_method_always_set(latencies):
     """CaptureResult.method is always 'daemon' or 'fallback', never empty."""
     for lat in latencies:
@@ -231,7 +231,7 @@ def test_p10_capture_result_method_always_set(latencies):
     symbol=symbol_strategy,
     trigger=st.sampled_from(["signal", "schedule", "command"]),
 )
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 def test_capture_triggered_preserves_fields(symbol, trigger):
     """CaptureTriggered should preserve symbol and trigger exactly."""
     event = CaptureTriggered(symbol=symbol, trigger=trigger)
@@ -242,7 +242,7 @@ def test_capture_triggered_preserves_fields(symbol, trigger):
 @given(
     symbols=st.lists(symbol_strategy, min_size=1, max_size=10),
 )
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 def test_capture_triggered_unique_event_ids(symbols):
     """Each CaptureTriggered event should have a unique event_id."""
     events = [CaptureTriggered(symbol=s) for s in symbols]

@@ -18,7 +18,7 @@ import config
 logger = logging.getLogger(__name__)
 
 # Path to daemon entry point
-_DAEMON_DIR = Path(__file__).parent.parent.parent.parent / "tradingview-mcp"
+_DAEMON_DIR = Path(__file__).resolve().parent.parent.parent.parent / "tradingview-mcp"
 _DAEMON_ENTRY = _DAEMON_DIR / "src" / "daemon" / "index.js"
 
 

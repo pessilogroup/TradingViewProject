@@ -26,9 +26,15 @@ class ExchangeRouter:
         if not exchange_id:
             exchange_id = self._registry.default_exchange
 
+        # Normalize to lower
+        if exchange_id:
+            exchange_id = exchange_id.lower()
+
         # Validate and check health
         if not self._registry.is_available(exchange_id):
             fallback_id = self._get_fallback(exchange_id, payload)
+            if fallback_id:
+                fallback_id = fallback_id.lower()
             if fallback_id and self._registry.is_available(fallback_id):
                 return self._registry.get_adapter(fallback_id)
             elif not fallback_id or not self._registry.is_available(fallback_id):
@@ -41,7 +47,8 @@ class ExchangeRouter:
     def _get_fallback(self, primary_id: str, payload: Dict) -> Optional[str]:
         strategy = payload.get("strategy", "")
         if strategy in self._strategy_config:
-            return self._strategy_config[strategy].get("fallback")
+            fallback = self._strategy_config[strategy].get("fallback")
+            return fallback.lower() if fallback else None
         return None
 
 # Singleton initialization

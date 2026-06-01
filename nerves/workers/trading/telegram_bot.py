@@ -105,6 +105,48 @@ async def send_interactive_trade_approval(
     return results
 
 
+async def send_interactive_indicator_alert(
+    signal_id: int, symbol: str, message: str
+) -> list:
+    """Send interactive indicator alert with AI Scan and Dismiss buttons."""
+    global _bot_app
+    if not _bot_app:
+        return []
+
+    results = []
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        import config
+        from notifier import sanitize_for_telegram_html
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🔍 Quét AI / VCP", callback_data=f"analyze_{symbol}"),
+                InlineKeyboardButton("📊 Xem Chart", url=f"https://www.tradingview.com/chart/?symbol={symbol}"),
+                InlineKeyboardButton("❌ Bỏ Qua", callback_data=f"ignore_{signal_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        html_message = sanitize_for_telegram_html(message)
+
+        for chat_id in config.TELEGRAM_CHAT_IDS:
+            try:
+                msg = await _bot_app.bot.send_message(
+                    chat_id=chat_id,
+                    text=html_message,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                )
+                results.append((int(chat_id), msg.message_id))
+            except Exception as e:
+                log.error(f"Failed to send interactive indicator alert to {chat_id}: {e}")
+
+    except Exception as e:
+        log.error(f"Error sending interactive indicator alert: {e}")
+
+    return results
+
+
 # ── Command Handlers ──────────────────────────────────────────────────────
 
 async def cmd_start(update, context):
@@ -1728,8 +1770,19 @@ async def button_callback(update, context):
         signal_id = int(data.split("_")[1])
         from hub.notification_hub import PENDING_TRADES
         if signal_id in PENDING_TRADES:
-            PENDING_TRADES.pop(signal_id)
+            event = PENDING_TRADES.pop(signal_id)
             user = query.from_user.username or query.from_user.first_name
+            from core.event_bus import bus as _default_bus
+            from core.events import TradeFailed
+            import asyncio
+            asyncio.create_task(_default_bus.emit_background(TradeFailed(
+                signal_id=event.signal_id,
+                symbol=event.symbol,
+                side=event.action,
+                error=f"Rejected by user (@{user})",
+                quote_qty=event.quote_qty,
+                exchange=getattr(event, "exchange", "binance"),
+            )))
             from notifier import sanitize_for_telegram_html
             safe_text = sanitize_for_telegram_html(query.message.text)
             new_text = safe_text + f"\n\n❌ <b>ĐÃ TỪ CHỐI BỞI @{user}</b>"
@@ -1739,6 +1792,14 @@ async def button_callback(update, context):
             safe_text = sanitize_for_telegram_html(query.message.text)
             new_text = safe_text + "\n\n<i>(Lệnh đã hết hạn hoặc đã được xử lý)</i>"
             await query.message.edit_text(new_text, parse_mode="HTML")
+
+    elif data.startswith("ignore_"):
+        signal_id = int(data.split("_")[1])
+        user = query.from_user.username or query.from_user.first_name
+        from notifier import sanitize_for_telegram_html
+        safe_text = sanitize_for_telegram_html(query.message.text)
+        new_text = safe_text + f"\n\n❌ <b>ĐÃ BỎ QUA BỞI @{user}</b>"
+        await query.message.edit_text(new_text, parse_mode="HTML")
 
     elif data == "status":
         # Re-use status logic

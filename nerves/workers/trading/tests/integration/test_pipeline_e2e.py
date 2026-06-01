@@ -252,7 +252,7 @@ async def test_scenario_c_low_confidence_no_trade(pipeline_bus):
     """Low confidence (3) → auto-reject, no TradeApproved or TradeExecuted."""
     from analyzer.ai_analyzer import process_validated_signal, set_bus as ai_set_bus, reset_capture_state
     from hub.notification_hub import (
-        process_analysis_complete, set_bus as hub_set_bus, PENDING_TRADES
+        process_analysis_complete, set_bus as hub_set_bus, PENDING_TRADES, notify_signal_rejected
     )
 
     PENDING_TRADES.clear()
@@ -262,6 +262,7 @@ async def test_scenario_c_low_confidence_no_trade(pipeline_bus):
 
     pipeline_bus.on(SignalValidated)(process_validated_signal)
     pipeline_bus.on(AnalysisComplete)(process_analysis_complete)
+    pipeline_bus.on(SignalRejected)(notify_signal_rejected)
 
     trade_events = []
 

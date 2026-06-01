@@ -1,0 +1,222 @@
+//@version=6
+// ============================================================================
+// RSI Divergence Scanner — Webhook Alert for VBS Pipeline
+// ============================================================================
+// V1.2: + Market Regime Filter (EMA200 + ADX) — mirrors ST v1.2 improvement
+// Rolling WF: only fire in trending markets (ADX>20, above/below EMA200)
+// ============================================================================
+indicator("RSI Divergence Webhook", overlay=true, max_labels_count=100, max_lines_count=100)
+
+import dinhvietdan88/VBS_Webhook_Lib/3 as vbs
+
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+grp_core = "Core Settings"
+webhookSecret   = input.string("7086c59c523e87c90f9d56db63a66fd9045cb081264afe65c4ce8c37cff89104", "Webhook Secret", group=grp_core)
+confidenceScore = input.int(75, "Base Confidence (%)", minval=0, maxval=100, group=grp_core)
+
+grp_rsi = "RSI Settings"
+rsiLen  = input.int(14, "RSI Length", minval=2, maxval=50, group=grp_rsi)
+pivotLb = input.int(5,  "Pivot Lookback",   minval=1, maxval=20, group=grp_rsi)
+pivotRb = input.int(5,  "Pivot Lookforward", minval=1, maxval=20, group=grp_rsi)
+maxBars = input.int(60, "Max Bars Between Pivots", minval=10, maxval=200, group=grp_rsi)
+
+grp_types = "Divergence Types"
+detectRegularBull = input.bool(true, "Regular Bullish (price ↓↓, RSI ↑↑)", group=grp_types)
+detectRegularBear = input.bool(true, "Regular Bearish (price ↑↑, RSI ↓↓)", group=grp_types)
+detectHiddenBull  = input.bool(true, "Hidden Bullish (price ↑↑, RSI ↓↓ in uptrend)", group=grp_types)
+detectHiddenBear  = input.bool(true, "Hidden Bearish (price ↓↓, RSI ↑↑ in downtrend)", group=grp_types)
+
+grp_regime = "Market Regime Filter"
+useRegimeFilter = input.bool(true,  "Regime Filter (EMA200 + ADX)", group=grp_regime)
+adxLen          = input.int(14,     "ADX Length",                   group=grp_regime)
+adxThresh       = input.int(20,     "Min ADX (trending)",           group=grp_regime, minval=10, maxval=50)
+longOnly        = input.bool(false, "Long Only Mode",               group=grp_regime)
+
+grp_vis = "Visual Settings"
+bullColor   = input.color(#00c853, "Bullish Color", group=grp_vis)
+bearColor   = input.color(#ff1744, "Bearish Color", group=grp_vis)
+hiddenAlpha = input.int(40, "Hidden Transparency", minval=0, maxval=80, group=grp_vis)
+
+// ═══════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ═══════════════════════════════════════════════════════════════
+rsiVal = ta.rsi(close, rsiLen)
+atrVal = ta.atr(14)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+volSma = ta.sma(volume, 20)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+
+isTrending  = adxVal > adxThresh
+inUptrend   = close > ema50
+inDowntrend = close < ema50
+isAboveEma200 = close > ema200
+
+// Regime gates
+regimeBull = not useRegimeFilter or (isTrending and isAboveEma200)
+regimeBear = not useRegimeFilter or (isTrending and not isAboveEma200 and not longOnly)
+
+// ═══════════════════════════════════════════════════════════════
+// PIVOT DETECTION
+// ═══════════════════════════════════════════════════════════════
+pricePivotLow  = ta.pivotlow(low,    pivotLb, pivotRb)
+pricePivotHigh = ta.pivothigh(high,  pivotLb, pivotRb)
+rsiPivotLow    = ta.pivotlow(rsiVal, pivotLb, pivotRb)
+rsiPivotHigh   = ta.pivothigh(rsiVal, pivotLb, pivotRb)
+
+// ═══════════════════════════════════════════════════════════════
+// STATE: Track previous pivots
+// ═══════════════════════════════════════════════════════════════
+var float prevPriceLow   = na
+var int   prevPriceLowX  = na
+var float prevRsiLow     = na
+var float prevPriceHigh  = na
+var int   prevPriceHighX = na
+var float prevRsiHigh    = na
+
+if not na(pricePivotLow) and not na(rsiPivotLow)
+    prevPriceLow  := low[pivotRb]
+    prevPriceLowX := bar_index - pivotRb
+    prevRsiLow    := rsiVal[pivotRb]
+
+if not na(pricePivotHigh) and not na(rsiPivotHigh)
+    prevPriceHigh  := high[pivotRb]
+    prevPriceHighX := bar_index - pivotRb
+    prevRsiHigh    := rsiVal[pivotRb]
+
+// ═══════════════════════════════════════════════════════════════
+// DIVERGENCE DETECTION
+// ═══════════════════════════════════════════════════════════════
+var bool regBullDiv = false
+var bool regBearDiv = false
+var bool hidBullDiv = false
+var bool hidBearDiv = false
+
+regBullDiv := false
+regBearDiv := false
+hidBullDiv := false
+hidBearDiv := false
+
+currPriceLow  = low[pivotRb]
+currRsiLow    = rsiVal[pivotRb]
+currPriceHigh = high[pivotRb]
+currRsiHigh   = rsiVal[pivotRb]
+
+pivotAge_low  = not na(prevPriceLowX)  ? (bar_index - pivotRb - prevPriceLowX)  : maxBars + 1
+pivotAge_high = not na(prevPriceHighX) ? (bar_index - pivotRb - prevPriceHighX) : maxBars + 1
+
+// Regular Bullish: lower low price + higher low RSI
+if not na(pricePivotLow) and not na(rsiPivotLow) and not na(prevPriceLow) and detectRegularBull
+    if pivotAge_low <= maxBars and currPriceLow < prevPriceLow and currRsiLow > prevRsiLow
+        regBullDiv := true
+
+// Regular Bearish: higher high price + lower high RSI
+if not na(pricePivotHigh) and not na(rsiPivotHigh) and not na(prevPriceHigh) and detectRegularBear
+    if pivotAge_high <= maxBars and currPriceHigh > prevPriceHigh and currRsiHigh < prevRsiHigh
+        regBearDiv := true
+
+// Hidden Bullish: higher low price + lower low RSI (uptrend continuation)
+if not na(pricePivotLow) and not na(rsiPivotLow) and not na(prevPriceLow) and detectHiddenBull
+    if pivotAge_low <= maxBars and currPriceLow > prevPriceLow and currRsiLow < prevRsiLow and inUptrend
+        hidBullDiv := true
+
+// Hidden Bearish: lower high price + higher high RSI (downtrend continuation)
+if not na(pricePivotHigh) and not na(rsiPivotHigh) and not na(prevPriceHigh) and detectHiddenBear
+    if pivotAge_high <= maxBars and currPriceHigh < prevPriceHigh and currRsiHigh > prevRsiHigh and inDowntrend
+        hidBearDiv := true
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIDENCE SCORING (via library)
+// ═══════════════════════════════════════════════════════════════
+// Regular divergences get +10 base bonus built into initial score
+regBullConf = vbs.calc_confidence(math.min(100, confidenceScore + 10), rsiVal, volume, volSma, true)
+regBearConf = vbs.calc_confidence(math.min(100, confidenceScore + 10), rsiVal, volume, volSma, false)
+hidBullConf = vbs.calc_confidence(confidenceScore, rsiVal, volume, volSma, true)
+hidBearConf = vbs.calc_confidence(confidenceScore, rsiVal, volume, volSma, false)
+
+// ═══════════════════════════════════════════════════════════════
+// PAYLOAD BUILDER (via library)
+// ═══════════════════════════════════════════════════════════════
+buildMeta(dir, divType) =>
+    vbs.meta_join5(
+         vbs.meta_str("direction", dir),
+         vbs.meta_str("divergence_type", divType),
+         vbs.meta_float("rsi_value", rsiVal),
+         vbs.meta_float("atr_value", atrVal),
+         vbs.meta_str("trend", inUptrend ? "up" : "down")
+     )
+
+// ═══════════════════════════════════════════════════════════════
+// ALERT DISPATCH
+// ═══════════════════════════════════════════════════════════════
+if regBullDiv and barstate.isconfirmed and regimeBull
+    alert(vbs.build_payload(webhookSecret, "RSI Divergence", syminfo.ticker,
+         "buy", "info", "long", close, timeframe.period, syminfo.prefix,
+         regBullConf, buildMeta("long", "regular_bullish")),
+         alert.freq_once_per_bar_close)
+
+if regBearDiv and barstate.isconfirmed and regimeBear
+    alert(vbs.build_payload(webhookSecret, "RSI Divergence", syminfo.ticker,
+         "sell", "info", "short", close, timeframe.period, syminfo.prefix,
+         regBearConf, buildMeta("short", "regular_bearish")),
+         alert.freq_once_per_bar_close)
+
+if hidBullDiv and barstate.isconfirmed and regimeBull
+    alert(vbs.build_payload(webhookSecret, "RSI Divergence", syminfo.ticker,
+         "buy", "info", "long", close, timeframe.period, syminfo.prefix,
+         hidBullConf, buildMeta("long", "hidden_bullish")),
+         alert.freq_once_per_bar_close)
+
+if hidBearDiv and barstate.isconfirmed and regimeBear
+    alert(vbs.build_payload(webhookSecret, "RSI Divergence", syminfo.ticker,
+         "sell", "info", "short", close, timeframe.period, syminfo.prefix,
+         hidBearConf, buildMeta("short", "hidden_bearish")),
+         alert.freq_once_per_bar_close)
+
+alertcondition(regBullDiv, title="Regular Bullish Divergence", message="RSI Reg Bull Div")
+alertcondition(regBearDiv, title="Regular Bearish Divergence", message="RSI Reg Bear Div")
+alertcondition(hidBullDiv, title="Hidden Bullish Divergence",  message="RSI Hid Bull Div")
+alertcondition(hidBearDiv, title="Hidden Bearish Divergence",  message="RSI Hid Bear Div")
+
+// ═══════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ═══════════════════════════════════════════════════════════════
+plotshape(regBullDiv, style=shape.diamond, location=location.belowbar,
+     color=color.new(bullColor, 0), size=size.small, title="Reg Bull", text="RB", textcolor=color.white)
+plotshape(regBearDiv, style=shape.diamond, location=location.abovebar,
+     color=color.new(bearColor, 0), size=size.small, title="Reg Bear", text="RB", textcolor=color.white)
+plotshape(hidBullDiv, style=shape.cross, location=location.belowbar,
+     color=color.new(bullColor, hiddenAlpha), size=size.tiny, title="Hid Bull", text="HB")
+plotshape(hidBearDiv, style=shape.cross, location=location.abovebar,
+     color=color.new(bearColor, hiddenAlpha), size=size.tiny, title="Hid Bear", text="HB")
+
+// ═══════════════════════════════════════════════════════════════
+// STATUS TABLE
+// ═══════════════════════════════════════════════════════════════
+var table divTable = table.new(position.bottom_left, 2, 6, border_width=1)
+volRatio = vbs.volume_ratio(20)
+
+if barstate.islast
+    hdrBg      = color.new(#37474f, 10)
+    trendText  = inUptrend ? "UP" : "DOWN"
+    trendColor = inUptrend ? color.new(bullColor, 20) : color.new(bearColor, 20)
+    rsiColor   = rsiVal > 70 ? color.new(bearColor, 30) : rsiVal < 30 ? color.new(bullColor, 30) : color.new(color.gray, 70)
+    vrColor    = volRatio > 1.5 ? color.new(bullColor, 40) : volRatio > 1.0 ? color.new(#ff9800, 40) : color.new(color.gray, 70)
+    regText    = isTrending ? (isAboveEma200 ? "BULL REGIME" : "BEAR REGIME") : "RANGING"
+    regColor   = isTrending ? (isAboveEma200 ? color.new(bullColor, 30) : color.new(bearColor, 30)) : color.new(color.gray, 60)
+
+    table.cell(divTable, 0, 0, "DIV v1.2", bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+    table.cell(divTable, 1, 0, timeframe.period, bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+    table.cell(divTable, 0, 1, "RSI", text_size=size.small)
+    table.cell(divTable, 1, 1, str.tostring(rsiVal, "#.0"), bgcolor=rsiColor, text_size=size.small)
+    table.cell(divTable, 0, 2, "Trend", text_size=size.small)
+    table.cell(divTable, 1, 2, trendText, bgcolor=trendColor, text_color=color.white, text_size=size.small)
+    table.cell(divTable, 0, 3, "Regime", text_size=size.small)
+    table.cell(divTable, 1, 3, regText, bgcolor=regColor, text_color=color.white, text_size=size.small)
+    table.cell(divTable, 0, 4, "Reg Div", text_size=size.small)
+    table.cell(divTable, 1, 4, regBullDiv ? "BULL ◆" : regBearDiv ? "BEAR ◆" : "—", text_size=size.small,
+         bgcolor=regBullDiv ? color.new(bullColor, 40) : regBearDiv ? color.new(bearColor, 40) : na)
+    table.cell(divTable, 0, 5, "Vol", text_size=size.small)
+    table.cell(divTable, 1, 5, str.tostring(volRatio, "#.##") + "x", bgcolor=vrColor, text_size=size.small)

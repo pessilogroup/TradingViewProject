@@ -27,3 +27,6 @@ AUDIT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", "7"))
 
 # Database
 DB_PATH = os.getenv("DB_PATH", "signal_queue.db")
+
+# Dedup: reject same (symbol, action, price) within this window
+DEDUP_WINDOW_SECONDS = int(os.getenv("DEDUP_WINDOW_SECONDS", "10"))

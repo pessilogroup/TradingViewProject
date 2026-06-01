@@ -50,7 +50,14 @@ Mở một Terminal khác để chạy Cloudflare Quick Tunnel:
 ```bash
 cloudflared tunnel --url http://localhost:5000
 ```
-Bạn sẽ nhận được một public URL dạng `https://<random-words>.trycloudflare.com`.
+Khi lệnh khởi chạy, Cloudflare sẽ in ra một public URL như:
+```text
+https://<random-words>.trycloudflare.com
+```
+Sao chép URL này và dùng làm Webhook URL trong TradingView, ví dụ:
+```text
+https://<random-words>.trycloudflare.com/webhook
+```
 
 Sanity check:
 ```bash

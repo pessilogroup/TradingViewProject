@@ -21,6 +21,7 @@ CHROMADB_AVAILABLE = importlib.util.find_spec("chromadb") is not None
 ANTHROPIC_AVAILABLE = importlib.util.find_spec("anthropic") is not None
 GENAI_AVAILABLE = importlib.util.find_spec("google.genai") is not None
 VERTEXAI_AVAILABLE = importlib.util.find_spec("vertexai") is not None
+ANTIGRAVITY_AVAILABLE = importlib.util.find_spec("google.antigravity") is not None
 
 if not CHROMADB_AVAILABLE:
     log.warning("chromadb not installed. Run: pip install chromadb sentence-transformers")
@@ -30,6 +31,8 @@ if not GENAI_AVAILABLE:
     log.warning("google-genai not installed. Run: pip install google-genai")
 if not VERTEXAI_AVAILABLE:
     log.warning("vertexai not installed. Run: pip install google-cloud-aiplatform")
+if not ANTIGRAVITY_AVAILABLE:
+    log.warning("google-antigravity not installed. Run: pip install google-antigravity")
 
 import config
 
@@ -153,7 +156,7 @@ async def init_vector_db() -> bool:
         log.error("RAG unavailable: chromadb not installed.")
         return False
 
-    # ── Remote ChromaDB (Phase 4: 3-Server Pipeline) ─────────────────────
+    # ── Remote / Local DB client setup ───────────────────────────────────
     if getattr(config, "CHROMA_REMOTE", False):
         import chromadb
         _chroma_client = chromadb.HttpClient(
@@ -170,11 +173,25 @@ async def init_vector_db() -> bool:
             f"RAG: Connected to remote ChromaDB at "
             f"{config.CHROMA_SERVER_HOST}:{config.CHROMA_SERVER_PORT}"
         )
-        return True
+    else:
+        # Khởi tạo ChromaDB local (lưu persistent vào disk)
+        chroma_db_path = Path(config.CHROMA_DB_PATH)
+        chroma_db_path.mkdir(parents=True, exist_ok=True)
 
-    # ── Local PersistentClient (default) ─────────────────────────────────
+        import chromadb
+        _chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
+        ef = _get_embedding_function()
+        _collection = _chroma_client.get_or_create_collection(
+            name="minervini_knowledge",
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+
     knowledge_dir = Path(config.KNOWLEDGE_DIR)
     if not knowledge_dir.exists():
+        if getattr(config, "CHROMA_REMOTE", False):
+            log.info(f"RAG: Knowledge dir not found ({knowledge_dir}), but remote ChromaDB is active. Skipping ingestion.")
+            return True
         log.error(f"RAG: Knowledge dir not found: {knowledge_dir}")
         return False
 
@@ -182,20 +199,6 @@ async def init_vector_db() -> bool:
     if not chunk_files:
         log.warning(f"RAG: No chunk files found in {knowledge_dir}")
         return False
-
-    # Khởi tạo ChromaDB (lưu persistent vào disk)
-    chroma_db_path = Path(config.CHROMA_DB_PATH)
-    chroma_db_path.mkdir(parents=True, exist_ok=True)
-
-    import chromadb
-    _chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
-    ef = _get_embedding_function()
-
-    _collection = _chroma_client.get_or_create_collection(
-        name="minervini_knowledge",
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
 
     # Kiểm tra xem đã embed chưa (tránh re-embed mỗi lần restart)
     existing_count = _collection.count()
@@ -315,7 +318,10 @@ async def generate_trading_advice(
     # Claude CLI auth session (OAuth login — no API key needed)
     has_claude_cli = True   # always available as long as `claude` binary exists; verified at call time
 
-    if provider == "claude_cli":
+    if provider == "antigravity":
+        if not ANTIGRAVITY_AVAILABLE:
+            return "⚠️ RAG Analysis không khả dụng (thiếu google-antigravity SDK)."
+    elif provider == "claude_cli":
         pass  # không cần check key, sẽ verify binary khi gọi
     elif provider == "gemini":
         if not has_gemini:
@@ -325,7 +331,9 @@ async def generate_trading_advice(
         # User dùng Claude login session — không cần ANTHROPIC_API_KEY
         pass  # will try CLI first, then SDK, then Gemini in execution block
     else:
-        if not has_anthropic_sdk:
+        if ANTIGRAVITY_AVAILABLE:
+            provider = "antigravity"
+        elif not has_anthropic_sdk:
             if has_gemini:
                 log.info("RAG: Anthropic not configured/mock. Switching to Gemini fallback.")
                 provider = "gemini"
@@ -381,6 +389,19 @@ Dựa trên tín hiệu trên và quy tắc của Minervini trong Knowledge Base
 Trả lời NGẮN GỌN, súc tích (dưới 200 từ), dùng emoji để dễ đọc trên Telegram."""
 
     try:
+        if provider == "antigravity":
+            from google.antigravity import Agent, LocalAgentConfig
+            model_name = getattr(config, "CLAUDE_CLI_MODEL", "") or "gemini-2.5-flash"
+            agent_cfg = LocalAgentConfig(
+                system_instructions="Bạn là chuyên gia giao dịch theo phương pháp SEPA của Mark Minervini. Phân tích tín hiệu giao dịch và đưa ra khuyến nghị hành động chi tiết.",
+                model=model_name,
+            )
+            async with Agent(agent_cfg) as agent:
+                response = await agent.chat(prompt)
+                advice = await response.text()
+            log.info(f"RAG: Antigravity SDK Agent 2.0 generated advice for {symbol} ({action})")
+            return advice
+
         if provider == "claude_cli":
             try:
                 advice = await _call_claude_cli(prompt)

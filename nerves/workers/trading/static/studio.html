@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minervini SEPA — Trading Studio</title>
+  <meta name="description" content="Sovereign Node Trading Studio — AI Vision Capture & Telegram Template Customizer">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20260530">
+  <style>
+    /* Custom layout override for Studio */
+    .studio-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 1024px) {
+      .studio-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Template Editor Custom Styles */
+    .template-editor-card {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .template-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .template-tab-btn {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .template-tab-btn:hover {
+      color: var(--text);
+      background: var(--glass);
+    }
+    .template-tab-btn.active {
+      background: rgba(108,99,255,0.15);
+      border-color: rgba(108,99,255,0.3);
+      color: var(--accent);
+    }
+
+    .editor-wrapper {
+      position: relative;
+    }
+    .code-textarea {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      line-height: 1.6;
+      background: #07080b;
+      color: #e2e8f0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      width: 100%;
+      min-height: 260px;
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .code-textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .variables-box {
+      background: rgba(255,255,255,0.02);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .variables-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent2);
+      margin-bottom: 8px;
+      letter-spacing: 0.05em;
+    }
+    .variables-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .variable-badge {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      background: var(--bg3);
+      color: var(--text-sub);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .variable-badge:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(108,99,255,0.05);
+    }
+
+    /* Telegram Chat Simulation Preview */
+    .tg-chat-container {
+      background: #0e1621;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 480px;
+      box-shadow: var(--shadow);
+    }
+    .tg-chat-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .tg-avatar {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, #5fc3e4, #e1578a);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: white;
+      font-size: 0.9rem;
+    }
+    .tg-chat-title-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .tg-bot-name {
+      font-weight: 600;
+      font-size: 0.88rem;
+      color: #ffffff;
+    }
+    .tg-bot-status {
+      font-size: 0.72rem;
+      color: #8295a5;
+    }
+    .tg-messages-area {
+      flex: 1;
+      background: #0e1621;
+      background-image: radial-gradient(rgba(0,0,0,0.15) 15%, transparent 16%);
+      background-size: 16px 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 8px 0;
+      overflow-y: auto;
+    }
+    .tg-bubble {
+      background: #182533;
+      border: 1px solid rgba(255,255,255,0.02);
+      border-radius: 10px 10px 10px 0px;
+      padding: 12px 14px;
+      color: #f5f5f5;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      max-width: 92%;
+      align-self: flex-start;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      position: relative;
+    }
+    .tg-bubble-time {
+      font-size: 0.68rem;
+      color: #708499;
+      float: right;
+      margin-top: 6px;
+      margin-left: 12px;
+      font-family: var(--mono);
+    }
+    
+    /* Telegram HTML style mapping in preview */
+    .tg-bubble b, .tg-bubble strong {
+      color: #ffffff;
+      font-weight: 700;
+    }
+    .tg-bubble code {
+      background: rgba(0,0,0,0.25);
+      color: #da8487;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+    .tg-bubble pre {
+      background: rgba(0,0,0,0.35);
+      border-left: 3px solid var(--accent);
+      border-radius: 4px;
+      padding: 8px 10px;
+      margin: 6px 0;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #a9b7c6;
+    }
+    .tg-bubble a {
+      color: #64b5f6;
+      text-decoration: none;
+    }
+    .tg-bubble a:hover {
+      text-decoration: underline;
+    }
+
+    .editor-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+    .btn-save-template {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 24px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      color: white;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-save-template:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+    .btn-save-template:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .btn-reset-template {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      color: var(--text-sub);
+      font-size: 0.88rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-reset-template:hover {
+      background: var(--glass);
+      color: var(--text);
+    }
+
+    /* Vision Screenshot view in Studio */
+    .studio-vision-card {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .daemon-health-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .daemon-health-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .daemon-status-lbl {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text-sub);
+    }
+    .capture-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .screenshot-viewer-box {
+      border: 1px solid var(--border);
+      background: #000;
+      border-radius: 8px;
+      aspect-ratio: 16 / 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .screenshot-placeholder-text {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .screenshot-viewer-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .back-btn {
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      transition: color 0.2s;
+    }
+    .back-btn:hover {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+<!-- LOGIN OVERLAY -->
+<div id="loginOverlay" class="login-overlay d-none">
+  <div class="login-box">
+    <div class="login-logo">⚡</div>
+    <h2>Edge Node Access</h2>
+    <p>Minervini SEPA — TradingView Bridge</p>
+    <input type="password" id="loginToken" placeholder="Access Token" autocomplete="off">
+    <button id="loginBtn" onclick="handleLogin()">Authenticate</button>
+    <div id="loginError" class="login-error">Invalid token. Please try again.</div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toastContainer" class="toast-container"></div>
+
+<!-- HEADER -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo-mark">⚡</div>
+    <div class="header-title">
+      <h1>Sovereign Trading Studio</h1>
+      <span class="header-sub">Minervini SEPA · TradingView Bridge</span>
+    </div>
+  </div>
+  <div class="header-center">
+    <a href="/dashboard" class="back-btn">
+      <span>←</span> Back to Dashboard
+    </a>
+  </div>
+  <div class="header-right">
+    <span id="clockDisplay" class="clock"></span>
+    <div id="serverDot" class="status-dot online" title="Server Online"></div>
+  </div>
+</header>
+
+<main class="container">
+  <div class="studio-grid">
+    
+    <!-- LEFT: AI VISION CAPTURE STUDIO -->
+    <div class="studio-vision-card">
+      <section class="glass-section" style="margin-bottom: 0;">
+        <div class="section-header">
+          <div class="section-title">👁 AI Vision Capture Studio</div>
+          <span class="live-dot-wrap"><span class="live-dot"></span> LIVE</span>
+        </div>
+        
+        <div class="daemon-health-bar mb-16">
+          <div class="daemon-health-info">
+            <span class="health-dot" id="daemonHealthDot"></span>
+            <span class="daemon-status-lbl" id="daemonHealthText">CDP: Checking...</span>
+          </div>
+          <button class="qbtn" style="padding: 4px 10px; font-size: 0.72rem; height: auto;" onclick="checkDaemonHealth()">Refresh</button>
+        </div>
+
+        <div class="capture-form-grid mb-16">
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+            <label class="muted-label">Mã giao dịch (Symbol)</label>
+            <input type="text" id="capSymbol" class="form-input text-uppercase" value="BTCUSDT">
+          </div>
+          <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+            <label class="muted-label">Khung thời gian (Timeframe)</label>
+            <select id="capTimeframe" class="form-input">
+              <option value="15">15m</option>
+              <option value="60">1H</option>
+              <option value="240" selected>4H</option>
+              <option value="D">1D</option>
+              <option value="W">1W</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="triggerCapBtn" class="btn-capture" style="width: 100%; justify-content: center; margin-bottom: 16px;" onclick="triggerStudioCapture()">
+          <span id="triggerCapIcon">📸</span>
+          <span id="triggerCapText">Capture & Analyze Chart</span>
+        </button>
+
+        <div class="screenshot-viewer-box" id="screenshotBox">
+          <div class="screenshot-placeholder-text" id="screenshotPlaceholder">
+            <span>Biểu đồ chụp sẽ hiển thị ở đây<br><small style="color: var(--text-muted); font-size: 0.7rem;">Kết quả phân tích AI sẽ gửi trực tiếp đến Telegram</small></span>
+          </div>
+          <img id="screenshotImg" class="d-none" src="" alt="Captured Chart">
+        </div>
+        
+        <div class="cs-verdict-card d-none" id="studioVerdictCard" style="margin-top: 14px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); padding: 12px; border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+            <span style="font-weight: 700;" id="studioVerdictSym">—</span>
+            <span style="font-weight: 600;" id="studioVerdictVal">—</span>
+          </div>
+          <div id="studioAnalysisText" style="font-size: 0.8rem; color: var(--text-sub); line-height: 1.5;"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT: TELEGRAM TEMPLATE EDITOR -->
+    <div class="template-editor-card">
+      <section class="glass-section" style="margin-bottom: 0;">
+        <div class="section-header">
+          <div class="section-title">💬 Telegram Message Templates</div>
+          <span class="muted-label">Syntax: HTML Format</span>
+        </div>
+
+        <!-- Tabs -->
+        <div class="template-tabs mb-16">
+          <button class="template-tab-btn active" onclick="switchTemplateTab('A')">Mẫu A (Pending)</button>
+          <button class="template-tab-btn" onclick="switchTemplateTab('B')">Mẫu B (Scan)</button>
+          <button class="template-tab-btn" onclick="switchTemplateTab('C')">Mẫu C (Outage)</button>
+          <button class="template-tab-btn" onclick="switchTemplateTab('D')">Mẫu D (Warning)</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <!-- Monospace code editor area -->
+          <div class="editor-wrapper">
+            <textarea id="templateTextarea" class="code-textarea" oninput="updateLivePreview()" autocomplete="off" spellcheck="false"></textarea>
+          </div>
+
+          <!-- Supported Variables Guide -->
+          <div class="variables-box">
+            <div class="variables-title">Biến khả dụng (Click để chèn)</div>
+            <div class="variables-list" id="variablesBadgeList">
+              <!-- Dynamically generated -->
+            </div>
+          </div>
+
+          <!-- Telegram UI Chat Bubble Preview -->
+          <div>
+            <div class="variables-title mb-6">Mô phỏng tin nhắn Telegram (Preview)</div>
+            <div class="tg-chat-container">
+              <div class="tg-chat-header">
+                <div class="tg-avatar">TC</div>
+                <div class="tg-chat-title-info">
+                  <span class="tg-bot-name">Trade_Claude Notify</span>
+                  <span class="tg-bot-status">bot</span>
+                </div>
+              </div>
+              <div class="tg-messages-area">
+                <div class="tg-bubble">
+                  <span id="tgBubbleContent"></span>
+                  <span class="tg-bubble-time" id="tgBubbleTime">12:00</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="editor-actions">
+            <button class="btn-reset-template" onclick="resetCurrentTemplate()">Hủy thay đổi</button>
+            <button id="saveTemplatesBtn" class="btn-save-template" onclick="saveTemplatesToServer()">
+              <span id="saveBtnIcon">💾</span>
+              <span id="saveBtnText">Lưu mẫu tin nhắn</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </div>
+</main>
+
+<script>
+  // ── MOCK DATA FOR LIVE PREVIEW ──────────────────────────────────────────
+  const MOCK_KEYS = {
+    symbol: "BTCUSDT",
+    action: "BUY",
+    price: "67250.50",
+    timeframe: "1D",
+    tt_score: "8",
+    stage: "Stage 2",
+    vcp_status: "Confirmed",
+    volume_ratio: "1.8",
+    ai_provider: "Claude-3.5-Sonnet RAG",
+    ai_advice: "Strong bullish continuation pattern above 50-day EMA. Volume is expanding, VCP is tightening into a pivot breakout.",
+    stop_loss: "62540.00",
+    sl_pct: "-7.0",
+    take_profit: "80700.00",
+    tp_pct: "+20.0",
+    id: "125",
+    scan_time: "2026-05-30 20:45:00 UTC",
+    scan_results_list: "• <b>BTCUSDT</b>: SEPA Score 8/8, VCP breakout 🟢\n• <b>ETHUSDT</b>: SEPA Score 7/8, consolidating 🟡\n• <b>SOLUSDT</b>: SEPA Score 5/8, below 200 EMA 🔴",
+    server_name: "SERVER-C-AI-CORE",
+    error_code: "ERR-CDP-2620",
+    service_name: "TradingView CDP Desktop Client",
+    error_traceback: "ConnectionRefusedError: [Errno 61] Connection refused to localhost:9222\n  at cdp_client.py:124 in connect_cdp()\n  at main.py:492 in mcp_status()",
+    diagnostic_recommendation: "Ensure TradingView Desktop is running on Server B/C and remote debugging is enabled on port 9222 using --remote-debugging-port=9222.",
+    exchange: "Binance Futures",
+    warning_detail: "API rate limit exceeded (429 Too Many Requests).",
+    details_block: "IP: 100.115.92.1\nEndpoint: /api/v3/order\nWeight consumed: 1205/1200",
+    fallback_action_desc: "Order has been routed to VBS backup execution buffer. Will retry automatically in 60 seconds."
+  };
+
+  const VARIABLES_MAP = {
+    A: ["symbol", "action", "price", "timeframe", "tt_score", "stage", "vcp_status", "volume_ratio", "ai_provider", "ai_advice", "stop_loss", "sl_pct", "take_profit", "tp_pct"],
+    B: ["scan_time", "scan_results_list"],
+    C: ["server_name", "error_code", "service_name", "error_traceback", "diagnostic_recommendation"],
+    D: ["symbol", "exchange", "warning_detail", "details_block", "fallback_action_desc"]
+  };
+
+  // State
+  let currentTab = 'A';
+  let cachedTemplates = { A: '', B: '', C: '', D: '' };
+  let currentTemplates = { A: '', B: '', C: '', D: '' };
+  let captureRunning = false;
+
+  // Authen Check & API Fetch Wrapper
+  async function apiFetch(url, options = {}) {
+    const token = localStorage.getItem('dashboard_token');
+    if (token) {
+      options.headers = options.headers || {};
+      options.headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    try {
+      const res = await fetch(url, options);
+      if (res.status === 401) {
+        localStorage.removeItem('dashboard_token');
+        document.getElementById('loginOverlay').classList.remove('d-none');
+        throw new Error("Unauthorized");
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP error ${res.status}`);
+      }
+      return await res.json();
+    } catch (e) {
+      if (e.message !== "Unauthorized") {
+        console.error(`API Fetch Error (${url}):`, e);
+        showToast(e.message, 'error');
+      }
+      return null;
+    }
+  }
+
+  function handleLogin() {
+    const token = document.getElementById('loginToken').value.trim();
+    if (!token) return;
+    localStorage.setItem('dashboard_token', token);
+    document.getElementById('loginOverlay').classList.add('d-none');
+    window.location.reload();
+  }
+
+  function showToast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+  }
+
+  // ── TEMPLATE EDITOR LOGIC ───────────────────────────────────────────────
+  async function loadTemplates() {
+    const data = await apiFetch('/api/telegram/templates');
+    if (data) {
+      cachedTemplates = { ...data };
+      currentTemplates = { ...data };
+      loadCurrentTabContent();
+    } else {
+      showToast('Không thể tải các mẫu tin nhắn từ Server.', 'error');
+    }
+  }
+
+  function loadCurrentTabContent() {
+    const ta = document.getElementById('templateTextarea');
+    if (!ta) return;
+    
+    ta.value = currentTemplates[currentTab];
+    
+    // Update badge variables guide
+    const badgeList = document.getElementById('variablesBadgeList');
+    const vars = VARIABLES_MAP[currentTab] || [];
+    badgeList.innerHTML = vars.map(v => 
+      `<span class="variable-badge" onclick="insertVariable('${v}')">{${v}}</span>`
+    ).join('');
+    
+    updateLivePreview();
+  }
+
+  function switchTemplateTab(tabId) {
+    // Save current textarea content to state before switching
+    const ta = document.getElementById('templateTextarea');
+    if (ta) {
+      currentTemplates[currentTab] = ta.value;
+    }
+
+    currentTab = tabId;
+    
+    // Update active UI classes
+    document.querySelectorAll('.template-tab-btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    
+    // Find the clicked button by its onclick function parameter
+    const buttons = Array.from(document.querySelectorAll('.template-tab-btn'));
+    const targetBtn = buttons.find(b => b.getAttribute('onclick').includes(`'${tabId}'`));
+    if (targetBtn) targetBtn.classList.add('active');
+
+    loadCurrentTabContent();
+  }
+
+  function insertVariable(v) {
+    const ta = document.getElementById('templateTextarea');
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const text = ta.value;
+    const before = text.substring(0, start);
+    const after  = text.substring(end, text.length);
+    ta.value = before + `{${v}}` + after;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = start + v.length + 2;
+    updateLivePreview();
+  }
+
+  function updateLivePreview() {
+    const ta = document.getElementById('templateTextarea');
+    if (!ta) return;
+    
+    const text = ta.value;
+    currentTemplates[currentTab] = text;
+    
+    // Custom Telegram HTML formatter
+    let output = text;
+    
+    // Escape HTML first
+    output = output
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+      
+    // Restore Telegram safe formatting tags
+    output = output
+      .replace(/&lt;b&gt;/g, "<b>").replace(/&lt;\/b&gt;/g, "</b>")
+      .replace(/&lt;strong&gt;/g, "<strong>").replace(/&lt;\/strong&gt;/g, "</strong>")
+      .replace(/&lt;code&gt;/g, "<code>").replace(/&lt;\/code&gt;/g, "</code>")
+      .replace(/&lt;pre&gt;/g, "<pre>").replace(/&lt;\/pre&gt;/g, "</pre>")
+      .replace(/&lt;i&gt;/g, "<i>").replace(/&lt;\/i&gt;/g, "</i>")
+      .replace(/&lt;u&gt;/g, "<u>").replace(/&lt;\/u&gt;/g, "</u>")
+      .replace(/&lt;a\s+href="([^"]+)"&gt;/g, '<a href="$1" target="_blank">')
+      .replace(/&lt;\/a&gt;/g, "</a>");
+
+    // Process placeholder values
+    output = output.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => {
+      if (key in MOCK_KEYS) {
+        return MOCK_KEYS[key];
+      }
+      return match;
+    });
+
+    // Process newlines
+    output = output.replace(/\n/g, "<br>");
+
+    document.getElementById('tgBubbleContent').innerHTML = output || '<span style="color: var(--text-muted); font-style: italic;">(Mẫu trống)</span>';
+    
+    // Set time
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    document.getElementById('tgBubbleTime').textContent = `${hh}:${mm}`;
+  }
+
+  function resetCurrentTemplate() {
+    currentTemplates[currentTab] = cachedTemplates[currentTab];
+    loadCurrentTabContent();
+    showToast('Đã khôi phục mẫu tin nhắn của Tab hiện tại.', 'info');
+  }
+
+  async function saveTemplatesToServer() {
+    // Sync current textarea to currentTemplates first
+    const ta = document.getElementById('templateTextarea');
+    if (ta) {
+      currentTemplates[currentTab] = ta.value;
+    }
+
+    const btn = document.getElementById('saveTemplatesBtn');
+    const icon = document.getElementById('saveBtnIcon');
+    const txt = document.getElementById('saveBtnText');
+    
+    btn.disabled = true;
+    icon.textContent = '⏳';
+    txt.textContent = 'Đang lưu...';
+
+    const result = await apiFetch('/api/telegram/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentTemplates)
+    });
+
+    btn.disabled = false;
+    icon.textContent = '💾';
+    txt.textContent = 'Lưu mẫu tin nhắn';
+
+    if (result && result.status === 'success') {
+      cachedTemplates = { ...currentTemplates };
+      showToast('✅ Đã lưu cấu hình các mẫu tin nhắn Telegram thành công!', 'success');
+    } else {
+      showToast('❌ Lưu thất bại. Kiểm tra lại cú pháp thẻ placeholders.', 'error');
+    }
+  }
+
+  // ── STEALTH CAPTURE & VISION LIFE-CYCLE ──────────────────────────────────
+  async function checkDaemonHealth() {
+    const dot = document.getElementById('daemonHealthDot');
+    const text = document.getElementById('daemonHealthText');
+    if (!dot || !text) return;
+    
+    const data = await apiFetch('/api/mcp/status');
+    if (data && data.enabled) {
+      if (data.connected) {
+        dot.className = 'health-dot ok';
+        text.textContent = 'CDP: Connected (Port 9222)';
+      } else {
+        dot.className = 'health-dot warn';
+        text.textContent = `CDP: Disconnected — ${data.error || 'Unknown error'}`;
+      }
+    } else {
+      dot.className = 'health-dot err';
+      text.textContent = 'CDP: Daemon Disabled';
+    }
+  }
+
+  async function triggerStudioCapture() {
+    if (captureRunning) return;
+    captureRunning = true;
+
+    const sym = document.getElementById('capSymbol')?.value.trim() || 'BTCUSDT';
+    const tf = document.getElementById('capTimeframe')?.value || '240';
+    
+    const btn = document.getElementById('triggerCapBtn');
+    const icon = document.getElementById('triggerCapIcon');
+    const txt = document.getElementById('triggerCapText');
+    const box = document.getElementById('screenshotBox');
+    const placeholder = document.getElementById('screenshotPlaceholder');
+    const img = document.getElementById('screenshotImg');
+    const verdictCard = document.getElementById('studioVerdictCard');
+
+    btn.disabled = true;
+    icon.textContent = '⏳';
+    txt.textContent = 'Đang chụp biểu đồ...';
+    placeholder.innerHTML = '⚡ Đang thực hiện Stealth Capture từ CDP...';
+    img.classList.add('d-none');
+    verdictCard.classList.add('d-none');
+
+    // Trigger API scan/mtf or capture
+    const data = await apiFetch(`/api/vision/capture?symbol=${encodeURIComponent(sym)}&timeframe=${encodeURIComponent(tf)}&show_parent=yes&inset_position=bottom-right`, {
+      method: 'POST'
+    });
+
+    btn.disabled = false;
+    icon.textContent = '📸';
+    txt.textContent = 'Capture & Analyze Chart';
+    captureRunning = false;
+
+    if (data && data.status === 'ok') {
+      showToast(`✅ Capture thành công ${sym}!`, 'success');
+      
+      placeholder.classList.add('d-none');
+      if (data.screenshot_url) {
+        img.src = data.screenshot_url;
+        img.classList.remove('d-none');
+      } else {
+        placeholder.classList.remove('d-none');
+        placeholder.innerHTML = `<span style="color: var(--buy);">✅ Đã chụp thành công!<br><small style="color: var(--text-muted);">Biểu đồ được gửi trực tiếp tới Telegram.</small></span>`;
+      }
+
+      // Display verdict summary
+      verdictCard.classList.remove('d-none');
+      document.getElementById('studioVerdictSym').textContent = `${data.symbol} (${data.timeframe || tf})`;
+      
+      const vVal = document.getElementById('studioVerdictVal');
+      vVal.textContent = data.verdict || 'HOLD';
+      const verdictColor = (data.verdict || '').includes('STRONG') ? 'var(--buy)' : (data.verdict || '').includes('AVOID') ? 'var(--sell)' : 'var(--warn)';
+      vVal.style.color = verdictColor;
+      
+      document.getElementById('studioAnalysisText').textContent = data.ai_analysis || 'No summary available.';
+    } else {
+      placeholder.classList.remove('d-none');
+      placeholder.innerHTML = `<span style="color: var(--sell);">❌ Chụp biểu đồ thất bại.<br><small style="color: var(--text-muted);">Kiểm tra lại kết nối TradingView CDP port 9222.</small></span>`;
+      showToast('❌ Chụp biểu đồ thất bại. Hãy kiểm tra CDP status.', 'error');
+    }
+  }
+
+  // Clock
+  function updateClock() {
+    const clock = document.getElementById('clockDisplay');
+    if (!clock) return;
+    const now = new Date();
+    clock.textContent = now.toLocaleTimeString('vi-VN') + " ICT";
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    updateClock();
+    setInterval(updateClock, 1000);
+    
+    // Check if token exists or if redirect is handled by middleware
+    const token = localStorage.getItem('dashboard_token');
+    // If not config token, let AuthMiddleware session handle it.
+    
+    loadTemplates();
+    checkDaemonHealth();
+  });
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ import pytest_asyncio
 import os
 import sys
 import pathlib
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 # Ensure server/ is on path
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
@@ -157,7 +157,7 @@ async def test_valid_trade_execution_success(exec_client):
         ))
 
     with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
-        with patch("notifier.notify_all", new_callable=AsyncMock) as mock_notify:
+        with patch("notifier.notify_all", new_callable=AsyncMock):
             resp = await exec_client.post(
                 "/api/execute-trade", json=VALID_PAYLOAD, headers=VALID_HEADERS
             )
@@ -367,9 +367,257 @@ async def test_secret_validation_uses_constant_time_compare(exec_client):
 
         with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
             with patch("notifier.notify_all", new_callable=AsyncMock):
-                resp = await exec_client.post(
+                await exec_client.post(
                     "/api/execute-trade", json=VALID_PAYLOAD, headers=VALID_HEADERS
                 )
 
         # hmac.compare_digest should have been called
         mock_cmp.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 10: Robust fallbacks for quote_qty and analysis_text
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_execute_trade_fallback_quote_qty_calculated_from_qty_and_price(exec_client):
+    """Verify quote_qty is calculated from qty and price if missing."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["quote_qty"] = event.quote_qty
+        captured_event["analysis_text"] = event.analysis_text
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-001", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": 50000.0,
+        "qty": 0.002,
+        # quote_qty is missing
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+        "analysis": "Calculated quantity test.",  # analysis instead of analysis_text
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    # 0.002 * 50000.0 = 100.0
+    assert captured_event.get("quote_qty") == 100.0
+    assert captured_event.get("analysis_text") == "Calculated quantity test."
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_fallback_quote_qty_default(exec_client):
+    """Verify quote_qty defaults to 10.0 if quote_qty, qty, price are missing."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["quote_qty"] = event.quote_qty
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-002", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": 50000.0,
+        # qty is missing, quote_qty is missing
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+        "analysis_text": "Default quote_qty test.",
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert captured_event.get("quote_qty") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_quote_qty_empty_string(exec_client):
+    """Verify quote_qty as empty string "" falls back to default 10.0."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["quote_qty"] = event.quote_qty
+        captured_event["price"] = event.price
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-003", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": 50000.0,
+        "quote_qty": "",
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert captured_event.get("quote_qty") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_quote_qty_invalid_string(exec_client):
+    """Verify quote_qty as invalid string "abc" falls back to default 10.0."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["quote_qty"] = event.quote_qty
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-004", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": 50000.0,
+        "quote_qty": "abc",
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert captured_event.get("quote_qty") == 10.0
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_price_invalid_string(exec_client):
+    """Verify price as invalid string "abc" falls back to None."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["price"] = event.price
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-005", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": "abc",
+        "quote_qty": 50.0,
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert captured_event.get("price") is None
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_invalid_qty_or_price_calculation(exec_client):
+    """Verify invalid qty or price for calculation falls back to default 10.0."""
+    from core.events import TradeExecuted
+    
+    captured_event = {}
+
+    async def mock_execute_trade(event):
+        from engine import trade_engine
+        current_bus = trade_engine.get_bus()
+        captured_event["quote_qty"] = event.quote_qty
+        await current_bus.emit(TradeExecuted(
+            signal_id=event.signal_id, trade_id=1,
+            symbol=event.symbol, side=event.action.upper(),
+            order_id="ORD-FB-006", status="FILLED",
+            executed_qty=0.001, executed_price=68000.0,
+            quote_qty=event.quote_qty, exchange="binance",
+        ))
+
+    # Scenario 1: qty is invalid, price is valid. quote_qty is missing.
+    payload = {
+        "symbol": "BTCUSDT",
+        "action": "buy",
+        "price": 50000.0,
+        "qty": "abc",
+        "sl": "48000",
+        "tp": "52000",
+        "exchange": "binance",
+    }
+
+    with patch("engine.trade_engine.execute_trade", side_effect=mock_execute_trade):
+        with patch("notifier.notify_all", new_callable=AsyncMock):
+            resp = await exec_client.post(
+                "/api/execute-trade", json=payload, headers=VALID_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert captured_event.get("quote_qty") == 10.0
+
+

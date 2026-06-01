@@ -34,6 +34,7 @@ PUBLIC_PATHS = (
 PROTECTED_PREFIXES = (
     "/api/",          # All API endpoints
     "/dashboard",     # Dashboard page
+    "/studio",        # Studio page
     "/trades",        # Trade endpoints
     "/signals",       # Signal endpoints
     "/screenshots/",  # Screenshot endpoints

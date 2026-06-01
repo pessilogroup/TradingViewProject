@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# ════════════════════════════════════════════════════════════════════════════
+# .git-hooks/pre-commit — Secret Leak Prevention Hook
+# TradingBot V2 Hardened — Git Secret Guard
+#
+# Install:
+#   cp deploy/git-hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# HOẶC dùng script deploy/setup_git_hooks.sh để install tự động.
+#
+# Kiểm tra: git commit -m "test" (phải bị block nếu có secret)
+# ════════════════════════════════════════════════════════════════════════════
+
+set -euo pipefail
+
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+BLOCKED=0
+
+# Chỉ scan files đang được staged
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+[[ -z "$STAGED" ]] && exit 0
+
+# ── Các file luôn được phép (test fixtures, examples) ─────────────────────
+ALLOWLIST=(
+    ".gitsecrets"
+    ".env.example"
+    ".env.monitoring.example"
+    ".env.production"
+    "docs/"
+    "tests/"
+    "*.md"
+    "*.json.example"
+)
+
+is_allowlisted() {
+    local file="$1"
+    for pattern in "${ALLOWLIST[@]}"; do
+        if [[ "$file" == *"$pattern"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+check_pattern() {
+    local name="$1"
+    local pattern="$2"
+    local file="$3"
+    local content
+    content=$(git diff --cached -U0 -- "$file" | grep '^+' | grep -v '^+++' || true)
+
+    if echo "$content" | grep -qE "$pattern" 2>/dev/null; then
+        echo -e "${RED}[BLOCKED]${NC} ${name} found in: ${file}"
+        echo "$content" | grep -E "$pattern" 2>/dev/null | head -3 | sed 's/^/  → /'
+        BLOCKED=1
+    fi
+}
+
+echo -e "${YELLOW}[pre-commit]${NC} Scanning staged files for secrets..."
+
+for FILE in $STAGED; do
+    # Skip non-existent files
+    [[ ! -f "$FILE" ]] && continue
+
+    # Skip allowlisted
+    is_allowlisted "$FILE" && continue
+
+    # Skip binary files
+    if git diff --cached -- "$FILE" | grep -qP "[\x00-\x08\x0e-\x1f]"; then
+        continue
+    fi
+
+    # ── Secret Patterns ─────────────────────────────────────────────────
+    check_pattern "Anthropic API Key"    'sk-ant-api[0-9]+-[A-Za-z0-9_-]{20,}'         "$FILE"
+    check_pattern "Gemini/Google Key"   'AIza[0-9A-Za-z_-]{30,}'                        "$FILE"
+    check_pattern "Tailscale AuthKey"   'tskey-(auth|client)-[A-Za-z0-9_-]{20,}'        "$FILE"
+    check_pattern "Telegram Bot Token"  '[0-9]{8,10}:AA[A-Za-z0-9_-]{33}'               "$FILE"
+    check_pattern "SSH Private Key"     'BEGIN (RSA|EC|OPENSSH) PRIVATE KEY'             "$FILE"
+    check_pattern "Hex Secret/Token"    '(secret|token|password)[[:space:]]*=[[:space:]]*[a-f0-9]{32,}' "$FILE"
+    check_pattern "UptimeRobot Key"     'ur[0-9]+-[a-zA-Z0-9]{20,}'                     "$FILE"
+done
+
+# ── Result ──────────────────────────────────────────────────────────────────
+if [[ "$BLOCKED" -ne 0 ]]; then
+    echo ""
+    echo -e "${RED}╔════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  ⛔ COMMIT BLOCKED — Secret detected in staged files  ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "  Fix options:"
+    echo "  1. Remove the secret from the file"
+    echo "  2. Use environment variables instead"
+    echo "  3. Add to .gitignore if it's a local config file"
+    echo "  4. If it's a test/example, add file path to ALLOWLIST in .git/hooks/pre-commit"
+    echo ""
+    echo "  To bypass (DANGEROUS — only if you're 100% sure):"
+    echo "    git commit --no-verify -m 'your message'"
+    echo ""
+    exit 1
+else
+    echo -e "${GREEN}[pre-commit]${NC} No secrets detected ✅"
+fi

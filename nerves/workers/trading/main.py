@@ -1,3 +1,8 @@
+import os
+# Force Hugging Face offline mode to load local models instantly (0.1s instead of 3.5m)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 import logging
 import sys
 import io
@@ -108,6 +113,7 @@ if not _is_pytest and sys.stderr and hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Setup logging — StreamHandler explicitly UTF-8 to avoid cp1252 crash on Windows
+Path(config.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
 _stream_handler = logging.StreamHandler(sys.stdout)
 _stream_handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)s  %(message)s"))
 
@@ -466,6 +472,12 @@ async def daemon_dashboard():
     return FileResponse(str(STATIC_DIR / "capture_dashboard.html"))
 
 
+@app.get("/studio")
+async def studio():
+    """Serve Custom Trading View Studio & Telegram Template Editor."""
+    return FileResponse(str(STATIC_DIR / "studio.html"))
+
+
 @app.get("/")
 async def root():
     """Redirect to dashboard."""
@@ -495,6 +507,27 @@ async def mcp_status():
     mcp = _mcp_module.get_mcp_client()
     health = await mcp.health_check()
     return {"enabled": True, **health}
+
+
+# ═══ TELEGRAM TEMPLATE CONFIG ═════════════════════════════════
+@app.get("/api/telegram/templates")
+async def get_telegram_templates():
+    """Retrieve the current custom Telegram message templates."""
+    from utils.telegram_templates import load_templates
+    return load_templates()
+
+@app.post("/api/telegram/templates")
+async def update_telegram_templates(body: dict = Body(...)):
+    """Save custom Telegram message templates after validating syntax."""
+    from utils.telegram_templates import save_templates
+    try:
+        save_templates(body)
+        return {"status": "success", "message": "Telegram templates updated successfully."}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Failed to update telegram templates: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error saving templates.")
 
 
 # ── VPS Buffer Queue Status ───────────────────────────────────

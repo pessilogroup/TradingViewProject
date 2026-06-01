@@ -109,7 +109,8 @@ async def test_r1_slippage_greater_than_05_percent_switches_to_limit():
         coro = mock_create_task.call_args[0][0]
         coro.close()
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 @pytest.mark.asyncio
 async def test_r1_slippage_less_than_05_percent_stays_market():
@@ -160,7 +161,8 @@ async def test_r1_slippage_less_than_05_percent_stays_market():
         called_kwargs = adapter.execute_smart_order.call_args[1]
         assert called_kwargs["order_type"] == "MARKET"
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 @pytest.mark.asyncio
 async def test_r1_limit_order_monitoring_and_cancellation():
@@ -247,7 +249,8 @@ async def test_r2_atr_based_sl_tp_and_sizing():
         assert called_kwargs["tp_price"] == 120.0  # entry + (atr_tp_mul=8.0 * atr=2.5) ← BTC Matrix
         assert called_kwargs["quote_qty"] == 200.0  # (risk=10 / dist=5) * 100
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 @pytest.mark.asyncio
 async def test_r3_cdp_keep_alive_reload_on_failure():
@@ -345,7 +348,8 @@ async def test_r4_chop_regime_halves_normal_signals():
         # quote_qty should be halved from 100 to 50
         assert called_kwargs["quote_qty"] == 50.0
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 @pytest.mark.asyncio
 async def test_r4_chop_regime_skips_breakout_signals():
@@ -403,4 +407,5 @@ async def test_r4_chop_regime_skips_breakout_signals():
         assert failed_events[0].signal_id == 205
         assert "CHOP regime" in failed_events[0].error
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)

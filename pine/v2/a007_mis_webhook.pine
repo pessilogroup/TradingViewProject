@@ -1,21 +1,115 @@
-//@version=5
-// Strategy template detailing the webhook setup for:
-// - "A.007 + MIS v2 Combined (Auto Paper Trading)"
-// - "A.007 + MIS v1 Combined (Auto Paper Trading)"
-//
-// Designed to route alerts through a local reverse proxy tunnel to the Local Server's `/webhook` endpoint.
-strategy("A.007 + MIS Webhook Integration", overlay=true)
+//@version=6
+// V3.3: Refactored payload to use VBS_Webhook_Lib (shared library)
+import dinhvietdan88/VBS_Webhook_Lib/3 as vbs
+// ============================================================================
+// MIS(A7-01B.V3) Webhook — Forecast Visual Risk Management
+// ============================================================================
+// V3.2: Forecast zones, expanded SL, trailing stop, visual settings
+// ============================================================================
+indicator("MIS(A7-01B.V3) Webhook", overlay=true, max_labels_count=200, max_lines_count=100, max_boxes_count=50)
 
-// --- Strategy Inputs & Parameters ---
-useA007 = input.bool(true, "Enable A.007 Breakout Logic", group="Strategy Settings")
-useMIS  = input.bool(true, "Enable MIS Trend Filter", group="Strategy Settings")
-webhookSecret = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret", group="Webhook Settings", tooltip="Secret key to authorize webhook requests")
-confidenceScore = input.int(85, "Confidence Score (%)", minval=0, maxval=100, group="Strategy Settings")
+// ═══════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+VERSION = "V3.2"
 
-// --- Mock Trading Logic (Replace with actual strategy conditions) ---
-fastEMA = ta.ema(close, 20)
-slowEMA = ta.ema(close, 50)
+// ═══════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════
+
+// --- Core Settings ---
+grp_core = "Core Settings"
+webhookSecret   = input.string("REPLACE_WITH_WEBHOOK_SECRET", "Webhook Secret", group=grp_core, tooltip="Secret key for FastAPI webhook auth")
+confidenceScore = input.int(85, "Confidence Score (%)", minval=0, maxval=100, group=grp_core)
+
+// --- Risk Management: RRR Preset ---
+grp_risk = "Risk Management"
+rrrPreset = input.string("Aggressive (3.5:1)", "RRR Preset",
+     options=["Scalp (1.5:1)", "Conservative (2:1)", "Standard (3:1)", "Aggressive (3.5:1)", "Custom"],
+     group=grp_risk, tooltip="Risk/Reward Ratio preset. TP = SL × RRR")
+customRRR = input.float(3.5, "↳ Custom RRR", minval=0.5, maxval=20.0, step=0.1, group=grp_risk)
+
+// Expanded SL Settings
+slMode     = input.string("ATR", "SL Mode", options=["ATR", "Fixed", "Percent"], group=grp_risk, tooltip="ATR=dynamic, Fixed=absolute amount, Percent=% of price")
+slAtrMul   = input.float(2.0, "↳ SL ATR Multiplier", minval=0.5, maxval=10.0, step=0.1, group=grp_risk)
+slFixedAmt = input.float(500.0, "↳ SL Fixed Amount", minval=1.0, maxval=50000.0, step=10.0, group=grp_risk)
+slPercent  = input.float(1.0, "↳ SL Percent (%)", minval=0.1, maxval=10.0, step=0.1, group=grp_risk)
+
+// TP Mode
+tpMode   = input.string("Fixed RRR", "TP Mode", options=["Fixed RRR", "Trailing Stop"], group=grp_risk, tooltip="Fixed RRR=static TP level, Trailing Stop=dynamic TP that follows price")
+trailMul = input.float(1.5, "↳ Trail ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, group=grp_risk)
+
+// --- Visual Toggles ---
+grp_vis = "Visual Toggles"
+showEmaRibbon  = input.bool(true,  "EMA Ribbon (fast/slow)", group=grp_vis)
+showMtfDaily   = input.bool(true,  "MTF: Daily EMA 20/50", group=grp_vis)
+showMtf1H      = input.bool(true,  "MTF: 1H EMA 20/50", group=grp_vis)
+showSlTp       = input.bool(true,  "SL/TP Lines", group=grp_vis)
+showEntryLine  = input.bool(true,  "Entry Line", group=grp_vis)
+showRiskLabels = input.bool(true,  "SL/TP Labels (price + RRR)", group=grp_vis)
+showForecast   = input.bool(true,  "Forecast Zones (Long↑ / Short↓)", group=grp_vis)
+showMarkers    = input.bool(true,  "Entry/Exit Markers", group=grp_vis)
+showTable      = input.bool(true,  "Status Table", group=grp_vis)
+
+// --- Visual Settings ---
+grp_style = "Visual Settings"
+bullColor      = input.color(#00c853, "Long / Bull Color", group=grp_style)
+bearColor      = input.color(#ff1744, "Short / Bear Color", group=grp_style)
+entryLnColor   = input.color(color.white, "Entry Line Color", group=grp_style)
+trailLnColor   = input.color(#ffab00, "Trailing Stop Color", group=grp_style)
+forecastAlpha  = input.int(88, "Forecast Zone Transparency", minval=70, maxval=95, step=1, group=grp_style, tooltip="Higher = more transparent")
+
+// ═══════════════════════════════════════════════════════════════
+// RRR + SL RESOLUTION
+// ═══════════════════════════════════════════════════════════════
+
+getRRR() =>
+    switch rrrPreset
+        "Scalp (1.5:1)"      => 1.5
+        "Conservative (2:1)" => 2.0
+        "Standard (3:1)"     => 3.0
+        "Aggressive (3.5:1)" => 3.5
+        "Custom"             => customRRR
+        =>                      3.5
+
+activeRRR = getRRR()
+
+// ═══════════════════════════════════════════════════════════════
+// ADAPTIVE EMA CALCULATION
+// ═══════════════════════════════════════════════════════════════
+
+adaptiveFast() =>
+    switch timeframe.period
+        "1"   => 3
+        "3"   => 4
+        "5"   => 5
+        "15"  => 8
+        "30"  => 12
+        "60"  => 20
+        "240" => 20
+        =>       20
+
+adaptiveSlow() =>
+    switch timeframe.period
+        "1"   => 8
+        "3"   => 10
+        "5"   => 13
+        "15"  => 21
+        "30"  => 34
+        "60"  => 50
+        "240" => 50
+        =>       50
+
+fastLen = adaptiveFast()
+slowLen = adaptiveSlow()
+fastEMA = ta.ema(close, fastLen)
+slowEMA = ta.ema(close, slowLen)
 atrVal  = ta.atr(14)
+rsiVal  = ta.rsi(close, 14)
+
+// ═══════════════════════════════════════════════════════════════
+// SIGNAL CONDITIONS
+// ═══════════════════════════════════════════════════════════════
 
 longCondition  = ta.crossover(fastEMA, slowEMA) and barstate.isconfirmed
 shortCondition = ta.crossunder(fastEMA, slowEMA) and barstate.isconfirmed
@@ -23,42 +117,375 @@ shortCondition = ta.crossunder(fastEMA, slowEMA) and barstate.isconfirmed
 longExitCondition  = ta.crossunder(close, fastEMA) and barstate.isconfirmed
 shortExitCondition = ta.crossover(close, fastEMA) and barstate.isconfirmed
 
-// --- Webhook Payload Generator Helper ---
-// Generates the strict JSON schema expected by the FastAPI WebhookGateway
-generate_payload(action, signal_type, direction) =>
-    payload = '{"secret":"' + webhookSecret + '"'
-    payload := payload + ',"source":"indicator"'
-    payload := payload + ',"indicator_name":"A.007 + MIS Combined"'
-    payload := payload + ',"symbol":"' + syminfo.ticker + '"'
-    payload := payload + ',"signal_type":"' + signal_type + '"'
-    payload := payload + ',"action":"' + action + '"'
-    payload := payload + ',"price":"' + str.tostring(close) + '"'
-    payload := payload + ',"interval":"' + timeframe.period + '"'
-    payload := payload + ',"exchange":"' + syminfo.prefix + '"'
-    payload := payload + ',"confidence_score":' + str.tostring(confidenceScore)
-    payload := payload + ',"metadata":{"direction":"' + direction + '"'
-    payload := payload + ',"atr_value":"' + str.tostring(atrVal) + '"}'
-    payload := payload + '}'
-    payload
+isBull = fastEMA > slowEMA
+isBear = fastEMA < slowEMA
 
+// ═══════════════════════════════════════════════════════════════
+// MULTI-TIMEFRAME REFERENCE EMAs
+// ═══════════════════════════════════════════════════════════════
 
-// --- Execution & Alert Dispatch ---
-if (longCondition)
-    strategy.entry("Long", strategy.long)
-    alert(generate_payload("buy", "entry", "long"), alert.freq_once_per_bar_close)
+dailyEma20 = request.security(syminfo.tickerid, "D", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+dailyEma50 = request.security(syminfo.tickerid, "D", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
+h1Ema20 = request.security(syminfo.tickerid, "60", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+h1Ema50 = request.security(syminfo.tickerid, "60", ta.ema(close, 50)[1], barmerge.gaps_off, barmerge.lookahead_off)
 
-if (shortCondition)
-    strategy.entry("Short", strategy.short)
-    alert(generate_payload("sell", "entry", "short"), alert.freq_once_per_bar_close)
+// ═══════════════════════════════════════════════════════════════
+// SL DISTANCE CALCULATION (Expanded modes)
+// ═══════════════════════════════════════════════════════════════
 
-if (longExitCondition)
-    strategy.close("Long")
-    alert(generate_payload("sell", "exit", "long"), alert.freq_once_per_bar_close)
+calcSlDist() =>
+    switch slMode
+        "ATR"     => atrVal * slAtrMul
+        "Fixed"   => slFixedAmt
+        "Percent" => close * slPercent / 100.0
+        =>           atrVal * slAtrMul
 
-if (shortExitCondition)
-    strategy.close("Short")
-    alert(generate_payload("buy", "exit", "short"), alert.freq_once_per_bar_close)
+// ═══════════════════════════════════════════════════════════════
+// STATE VARIABLES
+// ═══════════════════════════════════════════════════════════════
 
-// --- Visualization ---
-plotshape(longCondition,  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, title="Long Entry")
-plotshape(shortCondition, style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, title="Short Entry")
+var line   slLine     = na
+var line   tpLine     = na
+var line   entryLine  = na
+var line   trailLine  = na
+var label  slLabel    = na
+var label  tpLabel    = na
+var label  entLabel   = na
+var label  trailLabel = na
+var box    rewardBox  = na
+var box    riskBox    = na
+var float  slPrice    = na
+var float  tpPrice    = na
+var float  entryPrice = na
+var float  trailStop  = na
+var int    signalDir  = 0   // 1=long, -1=short, 0=flat
+
+// ═══════════════════════════════════════════════════════════════
+// CLEANUP HELPER
+// ═══════════════════════════════════════════════════════════════
+
+cleanAll() =>
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLine)
+        line.delete(tpLine)
+    if not na(entryLine)
+        line.delete(entryLine)
+    if not na(trailLine)
+        line.delete(trailLine)
+    if not na(slLabel)
+        label.delete(slLabel)
+    if not na(tpLabel)
+        label.delete(tpLabel)
+    if not na(entLabel)
+        label.delete(entLabel)
+    if not na(trailLabel)
+        label.delete(trailLabel)
+    if not na(rewardBox)
+        box.delete(rewardBox)
+    if not na(riskBox)
+        box.delete(riskBox)
+
+resetVars() =>
+    [line(na), line(na), line(na), line(na), label(na), label(na), label(na), label(na), box(na), box(na)]
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY: LONG
+// ═══════════════════════════════════════════════════════════════
+
+if longCondition
+    signalDir  := 1
+    entryPrice := close
+    slDist      = calcSlDist()
+    slPrice    := close - slDist
+    tpPrice    := close + slDist * activeRRR
+    trailStop  := close - atrVal * trailMul
+
+    cleanAll()
+    le = bar_index + 40
+
+    // SL line (always red/bear)
+    if showSlTp
+        slLine := line.new(bar_index, slPrice, le, slPrice, color=color.new(bearColor, 20), style=line.style_dashed, width=2)
+    // TP line (green/bull) — only for Fixed RRR
+    if showSlTp and tpMode == "Fixed RRR"
+        tpLine := line.new(bar_index, tpPrice, le, tpPrice, color=color.new(bullColor, 20), style=line.style_dashed, width=2)
+    // Trail line (amber) — only for Trailing Stop
+    if showSlTp and tpMode == "Trailing Stop"
+        trailLine := line.new(bar_index, trailStop, le, trailStop, color=color.new(trailLnColor, 20), style=line.style_arrow_right, width=2)
+    // Entry line (white dotted)
+    if showEntryLine
+        entryLine := line.new(bar_index, entryPrice, le, entryPrice, color=color.new(entryLnColor, 30), style=line.style_dotted, width=1)
+
+    // Forecast zones: Long = green box UP (reward), red box DOWN (risk)
+    if showForecast
+        if tpMode == "Fixed RRR"
+            rewardBox := box.new(bar_index, tpPrice, le, entryPrice, bgcolor=color.new(bullColor, forecastAlpha), border_color=na)
+        riskBox := box.new(bar_index, entryPrice, le, slPrice, bgcolor=color.new(bearColor, forecastAlpha), border_color=na)
+
+    // Labels
+    if showRiskLabels
+        slDist2 = math.abs(entryPrice - slPrice)
+        entLabel := label.new(le, entryPrice, "ENTRY: " + str.tostring(entryPrice, "#.0"), style=label.style_label_left, color=color.new(color.gray, 30), textcolor=color.white, size=size.small)
+        slLabel  := label.new(le, slPrice, "SL: " + str.tostring(slPrice, "#.0") + " (-" + str.tostring(slDist2, "#.0") + ")", style=label.style_label_left, color=color.new(bearColor, 30), textcolor=color.white, size=size.small)
+        if tpMode == "Fixed RRR"
+            tpDist2 = math.abs(tpPrice - entryPrice)
+            realRRR = slDist2 > 0 ? tpDist2 / slDist2 : 0.0
+            tpLabel := label.new(le, tpPrice, "TP: " + str.tostring(tpPrice, "#.0") + " (+" + str.tostring(tpDist2, "#.0") + ") R:R " + str.tostring(realRRR, "#.#"), style=label.style_label_left, color=color.new(bullColor, 30), textcolor=color.white, size=size.small)
+        if tpMode == "Trailing Stop"
+            trailLabel := label.new(le, trailStop, "TRAIL: " + str.tostring(trailStop, "#.0"), style=label.style_label_left, color=color.new(trailLnColor, 30), textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// ENTRY: SHORT
+// ═══════════════════════════════════════════════════════════════
+
+if shortCondition
+    signalDir  := -1
+    entryPrice := close
+    slDist      = calcSlDist()
+    slPrice    := close + slDist
+    tpPrice    := close - slDist * activeRRR
+    trailStop  := close + atrVal * trailMul
+
+    cleanAll()
+    le = bar_index + 40
+
+    // SL line (red above)
+    if showSlTp
+        slLine := line.new(bar_index, slPrice, le, slPrice, color=color.new(bearColor, 20), style=line.style_dashed, width=2)
+    // TP line (green below) — Fixed RRR
+    if showSlTp and tpMode == "Fixed RRR"
+        tpLine := line.new(bar_index, tpPrice, le, tpPrice, color=color.new(bullColor, 20), style=line.style_dashed, width=2)
+    // Trail line (amber above) — Trailing Stop
+    if showSlTp and tpMode == "Trailing Stop"
+        trailLine := line.new(bar_index, trailStop, le, trailStop, color=color.new(trailLnColor, 20), style=line.style_arrow_right, width=2)
+    // Entry line
+    if showEntryLine
+        entryLine := line.new(bar_index, entryPrice, le, entryPrice, color=color.new(entryLnColor, 30), style=line.style_dotted, width=1)
+
+    // Forecast zones: Short = red box UP (risk), green box DOWN (reward)
+    if showForecast
+        riskBox := box.new(bar_index, slPrice, le, entryPrice, bgcolor=color.new(bearColor, forecastAlpha), border_color=na)
+        if tpMode == "Fixed RRR"
+            rewardBox := box.new(bar_index, entryPrice, le, tpPrice, bgcolor=color.new(bullColor, forecastAlpha), border_color=na)
+
+    // Labels
+    if showRiskLabels
+        slDist2 = math.abs(slPrice - entryPrice)
+        entLabel := label.new(le, entryPrice, "ENTRY: " + str.tostring(entryPrice, "#.0"), style=label.style_label_left, color=color.new(color.gray, 30), textcolor=color.white, size=size.small)
+        slLabel  := label.new(le, slPrice, "SL: " + str.tostring(slPrice, "#.0") + " (-" + str.tostring(slDist2, "#.0") + ")", style=label.style_label_left, color=color.new(bearColor, 30), textcolor=color.white, size=size.small)
+        if tpMode == "Fixed RRR"
+            tpDist2 = math.abs(entryPrice - tpPrice)
+            realRRR = slDist2 > 0 ? tpDist2 / slDist2 : 0.0
+            tpLabel := label.new(le, tpPrice, "TP: " + str.tostring(tpPrice, "#.0") + " (+" + str.tostring(tpDist2, "#.0") + ") R:R " + str.tostring(realRRR, "#.#"), style=label.style_label_left, color=color.new(bullColor, 30), textcolor=color.white, size=size.small)
+        if tpMode == "Trailing Stop"
+            trailLabel := label.new(le, trailStop, "TRAIL: " + str.tostring(trailStop, "#.0"), style=label.style_label_left, color=color.new(trailLnColor, 30), textcolor=color.white, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+// TRAILING STOP UPDATE (every bar while in position)
+// ═══════════════════════════════════════════════════════════════
+
+trailHit = false
+
+if tpMode == "Trailing Stop" and signalDir == 1 and not longCondition
+    newTrail = high - atrVal * trailMul
+    if newTrail > nz(trailStop, 0.0)
+        trailStop := newTrail
+    // Update trail line & label
+    if not na(trailLine)
+        line.set_y1(trailLine, trailStop)
+        line.set_y2(trailLine, trailStop)
+        line.set_x2(trailLine, bar_index + 40)
+    if not na(trailLabel)
+        label.set_y(trailLabel, trailStop)
+        label.set_x(trailLabel, bar_index + 40)
+        label.set_text(trailLabel, "TRAIL: " + str.tostring(trailStop, "#.0"))
+    // Update forecast reward box (grows upward with trail)
+    if showForecast and na(rewardBox)
+        rewardBox := box.new(bar_index - 10, trailStop, bar_index + 40, entryPrice, bgcolor=color.new(bullColor, forecastAlpha), border_color=na)
+    if not na(rewardBox)
+        box.set_top(rewardBox, trailStop)
+        box.set_right(rewardBox, bar_index + 40)
+    if not na(riskBox)
+        box.set_right(riskBox, bar_index + 40)
+    // Trail hit check
+    if close <= trailStop and barstate.isconfirmed
+        trailHit := true
+
+if tpMode == "Trailing Stop" and signalDir == -1 and not shortCondition
+    newTrail = low + atrVal * trailMul
+    if newTrail < nz(trailStop, 1e18)
+        trailStop := newTrail
+    // Update trail line & label
+    if not na(trailLine)
+        line.set_y1(trailLine, trailStop)
+        line.set_y2(trailLine, trailStop)
+        line.set_x2(trailLine, bar_index + 40)
+    if not na(trailLabel)
+        label.set_y(trailLabel, trailStop)
+        label.set_x(trailLabel, bar_index + 40)
+        label.set_text(trailLabel, "TRAIL: " + str.tostring(trailStop, "#.0"))
+    // Update forecast reward box (grows downward with trail)
+    if showForecast and na(rewardBox)
+        rewardBox := box.new(bar_index - 10, entryPrice, bar_index + 40, trailStop, bgcolor=color.new(bullColor, forecastAlpha), border_color=na)
+    if not na(rewardBox)
+        box.set_bottom(rewardBox, trailStop)
+        box.set_right(rewardBox, bar_index + 40)
+    if not na(riskBox)
+        box.set_right(riskBox, bar_index + 40)
+    // Trail hit check
+    if close >= trailStop and barstate.isconfirmed
+        trailHit := true
+
+// Extend Fixed RRR boxes while in position
+if tpMode == "Fixed RRR" and signalDir != 0
+    if not na(rewardBox)
+        box.set_right(rewardBox, bar_index + 40)
+    if not na(riskBox)
+        box.set_right(riskBox, bar_index + 40)
+
+// ═══════════════════════════════════════════════════════════════
+// EXIT CONDITIONS
+// ═══════════════════════════════════════════════════════════════
+
+exitLong  = (signalDir == 1  and longExitCondition)  or (signalDir == 1  and trailHit)
+exitShort = (signalDir == -1 and shortExitCondition) or (signalDir == -1 and trailHit)
+
+if exitLong or exitShort
+    signalDir  := 0
+    cleanAll()
+    slLine     := na
+    tpLine     := na
+    entryLine  := na
+    trailLine  := na
+    slLabel    := na
+    tpLabel    := na
+    entLabel   := na
+    trailLabel := na
+    rewardBox  := na
+    riskBox    := na
+    entryPrice := na
+    slPrice    := na
+    tpPrice    := na
+    trailStop  := na
+
+// ═══════════════════════════════════════════════════════════════
+// WEBHOOK PAYLOAD (via VBS_Webhook_Lib)
+// ═══════════════════════════════════════════════════════════════
+
+buildMisMeta(direction) =>
+    vbs.meta_join6(
+         vbs.meta_str("direction", direction),
+         vbs.meta_float("atr_value", atrVal),
+         vbs.meta_float("sl", nz(slPrice, 0.0)),
+         vbs.meta_float("tp", nz(tpPrice, 0.0)),
+         vbs.meta_float("trail_stop", nz(trailStop, 0.0)),
+         vbs.meta_str("rrr_preset", rrrPreset)
+     )
+
+// ═══════════════════════════════════════════════════════════════
+// ALERT DISPATCH
+// ═══════════════════════════════════════════════════════════════
+
+if longCondition
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "buy", "entry", "long", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("long")),
+         alert.freq_once_per_bar_close)
+if shortCondition
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "sell", "entry", "short", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("short")),
+         alert.freq_once_per_bar_close)
+if exitLong
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "sell", "exit", "long", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("long")),
+         alert.freq_once_per_bar_close)
+if exitShort
+    alert(vbs.build_payload(webhookSecret, "MIS(A7-01B.V3)", syminfo.ticker,
+         "buy", "exit", "short", close, timeframe.period, syminfo.prefix,
+         confidenceScore, buildMisMeta("short")),
+         alert.freq_once_per_bar_close)
+
+alertcondition(longCondition, title="Long Entry", message="MIS A7-01B: Long entry signal")
+alertcondition(shortCondition, title="Short Entry", message="MIS A7-01B: Short entry signal")
+alertcondition(longExitCondition, title="Long Exit", message="MIS A7-01B: Long exit signal")
+alertcondition(shortExitCondition, title="Short Exit", message="MIS A7-01B: Short exit signal")
+
+// ═══════════════════════════════════════════════════════════════
+// VISUALIZATION
+// ═══════════════════════════════════════════════════════════════
+
+// --- EMA Ribbon ---
+pFast = plot(showEmaRibbon ? fastEMA : na, color=color.new(#2196f3, 20), linewidth=1, title="Fast EMA")
+pSlow = plot(showEmaRibbon ? slowEMA : na, color=color.new(#ff9800, 20), linewidth=2, title="Slow EMA")
+fill(pFast, pSlow, color=isBull ? color.new(bullColor, 88) : color.new(bearColor, 88), title="EMA Ribbon Fill")
+
+// --- MTF Daily EMA ---
+plot(showMtfDaily ? dailyEma20 : na, color=color.new(#e040fb, 40), linewidth=2, style=plot.style_stepline_diamond, title="Daily EMA 20")
+plot(showMtfDaily ? dailyEma50 : na, color=color.new(#e040fb, 70), linewidth=3, style=plot.style_stepline, title="Daily EMA 50")
+
+// --- MTF 1H EMA ---
+plot(showMtf1H ? h1Ema20 : na, color=color.new(#00bcd4, 40), linewidth=1, style=plot.style_stepline_diamond, title="1H EMA 20")
+plot(showMtf1H ? h1Ema50 : na, color=color.new(#00bcd4, 70), linewidth=2, style=plot.style_stepline, title="1H EMA 50")
+
+// --- Entry/Exit Markers ---
+plotshape(showMarkers and longCondition, style=shape.labelup, location=location.belowbar, color=color.new(bullColor, 0), size=size.small, title="Long Entry", text="L", textcolor=color.white)
+plotshape(showMarkers and shortCondition, style=shape.labeldown, location=location.abovebar, color=color.new(bearColor, 0), size=size.small, title="Short Entry", text="S", textcolor=color.white)
+plotshape(showMarkers and longExitCondition, style=shape.xcross, location=location.abovebar, color=color.new(#ff9800, 40), size=size.tiny, title="Long Exit")
+plotshape(showMarkers and shortExitCondition, style=shape.xcross, location=location.belowbar, color=color.new(#2196f3, 40), size=size.tiny, title="Short Exit")
+plotshape(showMarkers and trailHit and signalDir == 1, style=shape.flag, location=location.belowbar, color=color.new(trailLnColor, 0), size=size.small, title="Trail Hit Long", text="T")
+plotshape(showMarkers and trailHit and signalDir == -1, style=shape.flag, location=location.abovebar, color=color.new(trailLnColor, 0), size=size.small, title="Trail Hit Short", text="T")
+
+// ═══════════════════════════════════════════════════════════════
+// STATUS TABLE — top-right (9 rows)
+// ═══════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 9, border_width=1)
+
+if showTable and barstate.islast
+    trendColor = isBull ? color.new(bullColor, 20) : color.new(bearColor, 20)
+    trendText  = isBull ? "BULL" : "BEAR"
+    hdrBg      = color.new(#37474f, 10)
+
+    // Row 0: Header (auto version)
+    table.cell(infoTable, 0, 0, "MIS " + VERSION, bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, timeframe.period + "m", bgcolor=hdrBg, text_color=color.white, text_size=size.small)
+
+    // Row 1: Trend
+    table.cell(infoTable, 0, 1, "Trend", text_size=size.small)
+    table.cell(infoTable, 1, 1, trendText, bgcolor=trendColor, text_color=color.white, text_size=size.small)
+
+    // Row 2: EMA
+    table.cell(infoTable, 0, 2, "EMA", text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(fastLen) + "/" + str.tostring(slowLen), text_size=size.small)
+
+    // Row 3: RSI
+    table.cell(infoTable, 0, 3, "RSI", text_size=size.small)
+    rsiColor = rsiVal > 70 ? color.new(bearColor, 30) : rsiVal < 30 ? color.new(bullColor, 30) : color.new(color.gray, 70)
+    table.cell(infoTable, 1, 3, str.tostring(rsiVal, "#.0"), bgcolor=rsiColor, text_size=size.small)
+
+    // Row 4: ATR
+    table.cell(infoTable, 0, 4, "ATR", text_size=size.small)
+    table.cell(infoTable, 1, 4, str.tostring(atrVal, "#.0"), text_size=size.small)
+
+    // Row 5: R:R
+    table.cell(infoTable, 0, 5, "R:R", text_size=size.small)
+    rrrBg = activeRRR >= 3.0 ? color.new(bullColor, 40) : activeRRR >= 2.0 ? color.new(#ff9800, 40) : color.new(bearColor, 40)
+    table.cell(infoTable, 1, 5, str.tostring(activeRRR, "#.#") + ":1", bgcolor=rrrBg, text_color=color.white, text_size=size.small)
+
+    // Row 6: SL
+    table.cell(infoTable, 0, 6, "SL", text_size=size.small)
+    table.cell(infoTable, 1, 6, na(slPrice) ? "-" : str.tostring(slPrice, "#.0"), bgcolor=na(slPrice) ? na : color.new(bearColor, 60), text_size=size.small)
+
+    // Row 7: TP / Trail
+    tpModeLabel = tpMode == "Trailing Stop" ? "Trail" : "TP"
+    tpDisplay   = tpMode == "Trailing Stop" ? (na(trailStop) ? "-" : str.tostring(trailStop, "#.0")) : (na(tpPrice) ? "-" : str.tostring(tpPrice, "#.0"))
+    tpBgColor   = tpMode == "Trailing Stop" ? color.new(trailLnColor, 60) : color.new(bullColor, 60)
+    table.cell(infoTable, 0, 7, tpModeLabel, text_size=size.small)
+    table.cell(infoTable, 1, 7, tpDisplay, bgcolor=(tpDisplay == "-") ? na : tpBgColor, text_size=size.small)
+
+    // Row 8: Mode info
+    table.cell(infoTable, 0, 8, "Mode", text_size=size.small)
+    table.cell(infoTable, 1, 8, slMode + " | " + tpMode, text_size=size.small)

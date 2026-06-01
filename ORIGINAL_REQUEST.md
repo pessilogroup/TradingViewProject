@@ -374,3 +374,217 @@ Integrity mode: development
 ### Documentation Correctness
 - [ ] `docs/knowledge/trading_wizard/OPTIMIZED_PARAMETERS_MATRIX.md` contains complete, non-placeholder tables for BTC, ETH, and SOL.
 - [ ] `docs/reports/STRATEGY_GENEALOGY.md` has updated performance comparison tables for all three assets.
+
+## Follow-up — 2026-05-29T20:15:55Z
+
+Fix the deployment failure on Server A (Linux Gateway) in the CI/CD production pipeline action run.
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Diagnose and Fix Deploy Server A Error
+Diagnose the root cause of the failure during the "Deploy Server A (Gateway)" step in the GitHub Actions workflow and implement the necessary fixes to ensure the server starts and passes its health checks.
+
+### R2. Verify Local Setup and CI/CD Script Parity
+Ensure deployment files (e.g., docker-compose.server-a.yml, deploy.sh, and related scripts) are updated and consistent so that subsequent deployments pass successfully.
+
+## Acceptance Criteria
+
+### CI/CD Deployment Health
+- [ ] The deployment script / compose config is corrected such that the Gateway (Server A) starts successfully.
+- [ ] Gateway health check `curl -sf http://localhost:5000/health` or equivalent is healthy.
+- [ ] No regression introduced to other deployments (Server B/C).
+
+## Follow-up — 2026-05-29T23:13:04Z
+
+Build a provisioning verification suite that programmatically checks all 43 infrastructure items from the VPS deployment checklist, and auto-ticks the checklist markdown when items pass. CI/CD deployment is already complete — this project ONLY verifies that the one-time server provisioning (OS, users, SSH, firewall, NTP, Docker, VPN, tunnels) was done correctly on each server.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Architecture Reference
+
+| Server | Role | OS | Location | Specs |
+|--------|------|----|----------|-------|
+| A | Ingest Gateway (VBS) | Debian 12 Minimal | Remote VPS | 1U2G |
+| B | Execution Vault | Windows | Local Machine | 2U4G |
+| C | AI Core (RAG + Analyzer) | **Oracle Linux 9** | Remote VPS | 8U16G |
+
+**Network**: All 3 servers connected via Tailscale VPN (100.x.x.0/8). Server A also has Cloudflare Tunnel for public ingress.
+
+**What already exists (DO NOT rebuild):**
+- `scripts/init_server_debian.sh` — Debian 12 provisioning (Server A)
+- `scripts/init_server_ol9.sh` — Oracle Linux 9 provisioning (Server C)
+- `setup_tunnel.ps1` — Cloudflare Tunnel setup (Server A)
+- `setup_server_c.ps1` — Server C deployment wizard
+- `.github/workflows/deploy.yml` — Full CI/CD pipeline (lint → test → deploy A/C/B)
+- `deploy/docker-compose.server-{a,b,c}.yml` — Per-server Docker Compose
+- All health endpoints already implemented in application code
+
+**Health endpoints (already live):**
+- Server A: `GET :5000/health` → `{"status":"healthy", "pending_count": N}`
+- Server B: `GET :5002/health` → `{"status":"ok", "server":"execution-vault-b"}`
+- Server C ChromaDB: `GET :8000/api/v1/heartbeat`
+
+**The checklist to verify** is in `docs/SETUPS/01_VPS_SERVER_SETUP_GUIDE.md`, Section 11 (lines 1091-1155), containing 43 items across 4 subsections:
+- 11.1 SERVER A (15 items): OS, apt, botuser, SSH, Fail2Ban, UFW, NTP, Swap, Docker, log limits, Tailscale, Cloudflare, VBS health, BUFFER_SECRET, Telegram
+- 11.2 SERVER C (12 items): OS, botuser+SSH, NTP, Docker, Tailscale, ChromaDB, Analyzer, connect→A, connect→B, liveness monitor, disk monitor, circuit breaker
+- 11.3 SERVER B (10 items): Windows Update, Python 3.11+, NTP, Tailscale, Firewall, Execution Server, SERVER_B_SECRET, API Keys, test execute-trade, Telegram
+- 11.4 Cross-Server (6 items): ping A↔C, ping B↔C, clock drift <50ms, E2E pipeline, Telegram from all 3, UptimeRobot active
+
+## Requirements
+
+### R1. Per-Server Provisioning Verification Probes
+
+Create a Python verification module (`scripts/verify_provisioning.py`) that can SSH into each server (or run locally for Server B) and check infrastructure provisioning status. For each of the 43 checklist items, implement a concrete probe:
+
+- **SSH-based probes** (Server A + C): Check OS version, user existence, SSH config, service status (fail2ban, chrony/chronyd, docker, tailscale, cloudflared, ufw/firewalld), swap, docker log config, Tailscale IP
+- **Local probes** (Server B): Check Python version, Windows service status, firewall rules, Tailscale connection, NTP sync
+- **HTTP probes** (all): Hit health endpoints over Tailscale IPs to verify application layer
+- Each probe returns a structured result: `{item_id, server, description, status: PASS|FAIL|SKIP, detail}`
+- Support `--server a|b|c|all` flag to target specific servers
+- Support `--dry-run` to show what would be checked without running probes
+
+### R2. Cross-Server E2E Verification
+
+Implement the 6 cross-server verification checks from Section 11.4:
+- Tailscale ping between C↔A and C↔B
+- NTP clock drift measurement across all 3 servers (must be <50ms)
+- E2E signal flow test: simulate a webhook → verify it arrives at A's queue → verify C can consume → verify C can reach B's endpoint (connectivity only, no real trade)
+- Telegram delivery verification from each server
+- UptimeRobot/Cloudflare monitoring status check
+
+### R3. Checklist Auto-Ticker
+
+After verification runs, auto-update the checklist in `docs/SETUPS/01_VPS_SERVER_SETUP_GUIDE.md`:
+- Replace `☐` with `☑` for items that PASS
+- Leave `☐` unchanged for FAIL or SKIP items
+- Also update the identical copy at `docs/reports/01_VPS_SERVER_SETUP_GUIDE.md`
+- Generate a summary report (JSON + human-readable markdown) saved to `docs/reports/provisioning_verification_report.md`
+- Support `--no-tick` flag to generate the report without modifying checklist files
+
+## Acceptance Criteria
+
+### Verification Coverage
+- [ ] `verify_provisioning.py --server a --dry-run` lists all 15 Server A items with their probe descriptions
+- [ ] `verify_provisioning.py --server c --dry-run` lists all 12 Server C items (using Oracle Linux 9 probes, NOT Debian)
+- [ ] `verify_provisioning.py --server b --dry-run` lists all 10 Server B items (Windows-native checks)
+
+### Probe Accuracy
+- [ ] SSH probes correctly detect: OS version (Debian 12 vs Oracle Linux 9), running services (systemctl/firewalld), user existence, SSH config values
+- [ ] HTTP probes correctly distinguish healthy vs unreachable endpoints with proper timeout handling (5s connect, 10s read)
+- [ ] Cross-server NTP drift measurement uses `chronyc tracking` (Linux) and `w32tm /stripchart` (Windows) and correctly compares timestamps
+
+### Checklist Updates
+- [ ] Running `verify_provisioning.py --all --auto-tick` updates BOTH copies of the checklist (docs/SETUPS/ and docs/reports/) consistently
+- [ ] Only PASS items get ticked; FAIL/SKIP items remain `☐`
+
+## Follow-up — 2026-05-31T00:39:19+07:00
+
+Implement and deploy a decentralized signal logging, RAG SEPA AI analysis, and trade forwarding pipeline on Server C that polls raw signals from Server A, analyzes them, and forwards the execution commands to Server B.
+
+Working directory: ~/teamwork_projects/vps_signal_pipeline
+Integrity mode: development
+
+## Requirements
+
+### R1. Signal Consumer Long-polling (Server C)
+- Implement a background service/daemon (`vps_consumer.py`) on Server C that pulls pending signals from Server A Ingress Gateway (VBS service) using long-polling to keep latency < 1s.
+- Store consumed signals locally in `server/trades.db` under the `indicator_signals` and `signals` tables, maintaining idempotency based on `vbs_queue_id`.
+
+### R2. RAG and SEPA AI Analysis (Server C)
+- Set up local ChromaDB vector DB access on Server C to query SEPA chunks from `docs/knowledge/trading_wizard/chunks`.
+- Run SEPA analysis on entry/exit signals using Gemini as the primary AI provider (leveraging the valid GEMINI_API_KEY from env) via the Antigravity SDK, determining Mark Minervini alignment and calculating stop-loss and take-profit levels using ATR.
+
+### R3. Safe Trade Command Forwarding (Server C -> Server B)
+- When a valid entry/exit signal is analyzed and approved, forward the finalized trade execution payload to Server B's execution endpoint at `http://${SERVER_B_IP}:5002/api/execute-trade`.
+- Secure transmission by signing the request with `X-Server-B-Secret` header authentication.
+
+## Acceptance Criteria
+
+### Ingestion & Analysis Verification
+- [ ] Implement a mock simulation harness (`scripts/simulate_pipeline.py`) that mocks Server A's queue endpoints (`/consume` and `/ack`) and Server B's execution endpoint.
+- [ ] Confirm the long-polling consumer retrieves queued signals within < 1 second.
+- [ ] Verify that SEPA analysis is generated and stored in the database.
+- [ ] Verify that HTTP requests to Server B are properly formatted and include the required security headers.
+
+
+## Follow-up — 2026-05-31T03:58:48+07:00
+
+Implement local Telegram Bot signal synchronization (Option 2) in the 3-server decentralized pipeline. This ensures signals requiring human approval are held on Server B (Local/Windows) and handled interactively via the Telegram bot running inside the execution server.
+
+Working directory: c:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Lifespan and Bot Initialization in Execution Server
+- Start and stop the interactive Telegram bot daemon inside the `execution_server.py` application's lifespan if `TELEGRAM_BOT_ENABLED=true` in `.env`.
+- Ensure all event handlers for `trade_engine` and `notification_hub` are registered on the EventBus when `execution_server.py` starts, so that events such as `TradeApproved`, `TradeExecuted`, and `TradeFailed` are correctly handled.
+
+### R2. Human-in-the-Loop Gating in Execution Server
+- In `execution_server.py`, modify the `POST /api/execute-trade` endpoint:
+  - Check if the incoming payload has `"hold_for_approval": true` or if its `"ai_confidence"` is between 50 and 79.
+  - If held for approval, persist the signal in the database and register it in `PENDING_TRADES` (shared memory).
+  - Trigger the interactive Telegram approval card using `telegram_bot.send_interactive_trade_approval(...)` instead of executing the trade immediately.
+  - If approved by the user via Telegram callback, pop it from `PENDING_TRADES` and trigger trade execution through the normal event pipeline.
+
+### R3. Confidence-Based Flagging in AI Analyzer
+- In `vps_analyzer.py` (Server C), update signal evaluation to check the calculated confidence score (`ai_confidence` between 0-100).
+- If the confidence score is between 50 and 79, set `"hold_for_approval": true` in the forwarded trade payload so that Server B holds it for manual approval.
+- Ensure the signal is still forwarded to Server B for manual gating.
+
+## Acceptance Criteria
+
+### Interactive Gating & Flow Correctness
+- [ ] Implement a unit/integration test suite at `server/tests/test_decentralized_approval.py` that verifies:
+  - Forwarded trade command with `hold_for_approval=True` is intercepted and added to `PENDING_TRADES`.
+  - The Telegram bot interactive approval function is called with correct signal details.
+  - High confidence signals (confidence >= 80) bypass approval and execute immediately.
+  - Low confidence signals (confidence < 50) are auto-rejected by the analyzer.
+  - Simulated button callback triggers `TradeApproved` and executes successfully via the engine.
+- [ ] Run the complete test suite (`pytest server/tests/`) and confirm all tests pass.
+
+## Follow-up — 2026-06-01T17:26:08+07:00
+
+Extract all API documentation from the WEEX platform (https://www.weex.com/api-doc/) and update the local knowledge files inside the project's knowledge base.
+
+Working directory: C:\Users\pesil\working\mj_trading\TradingViewProject
+Integrity mode: development
+
+## Requirements
+
+### R1. Comprehensive Crawling of WEEX API Docs
+Extract all pages and subpages of the WEEX API documentation starting from https://www.weex.com/api-doc/. This includes, but is not limited to:
+*   Spot Trading (V1, V3)
+*   Futures/Contract Trading (V2, V3, USDT-M, Coin-M)
+*   Copy Trading & Social Trading APIs
+*   WebSocket API (public and private channels)
+*   Signature Calculation & Authentication mechanisms
+*   Rate limits and weight specifications
+*   Supported trading pairs and announcements
+
+The crawling can utilize automated scripts (such as Python BeautifulSoup, Playwright, or direct requests) to fetch the dynamic content.
+
+### R2. Update and Organize Local Knowledge Base (KIs)
+Update existing markdown files and create new markdown files inside the local knowledge base directory:
+`C:\Users\pesil\working\mj_trading\TradingViewProject\lobes\knowledge\weex`
+The files should be cleanly structured, readable, and written in Markdown. All API models, endpoints, request parameters, response schemas, and code snippets must be preserved.
+
+### R3. Automated Link & Schema Audit
+Implement a validation check or audit step to ensure:
+*   There are no broken relative links or placeholders in the generated markdown files.
+*   All code examples (Python/Go/Curl) are syntactically valid and match WEEX requirements.
+
+## Acceptance Criteria
+
+### Documentation Completeness & Structure
+- [ ] Every document category found on https://www.weex.com/api-doc/ has a corresponding `.md` file in `lobes/knowledge/weex`.
+- [ ] No placeholders, draft notes, or unfinished sections are present in the final documents.
+- [ ] The signature rules explicitly detail BOTH the V2 and V3 signing logic (differentiating query parameter concatenation).
+
+### Verification
+- [ ] A verification script runs and confirms all generated `.md` files contain valid markdown structure.
+- [ ] An endpoint index file is generated listing all crawled endpoints and their mapped markdown files.

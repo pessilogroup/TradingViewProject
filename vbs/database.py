@@ -1,4 +1,3 @@
-import sqlite3
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -73,6 +72,33 @@ async def write_audit_log(db: aiosqlite.Connection, queue_id: int, event: str, c
         (queue_id, event, utc_now_str(), consumer_id, detail)
     )
 
+async def check_duplicate(
+    symbol: str, action: str, price: float, window_seconds: int = 10
+) -> Optional[int]:
+    """Check if a signal with same symbol+action+price exists within the dedup window.
+
+    Uses a fingerprint of (symbol_upper, action_lower, rounded_price) within
+    a configurable time window.
+
+    Returns:
+        The existing queue_id if duplicate found, None otherwise.
+    """
+    cutoff = (utc_now() - timedelta(seconds=window_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    sym = symbol.upper()
+    act = action.lower()
+
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            """SELECT id FROM signal_queue
+               WHERE UPPER(symbol) = ? AND LOWER(action) = ?
+                 AND received_at >= ?
+               ORDER BY id DESC LIMIT 1""",
+            (sym, act, cutoff),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
 async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
     """Insert a new signal into the queue."""
     now = utc_now()
@@ -101,7 +127,7 @@ async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
         quote_qty_float = 10.0
 
     interval = payload.get("interval", "")
-    exchange = payload.get("exchange") or "binance"
+    exchange = (payload.get("exchange") or "binance").upper()
     sl = payload.get("sl", "")
     tp = payload.get("tp", "")
     source = payload.get("source", "")
@@ -139,6 +165,19 @@ async def insert_signal(payload: Dict[str, Any]) -> Tuple[int, str]:
         log.info(f"VBS Queue Signal #{queue_id} stored: {action} {symbol} (expires at {expires_str})")
         return queue_id, expires_str
 
+async def update_signal_status(queue_id: int, status: str, detail: str = "") -> bool:
+    """Updates the status of a specific signal (e.g. APPROVED, CANCELLED)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        async with db.execute(
+            "UPDATE signal_queue SET status = ? WHERE id = ? AND status = 'PENDING'",
+            (status, queue_id)
+        ) as cursor:
+            if cursor.rowcount > 0:
+                await write_audit_log(db, queue_id, status, detail=detail)
+                await db.commit()
+                return True
+            return False
+
 async def get_pending_count() -> int:
     """Return the number of pending signals."""
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -146,18 +185,35 @@ async def get_pending_count() -> int:
             row = await cur.fetchone()
             return row[0] if row else 0
 
-async def consume_signals(consumer_id: str, limit: int) -> List[Dict[str, Any]]:
+async def consume_signals(
+    consumer_id: str, 
+    limit: int, 
+    source: Optional[str] = None, 
+    exclude_source: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Retrieve and dispatch pending signals, marking them as DISPATCHED."""
     now_str = utc_now_str()
     signals = []
     
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Build dynamic query based on source filters
+        query = "SELECT * FROM signal_queue WHERE status = 'PENDING' AND expires_at > ?"
+        params = [now_str]
+        
+        if source:
+            query += " AND source = ?"
+            params.append(source)
+            
+        if exclude_source:
+            query += " AND (source IS NULL OR source != ?)"
+            params.append(exclude_source)
+            
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+        
         # Retrieve pending signals that are not expired yet
-        async with db.execute(
-            "SELECT * FROM signal_queue WHERE status = 'PENDING' AND expires_at > ? ORDER BY id ASC LIMIT ?",
-            (now_str, limit)
-        ) as cur:
+        async with db.execute(query, tuple(params)) as cur:
             rows = await cur.fetchall()
             
         if not rows:
@@ -252,7 +308,7 @@ async def stale_cleanup() -> int:
     async with aiosqlite.connect(config.DB_PATH) as db:
         # Get count
         async with db.execute(
-            "SELECT id FROM signal_queue WHERE status IN ('PENDING', 'DISPATCHED') AND expires_at < ?",
+            "SELECT id, source FROM signal_queue WHERE status IN ('PENDING', 'DISPATCHED') AND expires_at < ?",
             (now_str,)
         ) as cur:
             rows = await cur.fetchall()
@@ -261,6 +317,9 @@ async def stale_cleanup() -> int:
             return 0
             
         ids = [row[0] for row in rows]
+        # Count non-indicator signals for alerting
+        alert_count = sum(1 for row in rows if row[1] != "indicator")
+        
         placeholders = ",".join("?" for _ in ids)
         
         await db.execute(
@@ -272,8 +331,8 @@ async def stale_cleanup() -> int:
             await write_audit_log(db, q_id, "STALE", detail="Expired via TTL scheduler")
             
         await db.commit()
-        log.info(f"VBS Cleanup: marked {len(ids)} expired signals as STALE")
-        return len(ids)
+        log.info(f"VBS Cleanup: marked {len(ids)} expired signals as STALE ({alert_count} alertable)")
+        return alert_count
 
 async def requeue_timeouts(timeout_minutes: float) -> Tuple[int, List[Dict[str, Any]]]:
     """Requeue signals that were dispatched but never ACKed within the timeout period."""
@@ -335,7 +394,6 @@ async def audit_cleanup(days: int) -> int:
 
 async def get_queue_status() -> Dict[str, Any]:
     """Retrieve queue statistics and pending items."""
-    now_str = utc_now_str()
     today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
     
     async with aiosqlite.connect(config.DB_PATH) as db:
@@ -398,3 +456,23 @@ async def get_queue_status() -> Dict[str, Any]:
         },
         "pending_signals": pending_signals
     }
+
+async def update_signal_payload(queue_id: int, extra_data: Dict[str, Any]) -> bool:
+    """Updates payload_json in the queue by merging in new keys."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT payload_json FROM signal_queue WHERE id = ?", (queue_id,)) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return False
+            payload = json.loads(row["payload_json"])
+            
+        payload.update(extra_data)
+        new_payload_json = json.dumps(payload)
+        
+        async with db.execute(
+            "UPDATE signal_queue SET payload_json = ? WHERE id = ?",
+            (new_payload_json, queue_id)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0

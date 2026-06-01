@@ -91,6 +91,12 @@ if ! id "trader" &>/dev/null 2>&1; then
 fi
 
 # ── 5. Build & Start ─────────────────────────────────────────
+# Create server symlink if missing
+if [ ! -L "server" ] && [ ! -d "server" ]; then
+    echo "Creating server/ symlink..."
+    ln -s nerves/workers/trading server
+fi
+
 info "Building Docker image..."
 docker compose build --no-cache
 log "Docker image built successfully"
@@ -128,10 +134,39 @@ for i in $(seq 1 $MAX_RETRIES); do
     sleep 3
 done
 
+# ── 8. V2 Monitoring Setup (#12 logrotate + #14 UptimeRobot) ─
+info "Setting up V2 monitoring..."
+
+# #12 — logrotate
+if command -v logrotate &>/dev/null; then
+    LOGROTATE_SRC="$DEPLOY_DIR/deploy/tradingbot-logrotate"
+    if [[ -f "$LOGROTATE_SRC" ]]; then
+        sudo cp "$LOGROTATE_SRC" /etc/logrotate.d/tradingbot
+        sudo chmod 644 /etc/logrotate.d/tradingbot
+        log "logrotate config installed: /etc/logrotate.d/tradingbot"
+    fi
+else
+    apt-get install -y logrotate -q && \
+    sudo cp "$DEPLOY_DIR/deploy/tradingbot-logrotate" /etc/logrotate.d/tradingbot && \
+    log "logrotate installed and configured"
+fi
+
+# #14 — UptimeRobot
+if [[ -n "${UPTIMEROBOT_API_KEY:-}" && -n "${SERVER_A_PUBLIC_IP:-}" ]]; then
+    info "Creating UptimeRobot monitor via API..."
+    bash "$DEPLOY_DIR/deploy/setup_monitoring.sh"
+else
+    warn "#14 UptimeRobot: Set UPTIMEROBOT_API_KEY + SERVER_A_PUBLIC_IP to automate"
+    warn "   OR run manually: bash $DEPLOY_DIR/deploy/setup_monitoring.sh"
+    warn "   Manual: https://uptimerobot.com/dashboard#newMonitorBtn"
+    warn "     URL → http://YOUR_SERVER_A_IP:5000/health"
+    warn "     Interval → 5 min | Alert keyword → healthy"
+fi
+
 # ── Done ─────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✅ Deployment Complete!                               ${NC}"
+echo -e "${GREEN}  ✅ Deployment Complete! (V2 Hardened)                ${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
 echo ""
 echo "  🌐 Dashboard:  http://$(hostname -I | awk '{print $1}'):5000/dashboard"
@@ -140,3 +175,7 @@ echo "  📋 Logs:       docker compose logs -f"
 echo "  🔄 Restart:    sudo systemctl restart trading-bot"
 echo "  🛑 Stop:       docker compose down"
 echo ""
+echo "  🔵 Logrotate:  sudo logrotate -v /etc/logrotate.d/tradingbot"
+echo "  📡 UptimeRobot: https://uptimerobot.com/dashboard"
+echo ""
+

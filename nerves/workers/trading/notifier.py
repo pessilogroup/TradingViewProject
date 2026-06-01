@@ -30,9 +30,14 @@ def sanitize_for_telegram_html(text: str) -> str:
     text = text.replace('&lt;i&gt;', '<i>').replace('&lt;/i&gt;', '</i>')
     text = text.replace('&lt;code&gt;', '<code>').replace('&lt;/code&gt;', '</code>')
     text = text.replace('&lt;pre&gt;', '<pre>').replace('&lt;/pre&gt;', '</pre>')
+    text = text.replace('&lt;s&gt;', '<s>').replace('&lt;/s&gt;', '</s>')
+    text = text.replace('&lt;strike&gt;', '<strike>').replace('&lt;/strike&gt;', '</strike>')
     
     # 2. Convert Bold: **text** -> <b>text</b>
     text = re.compile(r'\*\*(.*?)\*\*').sub(r'<b>\1</b>', text)
+    
+    # Convert ~~text~~ -> <s>text</s>
+    text = re.compile(r'~~(.*?)~~').sub(r'<s>\1</s>', text)
     
     # 3. Convert Italic: *text* -> <i>text</i>
     # Note: Using a more restrictive regex for italics to avoid catching lone asterisks or sub-parts of words
@@ -75,6 +80,43 @@ async def send_telegram_alert(message: str):
                     log.error(f"Failed to send Telegram alert to {chat_id}: {e}")
     except Exception as e:
         log.error(f"Telegram session error: {e}")
+
+async def edit_telegram_message(chat_id: int, message_id: int, text: str) -> bool:
+    """Edit an existing Telegram message. Returns True on success."""
+    if not config.TELEGRAM_BOT_TOKEN:
+        return False
+
+    # Try using active Telegram bot sender first if available
+    try:
+        import telegram_bot
+        sender = telegram_bot.get_sender()
+        if sender:
+            # chat_id and message_id must be integers for TelegramBot API
+            return await sender.edit_message(chat_id=int(chat_id), message_id=int(message_id), text=text)
+    except Exception as e:
+        log.warning(f"Failed to edit via telegram_bot: {e}")
+
+    # Fallback to direct HTTP request if bot daemon is not running or fails
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/editMessageText"
+    html_message = sanitize_for_telegram_html(text)
+    payload = {
+        "chat_id": int(chat_id),
+        "message_id": int(message_id),
+        "text": html_message,
+        "parse_mode": "HTML"
+    }
+    import socket
+    conn = aiohttp.TCPConnector(family=socket.AF_INET)
+    try:
+        async with aiohttp.ClientSession(connector=conn) as session:
+            async with session.post(url, json=payload, timeout=10) as response:
+                if response.status == 200:
+                    return True
+                else:
+                    log.error(f"Telegram Edit API Error (chat={chat_id}, msg={message_id}): {await response.text()}")
+    except Exception as e:
+        log.error(f"Failed to edit Telegram message directly: {e}")
+    return False
 
 async def send_discord_alert(message: str):
     """Gửi tin nhắn báo cáo qua Discord Webhook (Bất đồng bộ)"""
@@ -179,29 +221,38 @@ async def send_scan_summary_to_telegram(serialised_results: list) -> None:
     if not serialised_results:
         return
 
-    n = len(serialised_results)
-    vcp_syms = [r["symbol"] for r in serialised_results if r.get("vcp_detected")]
+    from datetime import datetime
+    from utils.telegram_templates import render_template
 
-    lines = [f"🔍 <b>Scan kết thúc ({n} symbols)</b> <i>[từ Dashboard]</i>\n"]
-    lines.append("<pre>")
-    lines.append(f"{'Symbol':<10} {'Price':>10} {'TT':>4}  {'VCP':>5}  {'Vol%':>5}")
-    lines.append("─" * 38)
-
-    for r in serialised_results:
+    results_lines = []
+    for idx, r in enumerate(serialised_results, 1):
+        symbol = r.get("symbol", "N/A")
         if r.get("error"):
-            lines.append(f"{r['symbol']:<10} {'ERROR':>10}")
+            results_lines.append(f"{idx}. 🔴 <b>{symbol}</b> — <b>LỖI KẾT NỐI</b>\n   • <code>{r.get('error')}</code>")
             continue
+        
+        vcp_detected = r.get("vcp_detected", False)
+        tt_score = r.get("trend_template_score", 0)
+        vcp_star = "⭐ " if vcp_detected else "🟢 "
+        
+        if tt_score >= 8:
+            stage = "Stage 2"
+        elif 5 <= tt_score <= 7:
+            stage = "Stage 1/2"
+        else:
+            stage = "Stage 1"
+            vcp_star = "🟡 " if not vcp_detected else "⭐ "
+            
         price = r.get("price", 0)
         price_str = f"{price:,.2f}" if price >= 1 else f"{price:.4f}"
-        tt    = r.get("trend_template_score", 0)
-        vcp   = "⭐" if r.get("vcp_detected") else ""
-        vol   = f"{r.get('volume_ratio', 0)*100:.0f}%"
-        lines.append(f"{r['symbol']:<10} {price_str:>10} {tt}/8  {vcp:<3} {vol:>5}")
+        vol_ratio = r.get("volume_ratio", 0)
+        
+        results_lines.append(
+            f"{idx}. {vcp_star}<b>{symbol}</b> — <b>{stage}</b> (Score {tt_score}/8)\n"
+            f"   • Giá: <code>{price_str}</code> | Vol: <code>{vol_ratio:.1f}x avg</code>"
+        )
+    scan_results_list = "\n".join(results_lines)
+    scan_time = datetime.now().strftime("%H:%M:%S (UTC+7)")
 
-    lines.append("</pre>")
-
-    if vcp_syms:
-        lines.append(f"\n🎯 <b>VCP detected:</b> {', '.join(vcp_syms)}")
-
-    message = "\n".join(lines)
+    message = render_template("B", scan_time=scan_time, scan_results_list=scan_results_list)
     await send_telegram_alert(message)

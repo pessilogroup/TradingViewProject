@@ -13,6 +13,12 @@ from aiohttp import ClientResponseError
 import config
 
 
+@pytest.fixture(autouse=True)
+def mock_rag_init():
+    with patch("rag.init_vector_db", new_callable=AsyncMock, return_value=True):
+        yield
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 def _make_vbs_signal(queue_id=1, symbol="BTCUSDT", action="buy", price=68000.0):
@@ -671,3 +677,221 @@ async def test_poll_and_analyze_multiple_signals():
     assert results[1]["approved"] is False
     assert results[1]["queue_id"] == 51
     await worker.close()
+
+
+# ── Local & Server B Failover Tests ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_forward_to_local_success():
+    """If LOCAL_EXECUTE_URL is configured and succeeds, we use Local and don't call Server B."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+    import config
+
+    original_local_url = config.LOCAL_EXECUTE_URL
+    original_local_secret = config.LOCAL_EXECUTE_SECRET
+    original_b_url = config.SERVER_B_EXECUTE_URL
+
+    try:
+        config.LOCAL_EXECUTE_URL = "http://local-windows:5000"
+        config.LOCAL_EXECUTE_SECRET = "local-sec"
+        config.SERVER_B_EXECUTE_URL = "http://server-b:5000"
+
+        worker = VpsAnalyzerWorker()
+        trade_payload = {"symbol": "BTCUSDT", "action": "buy", "price": 68000.0}
+
+        local_response = FakeResponse(status=200, json_data={"success": True, "order_id": "LOCAL-123"})
+        
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=local_response)
+        worker.get_session = AsyncMock(return_value=mock_session)
+
+        result = await worker.forward_to_server_b(trade_payload)
+
+        assert result["success"] is True
+        assert result["executed_on"] == "local"
+        assert result["data"]["order_id"] == "LOCAL-123"
+
+        # Verify only one post call (to Local) was made
+        assert mock_session.post.call_count == 1
+        call_url = mock_session.post.call_args[0][0]
+        assert "local-windows" in call_url
+
+        await worker.close()
+    finally:
+        config.LOCAL_EXECUTE_URL = original_local_url
+        config.LOCAL_EXECUTE_SECRET = original_local_secret
+        config.SERVER_B_EXECUTE_URL = original_b_url
+
+
+@pytest.mark.asyncio
+async def test_forward_to_local_fails_fallback_to_server_b_success():
+    """If Local fails (connection error or timeout), we log warning, send Telegram, and try Server B."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+    import config
+    from unittest.mock import patch
+
+    original_local_url = config.LOCAL_EXECUTE_URL
+    original_local_secret = config.LOCAL_EXECUTE_SECRET
+    original_b_url = config.SERVER_B_EXECUTE_URL
+    original_b_secret = config.SERVER_B_SECRET
+
+    try:
+        config.LOCAL_EXECUTE_URL = "http://local-windows:5000"
+        config.LOCAL_EXECUTE_SECRET = "local-sec"
+        config.SERVER_B_EXECUTE_URL = "http://server-b:5000"
+        config.SERVER_B_SECRET = "b-sec"
+
+        worker = VpsAnalyzerWorker()
+        trade_payload = {"symbol": "BTCUSDT", "action": "buy", "price": 68000.0}
+
+        # Mock post side_effects: 1st call (Local) raises connection error, 2nd call (Server B) succeeds
+        b_response = FakeResponse(status=200, json_data={"success": True, "order_id": "B-456"})
+        
+        mock_session = MagicMock()
+        
+        # Side effect to raise error on first call and return b_response on second
+        call_count = 0
+        def post_side_effect(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("Connection refused to Local Windows")
+            return b_response
+
+        mock_session.post = MagicMock(side_effect=post_side_effect)
+        worker.get_session = AsyncMock(return_value=mock_session)
+
+        # Mock Telegram alert to avoid real requests
+        with patch("notifier.send_telegram_alert", new_callable=AsyncMock) as mock_alert:
+            result = await worker.forward_to_server_b(trade_payload)
+
+            assert result["success"] is True
+            assert result["executed_on"] == "server_b"
+            assert result["data"]["order_id"] == "B-456"
+            assert mock_session.post.call_count == 2
+            mock_alert.assert_called_once()
+            assert "Local Windows Offline" in mock_alert.call_args[0][0]
+
+        await worker.close()
+    finally:
+        config.LOCAL_EXECUTE_URL = original_local_url
+        config.LOCAL_EXECUTE_SECRET = original_local_secret
+        config.SERVER_B_EXECUTE_URL = original_b_url
+        config.SERVER_B_SECRET = original_b_secret
+
+
+# ── Dynamic ATR-based Sizing & SL/TP Tests ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_calculate_sl_tp_with_atr():
+    """_calculate_sl_tp calculates SL/TP using ATR if present in payload or root."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+
+    worker = VpsAnalyzerWorker()
+    price = 100.0
+
+    original_risk = config.RISK_PER_TRADE
+    original_max = config.MAX_QUOTE_QTY
+    original_sl_pct = config.STOP_LOSS_PCT
+    original_tp_pct = config.TAKE_PROFIT_PCT
+
+    try:
+        config.RISK_PER_TRADE = 0.02
+        config.MAX_QUOTE_QTY = 1000.0
+        config.STOP_LOSS_PCT = 0.08
+        config.TAKE_PROFIT_PCT = 0.20
+
+        # Test case 1: Buy signal with ATR in payload
+        signal_buy_payload = {
+            "payload": {
+                "atr": 5.0
+            }
+        }
+        sl, tp = worker._calculate_sl_tp(price, "buy", signal=signal_buy_payload)
+        # Long: SL = Price - 2*ATR = 100 - 10 = 90
+        # Long: TP = Price + 5*ATR = 100 + 25 = 125
+        assert sl == 90.0
+        assert tp == 125.0
+
+        # Test case 2: Sell signal with atr_value at root
+        signal_sell_root = {
+            "atr_value": 4.0
+        }
+        sl, tp = worker._calculate_sl_tp(price, "sell", signal=signal_sell_root)
+        # Short: SL = Price + 2*ATR = 100 + 8 = 108
+        # Short: TP = Price - 5*ATR = 100 - 20 = 80
+        assert sl == 108.0
+        assert tp == 80.0
+
+        # Test case 3: Fallback when ATR is zero
+        signal_zero_atr = {
+            "payload": {
+                "atr": 0.0
+            }
+        }
+        sl, tp = worker._calculate_sl_tp(price, "buy", signal=signal_zero_atr)
+        original_sl = round(price * (1 - config.STOP_LOSS_PCT), 8)
+        original_tp = round(price * (1 + config.TAKE_PROFIT_PCT), 8)
+        assert sl == original_sl
+        assert tp == original_tp
+
+    finally:
+        config.RISK_PER_TRADE = original_risk
+        config.MAX_QUOTE_QTY = original_max
+        config.STOP_LOSS_PCT = original_sl_pct
+        config.TAKE_PROFIT_PCT = original_tp_pct
+
+
+@pytest.mark.asyncio
+async def test_calculate_position_size_with_atr():
+    """_calculate_position_size uses dynamic risk based on ATR and caps total value."""
+    from workers.vps_analyzer import VpsAnalyzerWorker
+
+    worker = VpsAnalyzerWorker()
+    price = 100.0
+
+    original_risk = config.RISK_PER_TRADE
+    original_max = config.MAX_QUOTE_QTY
+    original_sl_pct = config.STOP_LOSS_PCT
+    original_tp_pct = config.TAKE_PROFIT_PCT
+
+    try:
+        config.RISK_PER_TRADE = 0.02
+        config.MAX_QUOTE_QTY = 1000.0
+        config.STOP_LOSS_PCT = 0.08
+        config.TAKE_PROFIT_PCT = 0.20
+
+        # Config values: MAX_QUOTE_QTY = 1000, RISK_PER_TRADE = 0.02
+        # So risk_amount = 1000 * 0.02 = 20
+        # Test case 1: ATR = 5.0. Dynamic sl_pct = 2 * 5.0 / 100 = 0.10 (10%)
+        # qty = risk_amount / (price * sl_pct) = 20 / (100 * 0.10) = 2.0
+        signal_payload = {
+            "payload": {
+                "atr_value": 5.0
+            }
+        }
+        qty = worker._calculate_position_size(price, "buy", signal=signal_payload)
+        assert qty == 2.0
+
+        # Test case 2: Large ATR makes sl_pct huge, or small ATR makes sl_pct tiny.
+        # If ATR = 0.1. Dynamic sl_pct = 0.2 / 100 = 0.002
+        # qty = 20 / (100 * 0.002) = 100.0
+        # Total quote value = 100 * 100 = 10000 > 1000. Cap to portfolio / price = 1000 / 100 = 10.0
+        signal_tiny_atr = {
+            "atr": 0.1
+        }
+        qty_capped = worker._calculate_position_size(price, "buy", signal=signal_tiny_atr)
+        assert qty_capped == 10.0
+
+        # Test case 3: Fallback when signal is None
+        qty_fallback = worker._calculate_position_size(price, "buy", signal=None)
+        # sl_pct = config.STOP_LOSS_PCT = 0.08
+        # qty = 20 / (100 * 0.08) = 20 / 8 = 2.5
+        assert qty_fallback == 2.5
+
+    finally:
+        config.RISK_PER_TRADE = original_risk
+        config.MAX_QUOTE_QTY = original_max
+        config.STOP_LOSS_PCT = original_sl_pct
+        config.TAKE_PROFIT_PCT = original_tp_pct
+

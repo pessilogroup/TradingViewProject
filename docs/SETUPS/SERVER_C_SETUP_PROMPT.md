@@ -39,6 +39,7 @@
 
 ## ⚡ BƯỚC 1: SSH Vào VPS & Cập Nhật
 
+### Option A: Debian 12 (Mặc định)
 ```bash
 # SSH vào VPS
 ssh root@<VPS_IP>
@@ -56,6 +57,26 @@ apt install -y curl wget git htop tmux jq \
 # Verify
 python3 --version
 # → Python 3.11.x ✅
+```
+
+### Option B: Oracle Linux (RHEL-based)
+```bash
+# SSH vào VPS
+ssh root@<VPS_IP>
+
+# Cập nhật hệ thống và cài đặt EPEL + Development Tools
+sudo dnf upgrade -y
+sudo dnf install -y epel-release
+sudo dnf groupinstall -y "Development Tools"
+
+# Cài tools cơ bản + build dependencies cho ChromaDB
+sudo dnf install -y curl wget git htop tmux jq \
+    python3 python3-pip python3-devel sudo \
+    libffi-devel openssl-devel
+
+# Verify
+python3 --version
+# → Python 3.x ✅
 ```
 
 ---
@@ -80,9 +101,11 @@ ClientAliveCountMax 2
 X11Forwarding no
 EOF
 
-# Copy SSH key cho botuser
+# Copy SSH key cho botuser & thêm Deploy Key cho CI/CD Github Actions
 mkdir -p /home/botuser/.ssh
 cp ~/.ssh/authorized_keys /home/botuser/.ssh/
+# Thêm public key deploy để Github Actions có thể SSH vào deploy
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEMVNH4cvW86zP84BLyQkOxW9GATWDQovGFn0imOVPLv" >> /home/botuser/.ssh/authorized_keys
 chown -R botuser:botuser /home/botuser/.ssh
 chmod 700 /home/botuser/.ssh
 chmod 600 /home/botuser/.ssh/authorized_keys
@@ -100,10 +123,14 @@ systemctl restart sshd
 ```bash
 su - botuser
 
-# Timezone Việt Nam
+# Timezone Việt Nam (Chung cho cả 2 OS)
 sudo timedatectl set-timezone Asia/Ho_Chi_Minh
+```
 
-# NTP (chrony) — PHẢI đồng bộ với SERVER A
+### 3.1 Cấu hình NTP (Đồng bộ thời gian với Server A)
+
+#### Dành cho Debian 12:
+```bash
 sudo apt install -y chrony
 sudo tee /etc/chrony/chrony.conf << 'EOF'
 server time.google.com iburst prefer
@@ -114,12 +141,31 @@ driftfile /var/lib/chrony/chrony.drift
 maxdistance 0.1
 EOF
 sudo systemctl enable --now chrony
+```
 
-# Verify NTP
+#### Dành cho Oracle Linux:
+```bash
+sudo dnf install -y chrony
+sudo tee /etc/chrony.conf << 'EOF'
+server time.google.com iburst prefer
+server time.cloudflare.com iburst
+server 0.pool.ntp.org iburst
+makestep 1.0 3
+driftfile /var/lib/chrony/chrony.drift
+maxdistance 0.1
+EOF
+sudo systemctl enable --now chronyd
+```
+
+#### Xác thực NTP:
+```bash
 chronyc tracking | grep "System time"
 # → System time: 0.00000xxxx seconds ✅
+```
 
-# Swap 4GB (bảo hiểm cho ChromaDB + AI workload)
+### 3.2 Thiết lập Swap 4GB (Bảo hiểm OOM)
+```bash
+# Swap 4GB (Chung cho cả 2 OS)
 sudo fallocate -l 4G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
@@ -133,19 +179,17 @@ sudo sysctl -p
 
 ## ⚡ BƯỚC 4: Firewall
 
+#### Fail2Ban (Chung cho cả 2 OS):
 ```bash
-# Fail2Ban
-sudo apt install -y fail2ban
-sudo tee /etc/fail2ban/jail.local << 'EOF'
-[DEFAULT]
-bantime  = 3600
-findtime = 600
-maxretry = 3
-[sshd]
-enabled = true
-EOF
+# Dành cho Debian:
+# sudo apt install -y fail2ban
+# Dành cho Oracle Linux:
+# sudo dnf install -y fail2ban
 sudo systemctl enable --now fail2ban
+```
 
+#### Dành cho Debian 12 (UFW):
+```bash
 # UFW Firewall — SERVER C KHÔNG expose port ra Internet
 sudo apt install -y ufw
 sudo ufw default deny incoming
@@ -157,10 +201,24 @@ sudo ufw --force enable
 sudo ufw status
 ```
 
+#### Dành cho Oracle Linux (Firewalld):
+```bash
+# Firewalld — SERVER C KHÔNG expose port ra Internet
+sudo dnf install -y firewalld
+sudo systemctl enable --now firewalld
+
+# Cho phép SSH và giao diện ảo Tailscale
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+sudo firewall-cmd --reload
+sudo firewall-cmd --state
+```
+
 ---
 
 ## ⚡ BƯỚC 5: Docker
 
+#### Dành cho Debian 12:
 ```bash
 # Docker GPG + Repo
 sudo install -m 0755 -d /etc/apt/keyrings
@@ -176,10 +234,26 @@ echo "deb [arch=$(dpkg --print-architecture) \
 
 sudo apt update
 sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+```
+
+#### Dành cho Oracle Linux:
+```bash
+# Thêm Docker Repository
+sudo dnf install -y dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+# Cài đặt Docker CE + Compose
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+```
+
+#### Cấu hình User + Logs (Chung cho cả 2 OS):
+```bash
 sudo usermod -aG docker botuser
 newgrp docker
 
 # Giới hạn log Docker
+sudo mkdir -p /etc/docker
 sudo tee /etc/docker/daemon.json << 'EOF'
 {
   "log-driver": "json-file",
@@ -278,7 +352,7 @@ VPS_BUFFER_URL=http://100.x.x.1:5000
 VPS_BUFFER_SECRET=<THAY_BUFFER_SECRET_TỪ_SERVER_A>
 
 # ── Kết nối đến SERVER B (Execution Vault) ──
-SERVER_B_EXECUTE_URL=http://100.x.x.2:5000/api/execute-trade
+SERVER_B_EXECUTE_URL=http://100.x.x.2:5002/api/execute-trade
 SERVER_B_SECRET=$SERVER_B_SECRET
 
 # ── AI / LLM Configuration ──
@@ -347,7 +421,7 @@ if [ "$A_STATUS" != "200" ]; then
 fi
 
 # Check SERVER B
-B_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://100.x.x.2:5000/health)
+B_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://100.x.x.2:5002/health)
 if [ "$B_STATUS" != "200" ]; then
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
@@ -395,7 +469,7 @@ curl -s http://100.x.x.1:5000/health | python3 -m json.tool
 # → {"status": "healthy", "queue_size": 0} ✅
 
 # ── Test 3: Tailscale → SERVER B ──
-curl -s http://100.x.x.2:5000/health | python3 -m json.tool
+curl -s http://100.x.x.2:5002/health | python3 -m json.tool
 # → {"status": "healthy"} ✅
 # (Nếu SERVER B chưa setup → skip, verify sau)
 

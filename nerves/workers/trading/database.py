@@ -9,7 +9,7 @@ V8.0 REFACTOR: This module now acts as a backward-compatible facade.
 - All public symbols are re-exported so existing `import database` still works.
 """
 import aiosqlite
-import json
+import sqlite3
 import logging
 from typing import Optional, Dict, Any
 
@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS signals (
     source_ip   TEXT,
     payload     TEXT,
     mode        TEXT,
-    processed   INTEGER NOT NULL DEFAULT 0
+    processed   INTEGER NOT NULL DEFAULT 0,
+    vbs_queue_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS trades (
 
 CREATE INDEX IF NOT EXISTS idx_signals_symbol  ON signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_vbs_queue_id ON signals(vbs_queue_id);
 CREATE INDEX IF NOT EXISTS idx_trades_symbol   ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_signal   ON trades(signal_id);
 
@@ -192,6 +194,12 @@ async def init_db():
         except Exception:
             pass
 
+        try:
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_vbs_queue_id ON signals(vbs_queue_id)")
+            await db.commit()
+        except Exception:
+            pass
+
     log.info(f"Database initialized: {config.DB_PATH}")
 
 
@@ -230,8 +238,6 @@ from data.query_service import (  # noqa: E402, F401
 # ═══════════════════════════════════════════════════════════════
 # AUTH HELPERS (synchronous — used by auth routes)
 # ═══════════════════════════════════════════════════════════════
-
-import sqlite3
 
 
 def _sync_conn():

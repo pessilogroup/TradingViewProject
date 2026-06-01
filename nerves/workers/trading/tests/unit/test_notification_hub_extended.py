@@ -195,19 +195,22 @@ async def test_human_gate_fallback_when_bot_not_running():
 @pytest.mark.asyncio
 async def test_low_confidence_auto_rejects():
     """Confidence < 5 → notification sent but NO TradeApproved emitted."""
-    from hub.notification_hub import process_analysis_complete, set_bus, PENDING_TRADES
+    from hub.notification_hub import process_analysis_complete, set_bus, PENDING_TRADES, notify_signal_rejected
     PENDING_TRADES.clear()
 
     test_bus = EventBus()
     set_bus(test_bus)
     approved_events = []
 
+    test_bus.on(SignalRejected)(notify_signal_rejected)
+
     @test_bus.on(TradeApproved)
     async def on_approved(event):
         approved_events.append(event)
 
     try:
-        with patch("hub.notification_hub.notifier") as mock_notifier:
+        with patch("hub.notification_hub.notifier") as mock_notifier, \
+             patch("hub.notification_hub._get_vbs_metadata", AsyncMock(return_value={})):
             mock_notifier.notify_all = AsyncMock()
 
             await process_analysis_complete(_make_analysis_event(confidence=3, signal_id=400))
@@ -225,19 +228,22 @@ async def test_low_confidence_auto_rejects():
 @pytest.mark.asyncio
 async def test_zero_confidence_auto_rejects():
     """Confidence = 0 (edge case) should also auto-reject."""
-    from hub.notification_hub import process_analysis_complete, set_bus, PENDING_TRADES
+    from hub.notification_hub import process_analysis_complete, set_bus, PENDING_TRADES, notify_signal_rejected
     PENDING_TRADES.clear()
 
     test_bus = EventBus()
     set_bus(test_bus)
     approved_events = []
 
+    test_bus.on(SignalRejected)(notify_signal_rejected)
+
     @test_bus.on(TradeApproved)
     async def on_approved(event):
         approved_events.append(event)
 
     try:
-        with patch("hub.notification_hub.notifier") as mock_notifier:
+        with patch("hub.notification_hub.notifier") as mock_notifier, \
+             patch("hub.notification_hub._get_vbs_metadata", AsyncMock(return_value={})):
             mock_notifier.notify_all = AsyncMock()
             await process_analysis_complete(_make_analysis_event(confidence=0, signal_id=401))
             assert len(approved_events) == 0
