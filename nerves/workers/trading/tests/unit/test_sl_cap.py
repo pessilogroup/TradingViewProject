@@ -131,7 +131,8 @@ async def test_sl_cap_enforced_buy():
             f"BUY SL should be clamped to {expected_sl:.4f}, got {kwargs['sl_price']}"
         )
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 
 # ── SELL SL Cap Test ──────────────────────────────────────────────────────────
@@ -184,7 +185,8 @@ async def test_sl_cap_enforced_sell():
             f"SELL SL should be clamped to {expected_sl:.4f}, got {kwargs['sl_price']}"
         )
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
 
 
 # ── SL Within Cap — Unchanged ─────────────────────────────────────────────────
@@ -236,4 +238,5 @@ async def test_sl_within_cap_unchanged():
             f"SL within cap should be 95.0 (unchanged), got {kwargs['sl_price']}"
         )
 
-    set_bus(None)
+    from core.event_bus import bus as default_bus
+    set_bus(default_bus)
