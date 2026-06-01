@@ -1,0 +1,75 @@
+// (c) TradingViewProject
+// Indicator V1.005 — phiên bản tách riêng (không trade)
+// Hiển thị: 3 MA + tô nền vùng stack + markers + table.
+// Logic dùng chung với strategy V1.005 qua thiết kế giống nhau.
+// (Khi strategy_mtt_lib publish, sẽ import: import TradingViewProject/strategy_mtt_lib/1 as mtt)
+//
+//@version=5
+indicator("indicator_MTT_v1.005", shorttitle="MTT v1.005", overlay=true)
+
+// ----- INPUTS -----
+grp_ma = "MA Settings"
+ma_type   = input.string("EMA", "MA Type", options=["SMA","EMA","WMA","HMA","DEMA","TEMA"], group=grp_ma)
+fast_len  = input.int(20,  "Fast",   minval=5,  group=grp_ma)
+med_len   = input.int(50,  "Medium", minval=10, group=grp_ma)
+slow_len  = input.int(100, "Slow",   minval=20, group=grp_ma)
+
+grp_ui = "Display"
+show_fill = input.bool(true, "Tô nền vùng stack", group=grp_ui)
+fill_transp = input.int(80, "Độ trong suốt", minval=0, maxval=100, group=grp_ui)
+show_markers = input.bool(true, "Markers L/S/x", group=grp_ui)
+show_table   = input.bool(true, "Bảng trạng thái", group=grp_ui)
+
+// ----- MA helper -----
+ma(t, l) =>
+    switch t
+        "SMA"  => ta.sma(close, l)
+        "EMA"  => ta.ema(close, l)
+        "WMA"  => ta.wma(close, l)
+        "HMA"  => ta.hma(close, l)
+        "DEMA" => 2 * ta.ema(close, l) - ta.ema(ta.ema(close, l), l)
+        "TEMA" => 3 * (ta.ema(close, l) - ta.ema(ta.ema(close, l), l)) + ta.ema(ta.ema(ta.ema(close, l), l), l)
+        =>        ta.sma(close, l)
+
+mf = ma(ma_type, fast_len)
+mm = ma(ma_type, med_len)
+ms = ma(ma_type, slow_len)
+
+// ----- SIGNALS -----
+bull = mf > mm and mm > ms
+bear = mf < mm and mm < ms
+bull_start = bull and not bull[1]
+bull_end   = not bull and bull[1]
+bear_start = bear and not bear[1]
+bear_end   = not bear and bear[1]
+// Break-out long: bear ends → market flip
+breakout_long = bear_end
+
+// ----- PLOTS -----
+p_fast = plot(mf, color=color.blue,   title="Fast")
+p_med  = plot(mm, color=color.orange, title="Medium")
+p_slow = plot(ms, color=color.red,    title="Slow", linewidth=2)
+fill_color = show_fill and bull ? color.new(color.green, fill_transp) : show_fill and bear ? color.new(color.red, fill_transp) : na
+fill(p_fast, p_slow, color=fill_color, title="Stack Zone")
+
+// ----- MARKERS -----
+plotshape(show_markers and bull_start,    title="Long Entry",     style=shape.triangleup,   location=location.belowbar, color=color.new(color.green,0),  size=size.tiny, text="L")
+plotshape(show_markers and bull_end,      title="Long Exit",      style=shape.xcross,       location=location.abovebar, color=color.new(color.green,30), size=size.tiny)
+plotshape(show_markers and bear_start,    title="Short Entry",    style=shape.triangledown, location=location.abovebar, color=color.new(color.red,0),    size=size.tiny, text="S")
+plotshape(show_markers and bear_end,      title="Short Exit",     style=shape.xcross,       location=location.belowbar, color=color.new(color.red,30),   size=size.tiny)
+plotshape(show_markers and breakout_long, title="Breakout Long",  style=shape.diamond,      location=location.belowbar, color=color.new(color.aqua,0),   size=size.tiny, text="BO")
+
+// ----- TABLE -----
+var table info = table.new(position.top_right, 2, 4, border_width=1)
+if show_table and barstate.islast
+    state = bull ? "BULL STACK" : bear ? "BEAR STACK" : "NEUTRAL"
+    state_color = bull ? color.green : bear ? color.red : color.gray
+    table.cell(info, 0, 0, "Stack",     bgcolor=color.new(state_color, 30), text_color=color.white)
+    table.cell(info, 1, 0, state,       bgcolor=color.new(state_color, 30), text_color=color.white)
+    table.cell(info, 0, 1, "MA Type")
+    table.cell(info, 1, 1, ma_type)
+    table.cell(info, 0, 2, "Periods")
+    table.cell(info, 1, 2, str.tostring(fast_len) + "/" + str.tostring(med_len) + "/" + str.tostring(slow_len))
+    table.cell(info, 0, 3, "Last signal")
+    last_sig = bull_start ? "Long Entry" : bull_end ? "Long Exit" : bear_start ? "Short Entry" : bear_end ? "BREAKOUT" : "—"
+    table.cell(info, 1, 3, last_sig)

@@ -1,0 +1,116 @@
+//@version=5
+// =============================================================================
+//  Multi-Indicator Strategy V1.3C — MTF Daily TT gate + 1H execution
+//  Approach: Apply Minervini Trend Template on DAILY timeframe (proper scope),
+//  then execute v10-style entry/exit on 1H. The TT computed on 1H was useless
+//  because SMA200 on 1H = 8 days, low52/high52 = 10 days — not "trend structure".
+//  By computing TT on Daily via request.security, we restore the macro filter.
+// =============================================================================
+
+strategy(
+     title       = "Multi-Indicator Strategy V1.3C (MTF Daily TT)",
+     shorttitle  = "MIS v1.3C",
+     overlay     = true,
+     initial_capital    = 1000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 2,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.05,
+     slippage           = 2,
+     pyramiding         = 0,
+     process_orders_on_close = true
+ )
+
+// ─── INPUTS ───────────────────────────────────────────────────────────────────
+allow_long  = input.bool(true,  "Allow Long")
+allow_short = input.bool(false, "Allow Short (Minervini = long-only)")
+
+use_tt_d = input.bool(true, "Require Daily Trend Template")
+disable_rs = input.bool(true, "Disable RS (chart = benchmark)")
+
+ema_fast = input.int(20,  "EMA Fast (1H)")
+ema_mid  = input.int(50,  "EMA Mid (1H)")
+ema_slow = input.int(200, "EMA Slow (1H)")
+rsi_len  = input.int(14,  "RSI Length")
+rsi_ob   = input.int(70,  "RSI OB")
+rsi_os   = input.int(30,  "RSI OS")
+atr_len  = input.int(14,  "ATR Length")
+atr_sl_mul = input.float(2.0, "ATR SL Mul", step=0.1)
+atr_tp_mul = input.float(3.0, "ATR TP Mul", step=0.1)
+vol_ma_len = input.int(20, "Volume MA Length")
+vol_mult   = input.float(1.5, "Volume Multiplier", step=0.1)
+
+// ─── DAILY SERIES (request.security, no lookahead) ────────────────────────────
+sma50_d  = request.security(syminfo.tickerid, "D", ta.sma(close, 50))
+sma150_d = request.security(syminfo.tickerid, "D", ta.sma(close, 150))
+sma200_d = request.security(syminfo.tickerid, "D", ta.sma(close, 200))
+sma200_d_20ago = request.security(syminfo.tickerid, "D", ta.sma(close, 200)[20])
+close_d  = request.security(syminfo.tickerid, "D", close)
+high52_d = request.security(syminfo.tickerid, "D", ta.highest(high, 252))
+low52_d  = request.security(syminfo.tickerid, "D", ta.lowest(low, 252))
+
+// ─── DAILY TT-8 (proper Minervini timeframe) ──────────────────────────────────
+tt1 = close_d > sma150_d and close_d > sma200_d
+tt2 = sma150_d > sma200_d
+tt3 = sma200_d > sma200_d_20ago
+tt4 = sma50_d > sma150_d and sma50_d > sma200_d
+tt5 = close_d > sma50_d
+tt6 = close_d >= low52_d * 1.30
+tt7 = close_d >= high52_d * 0.75
+tt8 = disable_rs ? true : true  // RS disabled (BTC vs BTC); kept as toggle stub
+tt_ok_d = tt1 and tt2 and tt3 and tt4 and tt5 and tt6 and tt7 and tt8
+
+// ─── 1H INDICATORS (v10 baseline logic) ───────────────────────────────────────
+ema20  = ta.ema(close, ema_fast)
+ema50  = ta.ema(close, ema_mid)
+ema200 = ta.ema(close, ema_slow)
+rsi    = ta.rsi(close, rsi_len)
+[macd_line, signal_line, _] = ta.macd(close, 12, 26, 9)
+mcu = ta.crossover(macd_line, signal_line)
+mcd = ta.crossunder(macd_line, signal_line)
+atr    = ta.atr(atr_len)
+vol_ma = ta.sma(volume, vol_ma_len)
+heavy_vol = volume > vol_ma * vol_mult
+
+trend_up   = ema20 > ema50 and ema50 > ema200
+trend_down = ema20 < ema50 and ema50 < ema200
+rsi_long   = rsi > 50 and rsi < rsi_ob
+rsi_short  = rsi < 50 and rsi > rsi_os
+
+// ─── ENTRY (1H trigger gated by Daily TT) ─────────────────────────────────────
+long_filter  = trend_up   and rsi_long  and mcu and heavy_vol
+short_filter = trend_down and rsi_short and mcd and heavy_vol
+
+long_filter  := long_filter  and (not use_tt_d or tt_ok_d)
+short_filter := short_filter and (not use_tt_d or not tt_ok_d)  // shorts only when Daily TT fails
+
+long_entry  = allow_long  and long_filter  and strategy.position_size == 0
+short_entry = allow_short and short_filter and strategy.position_size == 0
+
+// ─── EXITS ────────────────────────────────────────────────────────────────────
+var float sp = na
+var float tp = na
+if long_entry
+    sp := close - atr * atr_sl_mul
+    tp := close + atr * atr_tp_mul
+if short_entry
+    sp := close + atr * atr_sl_mul
+    tp := close - atr * atr_tp_mul
+
+if long_entry
+    strategy.entry("Long", strategy.long)
+if short_entry
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("Long Exit", "Long", stop=sp, limit=tp)
+if strategy.position_size < 0
+    strategy.exit("Short Exit", "Short", stop=sp, limit=tp)
+
+// ─── VISUALS ──────────────────────────────────────────────────────────────────
+plot(ema20,  "EMA 20",  color=color.new(color.blue,   0))
+plot(ema50,  "EMA 50",  color=color.new(color.orange, 0))
+plot(ema200, "EMA 200", color=color.new(color.red,    0), linewidth=2)
+bgcolor(tt_ok_d ? color.new(color.green, 90) : color.new(color.red, 95), title="Daily TT pass")
+plotshape(long_entry,  "Long",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(short_entry, "Short", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.small)

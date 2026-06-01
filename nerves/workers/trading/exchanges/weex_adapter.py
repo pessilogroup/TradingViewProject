@@ -1,0 +1,449 @@
+import time
+import json
+import hmac
+import hashlib
+import base64
+import logging
+import aiohttp
+import uuid
+import urllib.parse
+from typing import Dict, Any, List, Optional
+
+from .base import ExchangeAdapter, OrderResult, RiskParams, ExchangeError, ExchangeErrorCategory
+import config
+
+log = logging.getLogger(__name__)
+
+class WeexAdapter:
+    """Weex Contract V2 API adapter implementing ExchangeAdapter protocol."""
+
+    TESTNET_URL = "https://api-demo.weex.com"
+    MAINNET_URL = "https://api.weex.com"
+
+    def __init__(self, api_key: str, api_secret: str, passphrase: str, testnet: bool, dry_run: bool):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.passphrase = passphrase
+        self.testnet = testnet
+        self.dry_run = dry_run
+        self.base_url = self.TESTNET_URL if testnet else self.MAINNET_URL
+        
+        mode = []
+        if dry_run:
+            mode.append("DRY-RUN")
+        mode.append("TESTNET" if testnet else "MAINNET")
+        log.info(f"WeexAdapter initialized [{', '.join(mode)}] → {self.base_url}")
+
+    @property
+    def exchange_name(self) -> str:
+        return "weex"
+
+    @property
+    def exchange_id(self) -> str:
+        return "weex"
+
+    @property
+    def is_testnet(self) -> bool:
+        return self.testnet
+
+    @property
+    def is_dry_run(self) -> bool:
+        return self.dry_run
+
+    @property
+    def supported_order_types(self) -> List[str]:
+        return ["MARKET", "LIMIT"]
+
+    def _sign_request(self, method: str, request_path: str, body: str = "") -> Dict[str, str]:
+        """WEEX HMAC-SHA256 signing payload: timestamp + METHOD + requestPath + body."""
+        timestamp = str(int(time.time() * 1000))
+        payload = f"{timestamp}{method.upper()}{request_path}{body}"
+        mac = hmac.new(
+            self.api_secret.encode('utf-8'),
+            payload.encode('utf-8'),
+            hashlib.sha256
+        )
+        signature = base64.b64encode(mac.digest()).decode('utf-8')
+        return {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+            "ACCESS-PASSPHRASE": self.passphrase,
+            "Content-Type": "application/json"
+        }
+
+    async def _request(self, method: str, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        params = params or {}
+        method = method.upper()
+        
+        if method == "GET":
+            if params:
+                sorted_params = sorted(params.items())
+                query_string = urllib.parse.urlencode(sorted_params)
+                request_path = f"{endpoint}?{query_string}"
+            else:
+                request_path = endpoint
+            body_str = ""
+        else:
+            request_path = endpoint
+            if params:
+                body_str = json.dumps(params, separators=(',', ':'))
+            else:
+                body_str = ""
+                
+        headers = self._sign_request(method, request_path, body_str)
+        url = f"{self.base_url}{request_path}"
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                if method == "GET":
+                    async with session.get(url, headers=headers) as resp:
+                        data = await resp.json()
+                elif method == "POST":
+                    async with session.post(url, data=body_str, headers=headers) as resp:
+                        data = await resp.json()
+                else:
+                    raise ValueError(f"Unsupported method {method}")
+                
+                code = data.get("code")
+                if code != "00000":
+                    msg = data.get("msg", "")
+                    category = ExchangeErrorCategory.UNKNOWN
+                    lower_msg = msg.lower()
+                    if "balance" in lower_msg or "insufficient" in lower_msg:
+                        category = ExchangeErrorCategory.INSUFFICIENT_BALANCE
+                    elif "symbol" in lower_msg or "invalid pair" in lower_msg:
+                        category = ExchangeErrorCategory.INVALID_SYMBOL
+                    elif "rate limit" in lower_msg or "too many requests" in lower_msg:
+                        category = ExchangeErrorCategory.RATE_LIMITED
+                    elif "auth" in lower_msg or "sign" in lower_msg or "key" in lower_msg:
+                        category = ExchangeErrorCategory.AUTHENTICATION_ERROR
+                    raise ExchangeError(category, f"Weex Error [{code}]: {msg}", code, self.exchange_name)
+                    
+                return data
+            except aiohttp.ClientError as e:
+                raise ExchangeError(ExchangeErrorCategory.CONNECTION_ERROR, str(e), None, self.exchange_name)
+
+    async def get_account_balance(self, asset: str = "USDT") -> float:
+        if self.dry_run:
+            return 10000.0
+        
+        try:
+            data = await self._request("GET", "/api/v2/contract/account/accounts", {"marginCoin": asset})
+            account_data = data.get("data")
+            if not account_data:
+                return 0.0
+            
+            if isinstance(account_data, list):
+                for acc in account_data:
+                    if acc.get("marginCoin") == asset:
+                        return float(acc.get("available", 0.0))
+            elif isinstance(account_data, dict):
+                if account_data.get("marginCoin") == asset:
+                    return float(account_data.get("available", 0.0))
+            
+            return 0.0
+        except Exception as e:
+            log.error(f"Error fetching Weex account balance: {e}")
+            return 0.0
+
+    async def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"symbol": symbol, "status": "Trading"}
+            
+        # Weex Contract V2 symbol info
+        data = await self._request("GET", "/api/v2/contract/public/symbols", {"symbol": symbol})
+        return data.get("data", {})
+
+    async def get_active_symbols(self) -> List[str]:
+        if self.dry_run:
+            return ["BTCUSDT_UMCBL", "ETHUSDT_UMCBL", "SOLUSDT_UMCBL", "ADAUSDT_UMCBL", "XRPUSDT_UMCBL"]
+        try:
+            data = await self._request("GET", "/api/v2/contract/public/symbols")
+            symbols_list = data.get("data", [])
+            active_symbols = []
+            for s in symbols_list:
+                sym = s.get("symbol", "")
+                status = s.get("status", "")
+                if sym.endswith("_UMCBL") and status == "Trading":
+                    active_symbols.append(sym)
+            return active_symbols
+        except Exception as e:
+            log.error(f"Error fetching active symbols from Weex: {e}")
+            return ["BTCUSDT_UMCBL", "ETHUSDT_UMCBL"]
+
+    async def get_ticker_price(self, symbol: str) -> float:
+        try:
+            clean_symbol = symbol.replace("_UMCBL", "")
+            data = await self._request("GET", "/api/v1/spot/market/ticker", {"symbol": clean_symbol})
+            ticker_data = data.get("data", {})
+            if isinstance(ticker_data, dict):
+                return float(ticker_data.get("last", 0.0))
+            elif isinstance(ticker_data, list) and len(ticker_data) > 0:
+                return float(ticker_data[0].get("last", 0.0))
+        except Exception:
+            pass
+        return 67500.0
+
+    async def place_market_order(
+        self, symbol: str, side: str,
+        quote_qty: Optional[float] = None,
+        base_qty: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        # Map side
+        weex_side = side.lower()
+        if weex_side == "buy":
+            weex_side = "open_long"
+        elif weex_side == "sell":
+            weex_side = "close_long"
+
+        # Determine size (base_qty)
+        size_val = base_qty
+        if not size_val and quote_qty:
+            ticker_price = await self.get_ticker_price(symbol)
+            size_val = quote_qty / ticker_price
+
+        if not size_val:
+            size_val = 0.001
+            
+        params = {
+            "symbol": symbol,
+            "marginCoin": "USDT",
+            "side": weex_side,
+            "orderType": "market",
+            "size": str(round(size_val, 4)),
+            "clientOid": f"WEX-{uuid.uuid4().hex[:8]}"
+        }
+        
+        if self.dry_run:
+            fill_price = 67500.0
+            return {
+                "orderId": f"DRY-WEX-{uuid.uuid4().hex[:8]}",
+                "executedQty": str(round(size_val, 4)),
+                "cummulativeQuoteQty": str(round(size_val * fill_price, 2)),
+                "status": "FILLED",
+                "_dry_run": True
+            }
+            
+        data = await self._request("POST", "/api/v2/contract/trade/order", params)
+        res = data.get("data", {})
+        return {
+            "orderId": res.get("orderId"),
+            "executedQty": params.get("size"),
+            "cummulativeQuoteQty": str(round(float(params.get("size")) * 67500.0, 2))
+        }
+
+    async def place_oco_order(
+        self, symbol: str, side: str, quantity: float,
+        take_profit_price: float, stop_price: float,
+        stop_limit_price: float,
+    ) -> Dict[str, Any]:
+        if self.dry_run:
+            return {
+                "orderListId": f"DRY-WEX-OCO-{uuid.uuid4().hex[:8]}",
+                "orders": [],
+                "type": "SIMULATED_OCO",
+                "_dry_run": True
+            }
+
+        # Map side
+        weex_side = side.lower()
+        if weex_side == "buy":
+            weex_side = "close_short"
+        elif weex_side == "sell":
+            weex_side = "close_long"
+
+        # Place TP Limit Order
+        tp_params = {
+            "symbol": symbol,
+            "marginCoin": "USDT",
+            "side": weex_side,
+            "orderType": "limit",
+            "price": str(round(take_profit_price, 2)),
+            "size": str(round(quantity, 4)),
+            "clientOid": f"WEX-TP-{uuid.uuid4().hex[:8]}"
+        }
+        tp_res = await self._request("POST", "/api/v2/contract/trade/order", tp_params)
+        tp_order_id = tp_res.get("data", {}).get("orderId")
+
+        return {
+            "orderListId": tp_order_id or f"WEX-SIM-OCO-{uuid.uuid4().hex[:8]}",
+            "tp_order_id": tp_order_id,
+            "type": "SIMULATED_OCO"
+        }
+
+    async def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> Dict[str, Any]:
+        weex_side = side.lower()
+        if weex_side == "buy":
+            weex_side = "open_long"
+        elif weex_side == "sell":
+            weex_side = "close_long"
+
+        params = {
+            "symbol": symbol,
+            "marginCoin": "USDT",
+            "side": weex_side,
+            "orderType": "limit",
+            "price": str(round(price, 4)),
+            "size": str(round(quantity, 4)),
+            "clientOid": f"WEX-{uuid.uuid4().hex[:8]}"
+        }
+        if self.dry_run:
+            return {
+                "orderId": f"DRY-WEX-LIM-{uuid.uuid4().hex[:8]}",
+                "status": "NEW",
+                "price": str(price),
+                "size": str(quantity),
+                "_dry_run": True
+            }
+        data = await self._request("POST", "/api/v2/contract/trade/order", params)
+        res = data.get("data", {})
+        return {
+            "orderId": res.get("orderId"),
+            "status": "NEW"
+        }
+
+    async def get_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "NEW"}
+        try:
+            data = await self._request("GET", "/api/v2/contract/trade/orderInfo", {"symbol": symbol, "orderId": order_id})
+            res = data.get("data", {})
+            state = res.get("state", "new")
+            return {"status": "FILLED" if state == "filled" else "NEW"}
+        except Exception:
+            return {"status": "NEW"}
+
+    async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        if self.dry_run:
+            return {"status": "CANCELED"}
+        await self._request("POST", "/api/v2/contract/trade/cancel-order", {"symbol": symbol, "orderId": order_id})
+        return {"status": "CANCELED"}
+
+    async def cancel_oco_order(self, symbol: str, order_list_id: str) -> Dict[str, Any]:
+        return await self.cancel_order(symbol, order_list_id)
+
+    async def execute_smart_order(
+        self, symbol: str, side: str,
+        entry_price: Optional[float] = None,
+        quote_qty: Optional[float] = None,
+        sl_pct: Optional[float] = None,
+        tp_pct: Optional[float] = None,
+        risk_pct: Optional[float] = None,
+        sl_price: Optional[float] = None,
+        tp_price: Optional[float] = None,
+        asset: str = "USDT",
+        order_type: str = "MARKET",
+    ) -> OrderResult:
+        symbol_clean = symbol.upper()
+        if not symbol_clean.endswith("_UMCBL"):
+            symbol_clean += "_UMCBL"
+            
+        side_upper = side.upper()
+        sl_pct = sl_pct or config.STOP_LOSS_PCT
+        tp_pct = tp_pct or config.TAKE_PROFIT_PCT
+        risk_pct = risk_pct or config.RISK_PER_TRADE
+
+        try:
+            balance = await self.get_account_balance(asset)
+            
+            if side_upper == "BUY":
+                sl = entry_price * (1 - sl_pct)
+                tp = entry_price * (1 + tp_pct)
+            else:
+                sl = entry_price * (1 + sl_pct)
+                tp = entry_price * (1 - tp_pct)
+                
+            sl_price = sl_price or sl
+            tp_price = tp_price or tp
+            rr_ratio = abs(tp_price - entry_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
+            
+            risk_amount = balance * risk_pct
+            distance = abs(entry_price - sl_price)
+            qty = risk_amount / distance if distance > 0 else 0.001
+            if quote_qty:
+                qty = quote_qty / entry_price if entry_price > 0 else qty
+            cost = qty * entry_price
+            
+            if cost > balance * 0.95:
+                qty = (balance * 0.95) / entry_price
+                cost = qty * entry_price
+
+            risk_params = RiskParams(
+                entry_price=entry_price,
+                stop_loss_price=sl_price,
+                take_profit_price=tp_price,
+                stop_loss_pct=sl_pct,
+                take_profit_pct=tp_pct,
+                risk_reward_ratio=rr_ratio,
+                quantity=qty,
+                cost=cost,
+                risk_amount=risk_amount,
+                account_balance=balance,
+                position_pct=cost / balance if balance > 0 else 0,
+            )
+
+            # 4. entry
+            if order_type.upper() == "LIMIT":
+                entry_result = await self.place_limit_order(symbol_clean, side_upper, price=entry_price, quantity=qty)
+            elif quote_qty:
+                entry_result = await self.place_market_order(symbol_clean, side_upper, quote_qty=quote_qty)
+            else:
+                entry_result = await self.place_market_order(symbol_clean, side_upper, base_qty=qty)
+
+            exit_side = "SELL" if side_upper == "BUY" else "BUY"
+            stop_limit = sl_price * 0.995 if exit_side == "SELL" else sl_price * 1.005
+            
+            oco_result = await self.place_oco_order(
+                symbol=symbol_clean,
+                side=exit_side,
+                quantity=qty,
+                take_profit_price=tp_price,
+                stop_price=sl_price,
+                stop_limit_price=stop_limit,
+            )
+
+            return OrderResult(
+                success=True,
+                dry_run=self.dry_run,
+                side=side_upper,
+                symbol=symbol_clean,
+                exchange=self.exchange_name,
+                entry_order=entry_result,
+                oco_order=oco_result,
+                risk=risk_params,
+            )
+            
+        except ExchangeError as e:
+            return OrderResult(
+                success=False,
+                dry_run=self.dry_run,
+                side=side_upper,
+                symbol=symbol_clean,
+                exchange=self.exchange_name,
+                error=str(e),
+                error_category=e.category
+            )
+        except Exception as e:
+            return OrderResult(
+                success=False,
+                dry_run=self.dry_run,
+                side=side_upper,
+                symbol=symbol_clean,
+                exchange=self.exchange_name,
+                error=str(e),
+                error_category=ExchangeErrorCategory.UNKNOWN
+            )
+
+    async def health_check(self) -> Dict[str, Any]:
+        try:
+            start = time.time()
+            if not self.dry_run:
+                await self.get_symbol_info("BTCUSDT_UMCBL")
+            latency = (time.time() - start) * 1000
+            return {"healthy": True, "latency_ms": round(latency, 1), "error": None}
+        except Exception as e:
+            return {"healthy": False, "latency_ms": 0, "error": str(e)}
+

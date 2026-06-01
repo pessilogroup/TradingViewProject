@@ -1,15 +1,18 @@
 # Environment & secrets
-server/.env
+nerves/workers/trading/.env
 *.env
-!.env.production
+# SEC-004 fix: .env.production must NOT be tracked — use .env.production.template instead
+# !.env.production  ← REMOVED: was re-including production env file in git
 !.env.example
-!server/.env.example
+!nerves/workers/trading/.env.example
 
 # Database
-server/trades.db
+nerves/workers/trading/trades.db
+nerves/workers/trading/trading.db
+trading.db
 
 # Python
-server/__pycache__/
+nerves/workers/trading/__pycache__/
 __pycache__/
 *.pyc
 
@@ -17,13 +20,52 @@ __pycache__/
 node_modules/
 
 # P5: ChromaDB vector database
-server/chroma_db/
+nerves/workers/trading/chroma_db/
 
 # P6: Runtime data (watchlist, screenshots, logs)
-server/watchlist.json
-server/screenshots/
-server/trades.log
+nerves/workers/trading/watchlist.json
+nerves/workers/trading/screenshots/
+nerves/workers/trading/trades.log
+nerves/workers/trading/.venv
 
 # Docker runtime
 .env
-
+.claude/worktrees/
+
+# Root-level runtime data (should never be committed)
+trades.db
+trades.log
+trace_out.txt
+test_out.txt
+test_script.py
+
+# Test temp / issue body files
+issue_*.md
+refactor_styles.py
+
+# Kiro IDE
+.kiro/
+
+# Antigravity CLI local state
+.antigravitycli/
+
+# SQLite temp files
+*.db-shm
+*.db-wal
+# Local Agent Workspaces & Logs
+.agents/
+memory/
+nerves/workers/trading/test_runs.log
+
+# Directory junctions/symlinks
+server/
+id_ed25519.pub
+scratch/
+project.tar.gz
+
+# Runtime artifacts (PID files, runtime DBs, logs)
+*.pid
+.server.pid
+signal_queue.db
+nerves/workers/trading/logs/trading.log
+logs/simulation_*.log

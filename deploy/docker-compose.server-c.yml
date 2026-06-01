@@ -1,0 +1,104 @@
+# ════════════════════════════════════════════════════════════════
+# Server C (AI Core) — ChromaDB + Analyzer Worker
+# 3-Server Pipeline: Phase 6.5
+# ════════════════════════════════════════════════════════════════
+# Host: Linux 8 CPU / 16GB — ChromaDB Server + Analyzer Worker
+# Usage:
+#   cd deploy && docker compose -f docker-compose.server-c.yml up -d
+# ════════════════════════════════════════════════════════════════
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: tradingbot-chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - analyzer
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  analyzer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: tradingbot-analyzer
+    command: ["python", "workers/vps_analyzer.py"]
+    restart: unless-stopped
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    environment:
+      - ANALYZER_MODE=true
+      - VPS_BUFFER_URL=http://${SERVER_A_IP}:5000
+      - VPS_BUFFER_SECRET=${VPS_BUFFER_SECRET}
+      - VPS_CONSUMER_ID=server-c-analyzer
+      - CHROMA_REMOTE=true
+      - CHROMA_SERVER_HOST=chromadb
+      - CHROMA_SERVER_PORT=8000
+      - LOCAL_EXECUTE_URL=${LOCAL_EXECUTE_URL}
+      - LOCAL_EXECUTE_SECRET=${LOCAL_EXECUTE_SECRET}
+      - SERVER_B_EXECUTE_URL=http://${SERVER_B_IP}:5002
+      - SERVER_B_SECRET=${SERVER_B_SECRET}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - AI_PROVIDER=${AI_PROVIDER:-anthropic}
+      - RISK_PER_TRADE=${RISK_PER_TRADE:-0.02}
+      - STOP_LOSS_PCT=${STOP_LOSS_PCT:-0.08}
+      # V2 Hardening — Logging & Monitoring
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/app/logs/analyzer.log
+      - LOG_MAX_SIZE_MB=${LOG_MAX_SIZE_MB:-10}
+      - LOG_BACKUP_COUNT=${LOG_BACKUP_COUNT:-5}
+      - SERVER_A_HEALTH_URL=http://${SERVER_A_IP}:5000/health
+      - SERVER_B_HEALTH_URL=http://${SERVER_B_IP}:5002/health
+      - NTP_DRIFT_THRESHOLD_MS=${NTP_DRIFT_THRESHOLD_MS:-500}
+      - DISK_WARNING_THRESHOLD_PCT=${DISK_WARNING_THRESHOLD_PCT:-80}
+      - DISK_CRITICAL_THRESHOLD_PCT=${DISK_CRITICAL_THRESHOLD_PCT:-90}
+      - LIVENESS_ALERT_AFTER_FAILURES=${LIVENESS_ALERT_AFTER_FAILURES:-2}
+    networks:
+      - analyzer
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - |
+          import os, sys
+          my_pid = os.getpid()
+          def check(p):
+              try:
+                  with open(f'/proc/{p}/cmdline', 'rb') as f:
+                      return b'vps_analyzer.py' in f.read()
+              except IOError:
+                  return False
+          sys.exit(0 if any(int(p) != my_pid and check(p) for p in os.listdir('/proc') if p.isdigit()) else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  chroma_data:
+
+networks:
+  analyzer:

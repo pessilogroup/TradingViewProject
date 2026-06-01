@@ -1,45 +1,49 @@
-# Welcome to TradingView Project Team
+# Welcome to TradingView Project
 
 ## How We Use Claude
 
 Based on Dinh Viet Dan's usage over the last 30 days:
 
 Work Type Breakdown:
-  Build Feature  ████████████████░░░░  80%
-  Plan Design    ████░░░░░░░░░░░░░░░░  20%
+  Build Feature     ████████████████████  67%
+  Improve Quality   █████████░░░░░░░░░░░  33%
 
 Top Skills & Commands:
-  /autofix-pr   █████░░░░░░░░░░░░░░░  1x/month
-  /permissions  █████░░░░░░░░░░░░░░░  1x/month
-  /init         █████░░░░░░░░░░░░░░░  1x/month
-  /model        █████░░░░░░░░░░░░░░░  1x/month
+  /autofix-pr        ████████████████████  1x/month
+  /permissions       ████████████████████  1x/month
+  /init              ████████████████████  1x/month
+  /loop              ████████████████████  1x/month
+  /model             ████████████████████  1x/month
 
 Top MCP Servers:
-  ccd_session  █████░░░░░░░░░░░░░░░  1 call
+  tradingview        ████████████████████  293 calls
+  ccd_session        ░░░░░░░░░░░░░░░░░░░░  2 calls
 
 ## Your Setup Checklist
 
 ### Codebases
-- [ ] TradingViewProject — main workspace (Flask webhook server + Pine Script + MCP bridge)
-- [ ] tradingview-mcp — https://github.com/tradesdontlie/tradingview-mcp (Node MCP server bridging Claude Code to TradingView Desktop via Chrome DevTools Protocol)
+- [ ] tradingviewproject — https://github.com/dinhvietdan88-commits/tradingviewproject (main workspace: Pine Script v1/v2, docs, and the `tradingview-mcp/` bridge)
 
 ### MCP Servers to Activate
-- [ ] tradingview — local Node MCP server at `tradingview-mcp/src/server.js`. Gives Claude eyes/hands on your TradingView Desktop chart (read indicators, change symbol, write Pine Script, take screenshots). Requires TradingView Desktop running with `--remote-debugging-port=9222`. Add to `~/.claude/.mcp.json`.
-- [ ] ccd_session — internal session helper. Ask Dinh Viet Dan for setup instructions / credentials.
+- [ ] tradingview — Reads and controls a live TradingView Desktop chart (78 tools: chart state, Pine Script dev, screenshots, replay, alerts). Local Node server at `tradingview-mcp/`. Requires TradingView Desktop running with `--remote-debugging-port=9222` — use the `/tv-start` skill to launch it. Wire into `~/.claude/.mcp.json`.
+- [ ] ccd_session — Internal session helper, used lightly. Ask Dinh Viet Dan for setup details.
 
 ### Skills to Know About
-- /init — generate `CLAUDE.md` for a fresh repo so Claude has project context loaded automatically. Run this first in any new clone.
-- /permissions — review and tune which Bash commands and tools auto-approve in this project. Useful when Claude keeps prompting for the same permission.
-- /model — switch the active model (Opus/Sonnet/Haiku) per task. Heavier reasoning → Opus; quick edits → Haiku/Sonnet.
-- /autofix-pr — automatically address review comments on a pull request. Run inside the PR branch.
+- /tv-start — Launch TradingView Desktop with CDP port 9222 (skip if already running). Run this before any `tradingview` MCP work.
+- /init — Generate `CLAUDE.md` for a fresh repo so Claude loads project context automatically. Run first in any new clone.
+- /permissions — Review/tune which Bash commands and tools auto-approve. Useful when Claude keeps prompting for the same permission.
+- /model — Switch the active model per task. Heavier reasoning → Opus; quick edits → Haiku/Sonnet.
+- /loop — Run a prompt or slash command on a recurring interval (e.g. `/loop 5m /foo`). Used for polling or babysitting long jobs.
+- /autofix-pr — Automatically address review comments on a pull request. Run inside the PR branch.
 
 ## Team Tips
 
-_TODO_
+- Pine v1 is still under active development — don't treat it as archived. Both `pine/v1` and `pine/v2` are live.
+- Always run `/tv-start` before any `tradingview` MCP work so the chart is reachable on CDP port 9222.
 
 ## Get Started
 
-_TODO_
+- Read `docs/knowledge/trading_wizard/README.md` to get oriented on the Minervini SEPA knowledge base that drives a lot of the strategy work here.
 
 <!-- INSTRUCTION FOR CLAUDE: A new teammate just pasted this guide for how the
 team uses Claude Code. You're their onboarding buddy — warm, conversational,

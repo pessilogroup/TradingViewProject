@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CaptureDaemon Test Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #1a1a1a; margin-top: 0; }
+        .grid { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; }
+        button { background-color: #2962ff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #1e4bd8; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        input, select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-right: 10px; width: 120px; }
+        pre { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+        .status { display: inline-block; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+        .status.online { background-color: #d4edda; color: #155724; }
+        .status.offline { background-color: #f8d7da; color: #721c24; }
+        #imageContainer { text-align: center; margin-top: 15px; min-height: 200px; border: 1px dashed #ccc; display: flex; align-items: center; justify-content: center; background: #fafafa; border-radius: 4px; }
+        #imageContainer img { max-width: 100%; max-height: 600px; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; display: none; margin: 0 auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <h1>🚀 CaptureDaemon Dashboard</h1>
+    <p>Target URL: <code>http://127.0.0.1:9333</code> <span id="statusBadge" class="status offline">OFFLINE</span></p>
+
+    <div class="grid">
+        <!-- Control Panel -->
+        <div>
+            <div class="card">
+                <h2>Health Check</h2>
+                <button onclick="checkHealth()">Ping /health</button>
+                <div style="margin-top: 15px;">
+                    <strong>Metrics:</strong>
+                    <ul id="healthMetrics" style="font-size: 14px; line-height: 1.6;">
+                        <li>Status: -</li>
+                        <li>Uptime: -</li>
+                        <li>Captures: -</li>
+                        <li>P95 Latency: -</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Trigger Capture</h2>
+                <div style="margin-bottom: 15px;">
+                    <input type="text" id="symbolInput" value="BINANCE:BTCUSDT" placeholder="Symbol">
+                    <select id="timeframeInput">
+                        <option value="1">1m</option>
+                        <option value="5">5m</option>
+                        <option value="15">15m</option>
+                        <option value="60">1H</option>
+                        <option value="D" selected>1D</option>
+                        <option value="W">1W</option>
+                    </select>
+                </div>
+                <button id="captureBtn" onclick="triggerCapture()">📸 Capture Screenshot</button>
+                <p id="captureStats" style="font-size: 12px; color: #666; margin-top: 10px;"></p>
+            </div>
+        </div>
+
+        <!-- Result Viewer -->
+        <div class="card" style="display: flex; flex-direction: column;">
+            <h2>Result Viewer</h2>
+            <div class="loader" id="loader"></div>
+            <div id="imageContainer">
+                <span style="color: #999;">Image will appear here</span>
+            </div>
+            
+            <h3 style="margin-top: 20px; font-size: 14px;">Raw Response</h3>
+            <pre id="jsonResponse">// Response JSON</pre>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = 'http://127.0.0.1:9333';
+
+        async function checkHealth() {
+            try {
+                const res = await fetch(`${BASE_URL}/health`);
+                const data = await res.json();
+                
+                document.getElementById('statusBadge').className = 'status online';
+                document.getElementById('statusBadge').textContent = 'ONLINE';
+                
+                document.getElementById('healthMetrics').innerHTML = `
+                    <li>Status: <b>${data.status}</b></li>
+                    <li>Uptime: ${Math.round(data.metrics?.uptime_ms / 1000 || 0)}s</li>
+                    <li>Captures: <span style="color: green">${data.metrics?.successful || 0}</span> / <span style="color: red">${data.metrics?.failed || 0}</span></li>
+                    <li>P95 Latency: <b>${data.metrics?.p95_latency_ms || 0}ms</b></li>
+                    <li>Cached State: ${data.state?.symbol || 'None'} (${data.state?.timeframe || 'None'})</li>
+                `;
+                
+                document.getElementById('jsonResponse').textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                document.getElementById('statusBadge').className = 'status offline';
+                document.getElementById('statusBadge').textContent = 'OFFLINE';
+                document.getElementById('jsonResponse').textContent = `Error: ${err.message}\nMake sure Daemon is running and CORS is enabled if opening from file://`;
+            }
+        }
+
+        async function triggerCapture() {
+            const symbol = document.getElementById('symbolInput').value;
+            const timeframe = document.getElementById('timeframeInput').value;
+            const btn = document.getElementById('captureBtn');
+            const loader = document.getElementById('loader');
+            const imgContainer = document.getElementById('imageContainer');
+            
+            btn.disabled = true;
+            loader.style.display = 'block';
+            imgContainer.innerHTML = '';
+            document.getElementById('captureStats').textContent = 'Capturing...';
+            document.getElementById('jsonResponse').textContent = 'Waiting for response...';
+
+            const startTime = Date.now();
+
+            try {
+                const res = await fetch(`${BASE_URL}/capture`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, timeframe })
+                });
+                
+                const data = await res.json();
+                const latency = Date.now() - startTime;
+                
+                document.getElementById('jsonResponse').textContent = JSON.stringify(data, null, 2);
+                
+                if (data.success && data.file_path) {
+                    // Extract filename from the absolute path to fetch statically if needed, 
+                    // OR if the daemon returns the raw image, we'd render it. 
+                    // Since it returns a file path, we'll show a message.
+                    imgContainer.innerHTML = `<div style="text-align: center; padding: 20px;">
+                        <h3 style="color: green;">✅ Capture Success!</h3>
+                        <p>Saved to: <code>${data.file_path}</code></p>
+                        <p style="font-size: 12px; color: #666;">Note: Local browser cannot load absolute OS paths directly due to security restrictions.</p>
+                    </div>`;
+                    
+                    document.getElementById('captureStats').textContent = `Lat: ${latency}ms | Size: ${Math.round((data.size_bytes||0)/1024)}KB | Cached: ${data.cache_hit ? 'Yes' : 'No'}`;
+                } else {
+                    imgContainer.innerHTML = `<span style="color: red;">Capture Failed: ${data.error || 'Unknown error'}</span>`;
+                }
+            } catch (err) {
+                document.getElementById('jsonResponse').textContent = `Error: ${err.message}`;
+                imgContainer.innerHTML = `<span style="color: red;">Connection Error</span>`;
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+                checkHealth(); // Refresh metrics
+            }
+        }
+
+        // Check health on load
+        checkHealth();
+    </script>
+</body>
+</html>

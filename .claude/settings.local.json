@@ -19,7 +19,40 @@
       "PowerShell([System.Environment]::GetEnvironmentVariable\\(\"CLAUDE_CODE_GIT_BASH_PATH\", \"User\"\\))",
       "WebFetch(domain:claude.ai)",
       "Bash(git clone *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "PowerShell(Get-Process | Select-Object Name, Id | Sort-Object Name | Where-Object { $_.Name -notmatch \"^\\(svchost|System|Idle|Registry|csrss|lsass|winlogon|wininit|services|smss\\)\" } | Format-Table -AutoSize)",
+      "mcp__tradingview__chart_get_state",
+      "mcp__tradingview__data_get_strategy_results",
+      "mcp__tradingview__data_get_trades",
+      "mcp__tradingview__pine_list_scripts",
+      "mcp__tradingview__data_get_equity",
+      "mcp__tradingview__ui_open_panel",
+      "mcp__tradingview__pine_set_source",
+      "mcp__tradingview__pine_smart_compile",
+      "mcp__tradingview__pine_compile",
+      "mcp__tradingview__capture_screenshot",
+      "mcp__tradingview__ui_click",
+      "mcp__tradingview__ui_scroll",
+      "mcp__tradingview__ui_evaluate",
+      "Bash(git mv *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "mcp__tradingview__pine_new",
+      "mcp__tradingview__chart_set_type",
+      "mcp__tradingview__batch_run",
+      "mcp__tradingview__chart_set_timeframe",
+      "mcp__tradingview__indicator_set_inputs",
+      "mcp__tradingview__ui_keyboard",
+      "mcp__tradingview__ui_find_element",
+      "mcp__tradingview__ui_mouse_click",
+      "PowerShell(& \"C:/Users/Admin/TradingViewProject/server/simulate_webhook.ps1\" -Symbol \"BTCUSDT\" -Action \"buy\" -Price \"65000.00\" 2>&1)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "tradingview"
+  ]
 }

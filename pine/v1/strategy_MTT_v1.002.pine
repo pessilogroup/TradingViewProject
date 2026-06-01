@@ -1,0 +1,90 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TradingViewProject
+
+//@version=5
+strategy("strategy_MTT_v1.002 (Paper Trading)",
+     shorttitle="strategy_MTT v1.002",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100,
+     commission_type=strategy.commission.percent,
+     commission_value=0.1,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+// ================================================================================================= //
+// INPUTS
+// ================================================================================================= //
+grp_ma = "Moving Averages"
+show_mas = input.bool(true, title="Hiển thị các đường MA", group=grp_ma)
+show_ma_fill = input.bool(true, title="Tô nền vùng SMA (50/150/200)", group=grp_ma)
+fill_transp = input.int(80, title="Độ trong suốt nền SMA", minval=0, maxval=100, group=grp_ma)
+
+grp_strat = "Strategy"
+allow_long  = input.bool(true,  title="Cho phép LONG (vùng xanh)",  group=grp_strat)
+allow_short = input.bool(true,  title="Cho phép SHORT (vùng đỏ)",   group=grp_strat)
+
+grp_date = "Backtest Range"
+use_range  = input.bool(false, title="Giới hạn khoảng thời gian backtest", group=grp_date)
+start_date = input.time(timestamp("2020-01-01 00:00"), title="Bắt đầu", group=grp_date)
+end_date   = input.time(timestamp("2030-01-01 00:00"), title="Kết thúc", group=grp_date)
+in_range   = not use_range or (time >= start_date and time <= end_date)
+
+// ================================================================================================= //
+// CALCULATIONS
+// ================================================================================================= //
+sma50  = ta.sma(close, 50)
+sma150 = ta.sma(close, 150)
+sma200 = ta.sma(close, 200)
+
+// Stack tăng (uptrend stack): SMA50 > SMA150 > SMA200  → nền XANH → LONG
+// Stack giảm (downtrend stack): SMA50 < SMA150 < SMA200 → nền ĐỎ  → SHORT
+bull_stack = sma50 > sma150 and sma150 > sma200
+bear_stack = sma50 < sma150 and sma150 < sma200
+
+// Phát hiện chuyển trạng thái (cạnh)
+bull_start = bull_stack and not bull_stack[1]   // bắt đầu vùng xanh
+bull_end   = not bull_stack and bull_stack[1]   // kết thúc vùng xanh
+bear_start = bear_stack and not bear_stack[1]   // bắt đầu vùng đỏ
+bear_end   = not bear_stack and bear_stack[1]   // kết thúc vùng đỏ
+
+// ================================================================================================= //
+// VISUALS
+// ================================================================================================= //
+p_sma50  = plot(show_mas ? sma50  : na, color=color.blue,   title="SMA 50",  linewidth=1)
+p_sma150 = plot(show_mas ? sma150 : na, color=color.orange, title="SMA 150", linewidth=1)
+p_sma200 = plot(show_mas ? sma200 : na, color=color.red,    title="SMA 200", linewidth=2)
+
+fill_color = show_ma_fill and bull_stack ? color.new(color.green, fill_transp) : show_ma_fill and bear_stack ? color.new(color.red, fill_transp) : na
+fill(p_sma50, p_sma200, color=fill_color, title="MA Stack Zone")
+
+// ================================================================================================= //
+// PAPER TRADING ORDERS
+// ================================================================================================= //
+if in_range
+    // LONG: vào ở cạnh bull_start, thoát ở cạnh bull_end
+    if allow_long and bull_start
+        strategy.entry("LONG", strategy.long, comment="Bull Stack Start")
+    if bull_end
+        strategy.close("LONG", comment="Bull Stack End")
+
+    // SHORT: vào ở cạnh bear_start, thoát ở cạnh bear_end
+    if allow_short and bear_start
+        strategy.entry("SHORT", strategy.short, comment="Bear Stack Start")
+    if bear_end
+        strategy.close("SHORT", comment="Bear Stack End")
+
+// Đảm bảo không giữ vị thế khi rời khỏi range backtest
+if use_range and not in_range and strategy.position_size != 0
+    strategy.close_all(comment="Out of range")
+
+// ================================================================================================= //
+// MARKERS
+// ================================================================================================= //
+plotshape(bull_start, title="Bull Start (LONG)",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green,  0), size=size.tiny, text="L")
+plotshape(bull_end,   title="Bull End (Close)",   style=shape.xcross,       location=location.abovebar, color=color.new(color.green, 30), size=size.tiny)
+plotshape(bear_start, title="Bear Start (SHORT)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,    0), size=size.tiny, text="S")
+plotshape(bear_end,   title="Bear End (Close)",   style=shape.xcross,       location=location.belowbar, color=color.new(color.red,   30), size=size.tiny)

@@ -1,0 +1,65 @@
+# ════════════════════════════════════════════════════════════════
+# Server B (Execution) — Trade Execution Server
+# 3-Server Pipeline: Phase 6.5
+# ════════════════════════════════════════════════════════════════
+# Host: Windows Server 2 CPU / 4GB — Execution Server
+# Usage:
+#   cd deploy && docker compose -f docker-compose.server-b.yml up -d
+# ════════════════════════════════════════════════════════════════
+
+version: "3.8"
+
+services:
+  execution:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: tradingbot-execution
+    command: ["python", "-m", "uvicorn", "execution_server:app", "--host", "0.0.0.0", "--port", "5002"]
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - EXECUTION_MODE=true
+      - HOST=0.0.0.0
+      - PORT=5002
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVER_B_SECRET=${SERVER_B_SECRET}
+      - DEFAULT_EXCHANGE=${DEFAULT_EXCHANGE:-binance}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - BINANCE_TESTNET=${BINANCE_TESTNET:-true}
+      - BINANCE_DRY_RUN=${BINANCE_DRY_RUN:-true}
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET}
+      - BYBIT_TESTNET=${BYBIT_TESTNET:-true}
+      - BYBIT_DRY_RUN=${BYBIT_DRY_RUN:-true}
+      - WEEX_API_KEY=${WEEX_API_KEY}
+      - WEEX_API_SECRET=${WEEX_API_SECRET}
+      - WEEX_PASSPHRASE=${WEEX_PASSPHRASE}
+      - WEEX_TESTNET=${WEEX_TESTNET:-true}
+      - WEEX_DRY_RUN=${WEEX_DRY_RUN:-true}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DB_PATH=/app/data/trades.db
+    volumes:
+      - exec_data:/app/data
+    networks:
+      - tailscale
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  exec_data:
+
+networks:
+  tailscale:
+    external: true

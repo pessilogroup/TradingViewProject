@@ -1,0 +1,57 @@
+// (c) TradingViewProject
+//@version=5
+strategy("strategy_MTT_v1.B004 (Short Only)",
+     shorttitle="strategy_MTT v1.B004 S",
+     overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.075,
+     slippage=2,
+     pyramiding=0,
+     calc_on_every_tick=false,
+     process_orders_on_close=true)
+
+grp_p = "Trading Profile (Short Only)"
+// Spot trên thực tế không short được — giữ option để so sánh, qty preset thấp hơn
+profile = input.string("Futures", title="Profile", options=["Spot (N/A)","Margin","Futures"], group=grp_p)
+override_qty = input.bool(false, title="Override profile qty %", group=grp_p)
+manual_qty   = input.float(10.0, title="Manual qty %", minval=1.0, maxval=100.0, step=1.0, group=grp_p)
+
+spot_pct    = 0.0    // Spot không short — qty=0 sẽ không vào lệnh
+margin_pct  = 60.0
+futures_pct = 30.0
+qty_pct = override_qty ? manual_qty : (profile == "Spot (N/A)" ? spot_pct : profile == "Margin" ? margin_pct : futures_pct)
+
+sma50  = ta.sma(close, 50)
+sma150 = ta.sma(close, 150)
+sma200 = ta.sma(close, 200)
+
+bear_stack = sma50 < sma150 and sma150 < sma200
+bear_start = bear_stack and not bear_stack[1]
+bear_end   = not bear_stack and bear_stack[1]
+
+p_sma50  = plot(sma50,  color=color.blue,   title="SMA 50",  linewidth=1)
+p_sma150 = plot(sma150, color=color.orange, title="SMA 150", linewidth=1)
+p_sma200 = plot(sma200, color=color.red,    title="SMA 200", linewidth=2)
+fill(p_sma50, p_sma200, color=bear_stack ? color.new(color.red, 80) : na, title="Bear Zone")
+
+qty_contracts = qty_pct > 0 ? (strategy.equity * qty_pct / 100.0) / close : 0.0
+
+if bear_start and qty_pct > 0
+    strategy.entry("SHORT", strategy.short, qty=qty_contracts, comment="Bear Start")
+if bear_end
+    strategy.close("SHORT", comment="Bear End")
+
+var table info = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "MODE", bgcolor=color.new(color.red, 30), text_color=color.white)
+    table.cell(info, 1, 0, "SHORT ONLY", bgcolor=color.new(color.red, 30), text_color=color.white)
+    table.cell(info, 0, 1, "Profile")
+    table.cell(info, 1, 1, profile)
+    table.cell(info, 0, 2, "Qty %")
+    table.cell(info, 1, 2, str.tostring(qty_pct) + "%")
+
+plotshape(bear_start, title="S", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny, text="S")
+plotshape(bear_end,   title="x", style=shape.xcross,       location=location.belowbar, color=color.new(color.red,30), size=size.tiny)

@@ -1,0 +1,131 @@
+//@version=6
+// ============================================================================
+// VBS Webhook Library — Shared payload builder for all indicators
+// ============================================================================
+// Centralizes webhook JSON generation for the VBS /ingest pipeline.
+// All indicators import this library instead of duplicating payload logic.
+// ============================================================================
+// Usage:
+//   import <username>/vbs_webhook_lib/1 as vbs
+//   alert(vbs.build_payload(secret, "SuperTrend Flip", syminfo.ticker, "buy", "entry", "long",
+//         close, timeframe.period, syminfo.prefix, 85, metadata), alert.freq_once_per_bar_close)
+// ============================================================================
+library("VBS_Webhook_Lib", overlay=true)
+
+// ═══════════════════════════════════════════════════════════════
+// CORE: Build VBS-compatible webhook payload
+// ═══════════════════════════════════════════════════════════════
+
+// @function Build a VBS-compatible JSON webhook payload
+// @param secret       Webhook authentication secret
+// @param indicatorName Name of the indicator firing the alert
+// @param symbol       Trading symbol (e.g. "BTCUSDT")
+// @param action       Trade action: "buy" or "sell"
+// @param signalType   Signal type: "entry", "exit", or "info"
+// @param direction    Trade direction: "long" or "short"
+// @param price        Current price
+// @param interval     Timeframe period (e.g. "5", "60", "D")
+// @param exchange     Exchange prefix (e.g. "BINANCE")
+// @param confidence   Confidence score 0-100
+// @param metadata     Additional JSON metadata string (without outer braces)
+// @returns            Complete JSON payload string
+export build_payload(string secret, string indicatorName, string symbol,
+     string action, string signalType, string direction,
+     float price, string interval, string exchange,
+     int confidence, string metadata) =>
+    p = '{"secret":"' + secret + '"'
+    p += ',"source":"indicator"'
+    p += ',"indicator_name":"' + indicatorName + '"'
+    p += ',"symbol":"' + symbol + '"'
+    p += ',"signal_type":"' + signalType + '"'
+    p += ',"action":"' + action + '"'
+    p += ',"direction":"' + direction + '"'
+    p += ',"price":"' + str.tostring(price) + '"'
+    p += ',"interval":"' + interval + '"'
+    p += ',"exchange":"' + exchange + '"'
+    p += ',"confidence_score":' + str.tostring(confidence)
+    p += ',"metadata":{' + metadata + '}}'
+    p
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: Build metadata key-value pairs
+// ═══════════════════════════════════════════════════════════════
+
+// @function Build a single metadata key-value pair (string value)
+// @param key   JSON key name
+// @param value Value as string
+// @returns     "key":"value" formatted string
+export meta_str(string key, string value) =>
+    '"' + key + '":"' + value + '"'
+
+// @function Build a single metadata key-value pair (float value)
+// @param key   JSON key name
+// @param value Value as float
+// @returns     "key":"value" formatted string
+export meta_float(string key, float value) =>
+    '"' + key + '":"' + str.tostring(value) + '"'
+
+// @function Join 2 metadata fragments with comma
+// @returns Combined metadata string
+export meta_join2(string a, string b) =>
+    a + ',' + b
+
+// @function Join 3 metadata fragments with comma
+// @returns Combined metadata string
+export meta_join3(string a, string b, string c) =>
+    a + ',' + b + ',' + c
+
+// @function Join 4 metadata fragments with comma
+// @returns Combined metadata string
+export meta_join4(string a, string b, string c, string d) =>
+    a + ',' + b + ',' + c + ',' + d
+
+// @function Join 5 metadata fragments with comma
+// @returns Combined metadata string
+export meta_join5(string a, string b, string c, string d, string e) =>
+    a + ',' + b + ',' + c + ',' + d + ',' + e
+
+// @function Join 6 metadata fragments with comma
+// @returns Combined metadata string
+export meta_join6(string a, string b, string c, string d, string e, string f) =>
+    a + ',' + b + ',' + c + ',' + d + ',' + e + ',' + f
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: Dynamic confidence scoring
+// ═══════════════════════════════════════════════════════════════
+
+// @function Calculate dynamic confidence score with volume and RSI adjustments
+// @param baseScore   Base confidence score (0-100)
+// @param rsiValue    Current RSI value
+// @param vol         Current bar volume
+// @param volumeSma   Volume SMA for comparison
+// @param isLong      True for long signals, false for short
+// @returns           Adjusted confidence score (0-100)
+export calc_confidence(int baseScore, float rsiValue, float vol, float volumeSma, bool isLong) =>
+    s = baseScore
+    // +5 if strong volume
+    s := vol > volumeSma * 1.5 ? s + 5 : s
+    // +5 if RSI supports direction
+    s := isLong ? (rsiValue < 50 ? s + 5 : s - 5) : (rsiValue > 50 ? s + 5 : s - 5)
+    // +10 if RSI extreme (reversal zone)
+    s := isLong and rsiValue < 30 ? s + 10 : s
+    s := (not isLong) and rsiValue > 70 ? s + 10 : s
+    math.max(0, math.min(100, s))
+
+// ═══════════════════════════════════════════════════════════════
+// HELPER: Common indicator calculations
+// ═══════════════════════════════════════════════════════════════
+
+// @function Get volume ratio (current volume / SMA volume)
+// @param len SMA length
+// @returns   Volume ratio
+export volume_ratio(simple int len) =>
+    volAvg = ta.sma(volume, len)
+    volume / volAvg
+
+// @function Check if volume confirms signal (above SMA)
+// @param len SMA length for comparison
+// @returns   True if volume > SMA(len)
+export volume_confirmed(simple int len) =>
+    volAvg = ta.sma(volume, len)
+    volume > volAvg
